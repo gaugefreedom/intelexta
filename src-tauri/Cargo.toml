@@ -10,5 +10,9 @@ thiserror = "1"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.31", features = ["bundled", "chrono", "serde_json"] }
+tauri = { version = "1", features = ["api-all"] }
+md5 = "0.7"
+rand = "0.8"
 
 [build-dependencies]
+tauri-build = { version = "1", features = [] }

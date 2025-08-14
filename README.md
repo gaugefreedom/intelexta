@@ -25,6 +25,7 @@ npm run dev
 # Backend
 cd ../src-tauri
 cargo tauri dev
+```
 
 ## 1) Repository structure
 
