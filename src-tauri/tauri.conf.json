@@ -1,0 +1,5 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/v1/schema.json",
+  "package": { "productName": "Intelexta", "version": "0.1.0" },
+  "tauri": { "windows": [{ "title": "Intelexta", "fullscreen": false, "width": 1200, "height": 800 }] }
+}
