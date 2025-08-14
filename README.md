@@ -28,7 +28,7 @@ cargo tauri dev
 
 ## 1) Repository structure
 
-```
+```text
 intelexta/
 ├─ LICENSE
 ├─ README.md
