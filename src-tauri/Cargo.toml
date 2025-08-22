@@ -19,6 +19,11 @@ r2d2_sqlite = "0.24"
 
 # Note: The 'md5' and 'rand' dependencies from the bootstrap can be removed
 # as we are now using the more robust 'uuid' crate.
+pdf-extract = "0.7"
+pulldown-cmark = "0.11" # For Markdown
+tiktoken-rs = "0.6" # For token counting
+anyhow = "1.0" # For easier error handling
+
 
 [build-dependencies]
 tauri-build = { version = "1.5", features = [] }

@@ -39,7 +39,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             api::create_project,
-            api::list_projects
+            api::list_projects,
+            api::add_document, 
+            api::list_documents 
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
