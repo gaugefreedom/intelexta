@@ -1,42 +1,29 @@
-// app/src/lib/api.ts
-import { invoke } from '@tauri-apps/api/tauri'
-import { open } from '@tauri-apps/api/dialog';
+// In app/src/App.tsx
+import React from 'react';
+import ProjectTree from './components/ProjectTree';
+import ContextPanel from './components/ContextPanel';
+import EditorPanel from './components/EditorPanel';
+import InspectorPanel from './components/InspectorPanel';
 
-export interface Project {
-  id: string;
-  name: string;
-  created_at: string;
-  updated_at: string;
-}
+export default function App() {
+  const [selectedProject, setSelectedProject] = React.useState<string | null>(null);
 
-export interface Document {
-  id: string;
-  project_id: string;
-  source_path: string;
-}
-
-export async function createProject(name: string): Promise<Project> {
-  return await invoke('create_project', { name });
-}
-
-export async function listProjects(): Promise<Project[]> {
-  return await invoke('list_projects');
-}
-
-export async function listDocuments(projectId: string): Promise<Document[]> {
-  return await invoke('list_documents', { projectId });
-}
-
-export async function addDocument(projectId: string): Promise<Document> {
-  const selectedPath = await open({
-    multiple: false,
-    filters: [
-      { name: 'Text Files', extensions: ['pdf', 'md', 'txt'] }
-    ]
-  });
-
-  if (typeof selectedPath === 'string') {
-    return await invoke('add_document', { projectId, filePath: selectedPath });
-  }
-  throw new Error("No file selected");
+  return (
+    <main style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif', background: '#1e1e1e', color: '#d4d4d4' }}>
+      <div style={{ width: '250px', borderRight: '1px solid #333', padding: '8px' }}>
+        <ProjectTree onSelectProject={setSelectedProject} />
+      </div>
+      <div style={{ flex: 1, display: 'flex' }}>
+        <div style={{ width: '300px', borderRight: '1px solid #333', padding: '8px' }}>
+          {selectedProject ? <ContextPanel projectId={selectedProject} /> : <div>Select a project</div>}
+        </div>
+        <div style={{ flex: 1, padding: '8px' }}>
+          {selectedProject ? <EditorPanel projectId={selectedProject} /> : null}
+        </div>
+        <div style={{ width: '350px', borderLeft: '1px solid #333', padding: '8px' }}>
+          {selectedProject ? <InspectorPanel projectId={selectedProject} /> : null}
+        </div>
+      </div>
+    </main>
+  );
 }

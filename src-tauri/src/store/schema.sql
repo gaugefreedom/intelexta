@@ -1,44 +1,59 @@
-CREATE TABLE IF NOT EXISTS project (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  settings_json TEXT NOT NULL DEFAULT '{}'
+-- §9 Data Model from Strategic Spec v0.1
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    pubkey TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS item (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  source_path TEXT,
-  content TEXT,
-  type TEXT NOT NULL, -- 'NOTE', 'PDF', 'MD', 'URL'
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  FOREIGN KEY (project_id) REFERENCES project(id)
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    mime TEXT,
+    added_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS chunk (
-  id TEXT PRIMARY KEY,
-  item_id TEXT NOT NULL,
-  chunk_index INTEGER NOT NULL,
-  content TEXT NOT NULL,
-  token_count INTEGER NOT NULL,
-  FOREIGN KEY (item_id) REFERENCES item(id)
+CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    dag_json TEXT,
+    policy_digest TEXT,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS checkpoint (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  decisions_json TEXT NOT NULL, -- JSON array of strings
-  todos_json TEXT NOT NULL,     -- JSON array of strings
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  FOREIGN KEY (project_id) REFERENCES project(id)
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    run_id TEXT,
+    parent_id TEXT,
+    json_data TEXT NOT NULL, -- The full canonical JSON of the checkpoint
+    sha256 TEXT NOT NULL,
+    chain_hash TEXT NOT NULL, -- The hash of (parent_chain_hash || current_sha256)
+    signature TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS checkpoint_keypoint (
-  id TEXT PRIMARY KEY,
-  checkpoint_id TEXT NOT NULL,
-  text TEXT NOT NULL,
-  citations_json TEXT NOT NULL, -- JSON array of chunk_ids
-  FOREIGN KEY (checkpoint_id) REFERENCES checkpoint(id)
+CREATE TABLE IF NOT EXISTS policies (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL UNIQUE, -- Each project has one policy
+    json_policy TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS metrics (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    tokens_in INTEGER,
+    tokens_out INTEGER,
+    usd_cost REAL,
+    gco2e REAL,
+    latency_ms INTEGER,
+    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
 );

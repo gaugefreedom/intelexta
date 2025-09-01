@@ -4,7 +4,10 @@
 )]
 
 mod api;
-mod store; // Create a new module for database logic
+mod store; 
+mod governance;
+mod orchestrator;
+mod provenance;
 
 use tauri::Manager;
 
