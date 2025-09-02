@@ -1,6 +1,5 @@
 // src-tauri/src/store.rs
 
-use crate::DbPool;
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 
@@ -27,7 +26,7 @@ pub fn migrate_db(conn: &PooledConnection<SqliteConnectionManager>) -> Result<()
 // In api.rs, you can then change `ApiError` to use `store::StoreError`.
 
 impl serde::Serialize for StoreError {
-    fn serialize<S>(&self, serializer: S) -> Result<S.Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::ser::Serializer,
     {
