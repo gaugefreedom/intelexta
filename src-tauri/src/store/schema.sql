@@ -1,59 +1,93 @@
--- §9 Data Model from Strategic Spec v0.1
+-- src-tauri/src/store/schema.sql
+
+-- For managing schema evolution idempotently
+CREATE TABLE IF NOT EXISTS migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    pubkey TEXT NOT NULL
+    pubkey TEXT NOT NULL -- Ed25519 public key in base64
 );
 
-CREATE TABLE IF NOT EXISTS documents (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    mime TEXT,
-    added_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS policies (
+    project_id TEXT PRIMARY KEY,
+    policy_json TEXT NOT NULL, -- The full Policy struct as JSON
+    FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    dag_json TEXT,
-    policy_digest TEXT,
-    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+    kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant' | 'interactive'
+    spec_json TEXT NOT NULL,
+    sampler_json TEXT, -- Optional sampler config
+    FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
 CREATE TABLE IF NOT EXISTS checkpoints (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    run_id TEXT,
-    parent_id TEXT,
-    json_data TEXT NOT NULL, -- The full canonical JSON of the checkpoint
-    sha256 TEXT NOT NULL,
-    chain_hash TEXT NOT NULL, -- The hash of (parent_chain_hash || current_sha256)
-    signature TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
-    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS policies (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL UNIQUE, -- Each project has one policy
-    json_policy TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS metrics (
-    id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
-    tokens_in INTEGER,
-    tokens_out INTEGER,
-    usd_cost REAL,
-    gco2e REAL,
-    latency_ms INTEGER,
-    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
+    parent_checkpoint_id TEXT, -- For chaining interactive turns
+    turn_index INTEGER,        -- Strict ordering for interactive mode
+    created_at TEXT NOT NULL,
+
+    kind TEXT NOT NULL DEFAULT 'Step', -- 'Step' | 'Incident'
+    incident_json TEXT,                -- Details if kind = 'Incident'
+
+    inputs_sha256 TEXT,
+    outputs_sha256 TEXT,
+    semantic_digest TEXT,              -- For concordant proof mode
+
+    -- Hash chain for integrity
+    prev_chain_hash TEXT,
+    curr_chain_hash TEXT NOT NULL UNIQUE,
+
+    -- Cryptographic signature
+    signature TEXT NOT NULL,
+
+    FOREIGN KEY (run_id) REFERENCES runs(id),
+    FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id)
 );
+
+-- A portable, verifiable receipt for a completed run
+CREATE TABLE IF NOT EXISTS receipts (
+    id TEXT PRIMARY KEY, -- The CAR ID (sha256 of canonical body)
+    run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    match_kind TEXT,      -- Result of replay: 'exact'|'semantic'|'process'
+    epsilon REAL,         -- Tolerance for concordant match
+    s_grade INTEGER,      -- Provenance score (0-100)
+    FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+
+-- CREATE TABLE IF NOT EXISTS documents (
+--     id TEXT PRIMARY KEY,
+--     project_id TEXT NOT NULL,
+--     path TEXT NOT NULL,
+--     sha256 TEXT NOT NULL,
+--     mime TEXT,
+--     added_at TEXT NOT NULL,
+--     FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+-- );
+
+-- CREATE TABLE IF NOT EXISTS metrics (
+--     id TEXT PRIMARY KEY,
+--     run_id TEXT NOT NULL,
+--     tokens_in INTEGER,
+--     tokens_out INTEGER,
+--     usd_cost REAL,
+--     gco2e REAL,
+--     latency_ms INTEGER,
+--     FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
+-- );
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_runs_project_id ON runs(project_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_run_id ON checkpoints(run_id);

@@ -1,46 +1,37 @@
 // In src-tauri/src/provenance.rs
 
-// Import SigningKey and the RngCore trait.
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::SigningKey; // We only need SigningKey here now
 use rand::rngs::OsRng;
-use rand::RngCore; // Required for the `fill_bytes` method
-use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-#[derive(Serialize, Deserialize)]
-pub struct KeyPair {
-    pub public_key: String, // Stored as base64
-    pub secret_key: String,
+pub struct Keypair {
+    pub public_key: String, // base64
+    pub secret_key: String, // base64
 }
 
-pub fn generate_keypair() -> KeyPair {
+// Generates a new Ed25519 keypair using the modern v2 API correctly
+pub fn generate_keypair() -> Keypair {
     let mut csprng = OsRng;
+    // Generate the SigningKey directly. This is the correct method.
+    let signing_key = SigningKey::generate(&mut csprng);
+    let public_key = signing_key.verifying_key();
 
-    // 1. Generate 32 random bytes for our secret key.
-    let mut secret_bytes = [0u8; 32];
-    csprng.fill_bytes(&mut secret_bytes);
-
-    // 2. Create a `SigningKey` from the random bytes.
-    //    This represents the secret half of the keypair.
-    let signing_key = SigningKey::from_bytes(&secret_bytes);
-
-    // 3. Derive the `VerifyingKey` (the public half) from the `SigningKey`.
-    let verifying_key: VerifyingKey = (&signing_key).into();
-
-    // 4. Encode the secret part to base64.
-    let secret_key_b64 = base64::Engine::encode(
-        &base64::prelude::BASE64_STANDARD,
-        signing_key.to_bytes(),
-    );
-
-    // 5. Encode the public part to base64.
-    let public_key_b64 = base64::Engine::encode(
-        &base64::prelude::BASE64_STANDARD,
-        verifying_key.to_bytes(),
-    );
-
-    KeyPair {
-        public_key: public_key_b64,
-        secret_key: secret_key_b64,
+    Keypair {
+        public_key: STANDARD.encode(public_key.as_bytes()),
+        // The secret part is the bytes of the signing key itself.
+        secret_key: STANDARD.encode(signing_key.to_bytes()),
     }
 }
 
+// Implements Normative Rule NR-01 for canonical JSON.
+pub fn canonical_json<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    serde_jcs::to_vec(value).expect("Failed to create canonical JSON")
+}
+
+// A standard SHA256 hex digest helper
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
