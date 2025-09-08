@@ -89,5 +89,7 @@ CREATE TABLE IF NOT EXISTS receipts (
 -- );
 
 -- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_runs_project_id ON runs(project_id);
-CREATE INDEX IF NOT EXISTS idx_checkpoints_run_id ON checkpoints(run_id);
+CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
+CREATE INDEX IF NOT EXISTS idx_ckpt_run ON checkpoints(run_id);
+CREATE INDEX IF NOT EXISTS idx_ckpt_parent ON checkpoints(parent_checkpoint_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ckpt_chain ON checkpoints(run_id, turn_index);

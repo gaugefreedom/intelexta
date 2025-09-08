@@ -1,37 +1,52 @@
 // In app/src/components/ProjectTree.tsx
-import React, { useEffect, useState } from 'react';
-import { createProject, listProjects, Project } from '../lib/api';
+import React, { useState, useEffect } from 'react';
+import { invoke } from "@tauri-apps/api/core";
 
-interface Props {
-  onSelectProject: (projectId: string) => void;
+// Define a type for our project object, matching the Rust struct
+interface Project {
+  id: string;
+  name: string;
+  created_at: string;
+  pubkey: string;
 }
 
-export default function ProjectTree({ onSelectProject }: Props) {
-  const [projects, setProjects] = useState<Project[]>([]);
+interface ProjectTreeProps {
+  onSelectProject: (projectId: string | null) => void;
+}
 
-  const refreshProjects = async () => {
+export default function ProjectTree({ onSelectProject }: ProjectTreeProps) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  // Function to fetch projects from the backend
+  const fetchProjects = async () => {
     try {
-      const fetchedProjects = await listProjects();
-      setProjects(fetchedProjects);
-    } catch (e) {
-      console.error("Failed to fetch projects:", e);
-      alert("Error fetching projects. Is the backend running?");
+      const projectList = await invoke<Project[]>('list_projects');
+      setProjects(projectList);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching projects:', err);
+      setError('Could not load projects. Is the backend running?');
     }
   };
 
+  // Fetch projects when the component first loads
   useEffect(() => {
-    refreshProjects();
+    fetchProjects();
   }, []);
 
-  const handleCreateProject = async () => {
-    const name = prompt("Enter new project name:");
-    if (name && name.trim()) {
+  const handleNewProject = async () => {
+    const projectName = prompt('Enter new project name:');
+    if (projectName && projectName.trim()) {
       try {
-        await createProject(name.trim());
-        refreshProjects();
-      } catch (e) {
-        console.error("Failed to create project:", e);
-        alert("Error creating project.");
+        // This is the call that is currently failing
+        await invoke('create_project', { name: projectName.trim() });
+        // If it succeeds, refresh the project list
+        await fetchProjects();
+      } catch (err) {
+        console.error('Error creating project:', err);
+        // The detailed error from Rust will be in 'err'
+        alert(`Error creating project: ${err}`);
       }
     }
   };
@@ -39,12 +54,11 @@ export default function ProjectTree({ onSelectProject }: Props) {
   return (
     <div>
       <h2>Projects</h2>
-      <button onClick={handleCreateProject} style={{ width: '100%', marginBottom: '12px' }}>
-        + New Project
-      </button>
-      <ul style={{ listStyle: 'none', padding: 0 }}>
-        {projects.map(p => (
-          <li key={p.id} onClick={() => onSelectProject(p.id)} style={{ padding: '4px', cursor: 'pointer' }}>
+      <button onClick={handleNewProject}>+ New Project</button>
+      {error && <div style={{ color: 'red', marginTop: '10px' }}>{error}</div>}
+      <ul style={{ listStyle: 'none', padding: 0, marginTop: '10px' }}>
+        {projects.map((p) => (
+          <li key={p.id} onClick={() => onSelectProject(p.id)} style={{ cursor: 'pointer', padding: '4px', background: 'transparent' }}>
             {p.name}
           </li>
         ))}

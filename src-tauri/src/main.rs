@@ -33,7 +33,8 @@ fn main() {
         // Add our two API commands to the handler
         .invoke_handler(tauri::generate_handler![
             api::create_project,
-            api::list_projects
+            api::list_projects,
+            api::start_hello_run
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
