@@ -1,12 +1,20 @@
-# Contributing to Intelexta
+**`.github/CONTRIBUTING.md`**
 
-## Dev setup
-- Rust stable, Node 20+, pnpm or npm, SQLite ≥3.45.
-- Install Tauri prerequisites: https://tauri.app/v1/guides/getting-started/prerequisites/
+    ```markdown
+    # How to Contribute to Intelexta
 
-## Commands
-- Frontend: `cd app && npm i && npm run dev`
-- Backend: `cd src-tauri && cargo tauri dev`
+    We're excited you're here to help build a new foundation for trustworthy AI work.
 
-## Branching
-- `main` is protected. Use feature branches and PRs.
+    ## Development Setup
+
+    1.  Ensure you have Rust and Node.js installed.
+    2.  Follow the steps in the `README.md` to get the application running.
+    3.  On some Linux systems using Wayland, the app may fail to launch due to graphics permissions. The current workaround is to run the backend with:
+        `LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 WINIT_UNIX_BACKEND=x11 GDK_BACKEND=x11 cargo tauri dev`
+
+    ## Pull Request Process
+
+    1.  Fork the repository and create your branch from `main`.
+    2.  Make sure your code lints and any new features have tests.
+    3.  Submit your pull request with a clear description of the changes.
+    ```

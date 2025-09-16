@@ -1,27 +1,28 @@
 # Intelexta
 
-**Local‑first, auditable control plane for research‑grade AI work. Reproducible pipelines. Signed provenance. Policy‑governed cost and carbon.**
+**A local-first control plane for verifiable Human+AI workflows.**
 
-Intelexta is a desktop application for researchers, writers, and developers who need to produce verifiable and reproducible results from AI workflows. It is not another chat interface; it is a high-integrity control plane built on three core principles:
+_Mottos: "Proof, not vibes." & "Exact where possible, accountable where not."_
 
-1.  **Signed Provenance:** Every output is cryptographically linked to its exact inputs, models, and prompts via hash-chained checkpoints.
-2.  **Reproducible Pipelines:** Workflows are captured as deterministic execution graphs (DAGs) that can be replayed to verify results.
-3.  **Local-First Governance:** Your data and cryptographic keys live on your machine. You set per-project policies for cost, emissions, and data egress.
+---
 
-## Core Features (MVP)
+Intelexta is a desktop application for researchers, writers, students and developers who need to produce verifiable and reproducible results from AI workflows. It is not another chat interface; it is a high-integrity control plane built on the principles of **Signed Provenance**, **Reproducible Pipelines**, and **Local-First Governance**.
 
-  - **Signed Checkpoints:** Cryptographically sign and chain every step of a workflow, creating an immutable audit trail.
-  - **Deterministic Replay:** Re-execute any workflow from any checkpoint to validate its output.
-  - **Local-First Governance:** Enforce per-project budgets for cost ($), tokens, and carbon emissions (gCO₂e).
-  - **Full Export:** Package and export an entire project—including data, policies, and the full provenance chain—in an open format.
+## Mission Alignment
+
+-   **Human+AI Symbiosis:** The human is the strategic director; the AI is a powerful cognitive partner operating within a provable envelope of human-defined policy.
+-   **Integrity of Knowledge:** Creates a permanent, tamper-evident record of how information is generated, preserving the context and integrity of knowledge.
+-   **Accountable Efficiency:** Makes energy and carbon consumption a first-class, manageable metric in every workflow.
 
 ## Stack
 
-  - **Desktop:** Tauri (Rust) + React (Vite)
-  - **Database:** Local SQLite
-  - **Provenance:** Ed25519 Signatures + SHA-256 Hash Chains
+-   **Desktop:** Tauri (Rust) + React (Vite)
+-   **Database:** Local SQLite
+-   **Provenance:** Ed25519 Signatures + SHA-256 Hash Chains
 
-## Quick Start
+## Getting Started
+
+Clone the repository and follow these steps:
 
 ```bash
 # 1. Run the Frontend
@@ -31,6 +32,8 @@ npm run dev
 
 # 2. In a separate terminal, run the Backend
 cd src-tauri
+# NOTE: On Wayland-based Linux systems, you may need to prefix this command.
+# See CONTRIBUTING.md for details on graphics driver workarounds.
 cargo tauri dev
 ```
 
