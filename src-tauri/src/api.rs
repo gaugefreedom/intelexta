@@ -1,6 +1,11 @@
 // In src-tauri/src/api.rs
-use crate::{orchestrator, provenance, store, DbPool, Error, Project};
-use serde::Deserialize;
+use crate::{
+    orchestrator, provenance,
+    store::{self, policies::Policy},
+    DbPool, Error, Project,
+};
+use rusqlite::params;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
 
@@ -53,4 +58,92 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
         token_budget: spec.token_budget,
     };
     orchestrator::start_hello_run(&pool, rs).map_err(|e| Error::Api(e.to_string()))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummary {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub kind: String,
+}
+
+#[tauri::command]
+pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSummary>, Error> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, created_at, kind FROM runs WHERE project_id = ?1 ORDER BY created_at DESC",
+    )?;
+
+    let runs_iter = stmt.query_map(params![project_id], |row| {
+        Ok(RunSummary {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            created_at: row.get(2)?,
+            kind: row.get(3)?,
+        })
+    })?;
+
+    let mut runs = Vec::new();
+    for run in runs_iter {
+        runs.push(run?);
+    }
+
+    Ok(runs)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointSummary {
+    pub id: String,
+    pub timestamp: String,
+    pub kind: String,
+    pub inputs_sha256: Option<String>,
+    pub outputs_sha256: Option<String>,
+    pub usage_tokens: u64,
+}
+
+#[tauri::command]
+pub fn list_checkpoints(
+    run_id: String,
+    pool: State<DbPool>,
+) -> Result<Vec<CheckpointSummary>, Error> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, timestamp, kind, inputs_sha256, outputs_sha256, usage_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
+    )?;
+
+    let rows = stmt.query_map(params![run_id], |row| {
+        Ok(CheckpointSummary {
+            id: row.get(0)?,
+            timestamp: row.get(1)?,
+            kind: row.get(2)?,
+            inputs_sha256: row.get(3)?,
+            outputs_sha256: row.get(4)?,
+            usage_tokens: {
+                let value: i64 = row.get(5)?;
+                value.max(0) as u64
+            },
+        })
+    })?;
+
+    let mut checkpoints = Vec::new();
+    for row in rows {
+        checkpoints.push(row?);
+    }
+
+    Ok(checkpoints)
+}
+
+#[tauri::command]
+pub fn get_policy(project_id: String, pool: State<DbPool>) -> Result<Policy, Error> {
+    let conn = pool.get()?;
+    store::policies::get(&conn, &project_id)
+}
+
+#[tauri::command]
+pub fn update_policy(project_id: String, policy: Policy, pool: State<DbPool>) -> Result<(), Error> {
+    let conn = pool.get()?;
+    store::policies::upsert(&conn, &project_id, &policy)
 }
