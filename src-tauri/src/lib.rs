@@ -64,3 +64,6 @@ pub struct Incident {
     pub details: String,
     pub related_checkpoint_id: Option<String>,
 }
+
+#[cfg(test)]
+mod tests;

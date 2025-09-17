@@ -25,34 +25,30 @@ CREATE TABLE IF NOT EXISTS runs (
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant' | 'interactive'
-    spec_json TEXT NOT NULL,
-    sampler_json TEXT, -- Optional sampler config
+    seed INTEGER NOT NULL,
+    dag_json TEXT NOT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
 CREATE TABLE IF NOT EXISTS checkpoints (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
-    parent_checkpoint_id TEXT, -- For chaining interactive turns
-    turn_index INTEGER,        -- Strict ordering for interactive mode
-    created_at TEXT NOT NULL,
-
     kind TEXT NOT NULL DEFAULT 'Step', -- 'Step' | 'Incident'
     incident_json TEXT,                -- Details if kind = 'Incident'
+    timestamp TEXT NOT NULL,
 
     inputs_sha256 TEXT,
     outputs_sha256 TEXT,
-    semantic_digest TEXT,              -- For concordant proof mode
 
     -- Hash chain for integrity
-    prev_chain_hash TEXT,
-    curr_chain_hash TEXT NOT NULL UNIQUE,
+    prev_chain TEXT,
+    curr_chain TEXT NOT NULL UNIQUE,
 
     -- Cryptographic signature
     signature TEXT NOT NULL,
+    usage_tokens INTEGER NOT NULL,
 
-    FOREIGN KEY (run_id) REFERENCES runs(id),
-    FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id)
+    FOREIGN KEY (run_id) REFERENCES runs(id)
 );
 
 -- A portable, verifiable receipt for a completed run
@@ -91,5 +87,3 @@ CREATE TABLE IF NOT EXISTS receipts (
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_ckpt_run ON checkpoints(run_id);
-CREATE INDEX IF NOT EXISTS idx_ckpt_parent ON checkpoints(parent_checkpoint_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ckpt_chain ON checkpoints(run_id, turn_index);
