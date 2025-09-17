@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS runs (
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant' | 'interactive'
-    spec_json TEXT NOT NULL,
+    spec_json TEXT NOT NULL, -- Serialized RunSpec
     sampler_json TEXT, -- Optional sampler config
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     run_id TEXT NOT NULL,
     parent_checkpoint_id TEXT, -- For chaining interactive turns
     turn_index INTEGER,        -- Strict ordering for interactive mode
-    created_at TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
 
     kind TEXT NOT NULL DEFAULT 'Step', -- 'Step' | 'Incident'
     incident_json TEXT,                -- Details if kind = 'Incident'
@@ -45,11 +45,13 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     semantic_digest TEXT,              -- For concordant proof mode
 
     -- Hash chain for integrity
-    prev_chain_hash TEXT,
-    curr_chain_hash TEXT NOT NULL UNIQUE,
+    prev_chain TEXT,
+    curr_chain TEXT NOT NULL UNIQUE,
 
     -- Cryptographic signature
     signature TEXT NOT NULL,
+
+    usage_tokens INTEGER NOT NULL DEFAULT 0,
 
     FOREIGN KEY (run_id) REFERENCES runs(id),
     FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id)
