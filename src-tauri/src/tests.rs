@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex, Once};
 
+use crate::{api, orchestrator, provenance, store, DbPool};
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Verifier};
@@ -10,9 +11,6 @@ use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, Crede
 use keyring::Error as KeyringError;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
-use tauri::State;
-
-use crate::{api, orchestrator, provenance, store, DbPool};
 
 fn setup_pool() -> Result<DbPool> {
     let manager = SqliteConnectionManager::memory();
@@ -107,7 +105,7 @@ impl CredentialApi for InMemoryCredential {
 fn create_project_stores_secret_for_later_use() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
-    let project = api::create_project("Test Project".into(), State(&pool))?;
+    let project = api::create_project_with_pool("Test Project".into(), &pool)?;
 
     let sk = provenance::load_secret_key(&project.id)?;
     let derived_pub = provenance::public_key_from_secret(&sk);
@@ -119,7 +117,7 @@ fn create_project_stores_secret_for_later_use() -> Result<()> {
 fn orchestrator_writes_incident_checkpoint_when_budget_fails() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
-    let project = api::create_project("Budget".into(), State(&pool))?;
+    let project = api::create_project_with_pool("Budget".into(), &pool)?;
 
     let run_id = orchestrator::start_hello_run(
         &pool,
@@ -151,7 +149,7 @@ fn orchestrator_writes_incident_checkpoint_when_budget_fails() -> Result<()> {
 fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
-    let project = api::create_project("Happy".into(), State(&pool))?;
+    let project = api::create_project_with_pool("Happy".into(), &pool)?;
     let seed = 42_u64;
 
     let run_id = orchestrator::start_hello_run(
