@@ -1,0 +1,334 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://intelexta.org/schemas/car-v0.2.schema.json",
+  "title": "Intelexta Content-Addressable Receipt (CAR) v0.2",
+  "description": "Locked schema for the portable CAR receipt artifact describing a single verifiable run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "run_id",
+    "created_at",
+    "run",
+    "proof",
+    "policy_ref",
+    "budgets",
+    "provenance",
+    "checkpoints",
+    "sgrade",
+    "signatures"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Content-addressable identifier derived from the canonicalized CAR body.",
+      "pattern": "^car:[0-9a-f]{64}$"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "Primary identifier of the run described by this receipt.",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "description": "Timestamp indicating when the CAR was generated (UTC).",
+      "format": "date-time"
+    },
+    "run": {
+      "$ref": "#/$defs/run"
+    },
+    "proof": {
+      "$ref": "#/$defs/proof"
+    },
+    "policy_ref": {
+      "$ref": "#/$defs/policy_ref"
+    },
+    "budgets": {
+      "$ref": "#/$defs/budgets"
+    },
+    "provenance": {
+      "type": "array",
+      "description": "Statements anchoring important assets referenced by the run.",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/provenance_claim"
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "description": "Ordered list of checkpoint IDs chained together for this run.",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^ckpt:[A-Za-z0-9:_-]+$"
+      }
+    },
+    "sgrade": {
+      "$ref": "#/$defs/sgrade"
+    },
+    "signatures": {
+      "type": "array",
+      "description": "Detached signatures covering the canonical CAR body.",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]+:[A-Za-z0-9+/=._-]+$"
+      }
+    }
+  },
+  "$defs": {
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "model",
+        "version",
+        "seed"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Proof mode requested for the run.",
+          "enum": [
+            "exact",
+            "concordant",
+            "interactive"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "description": "Identifier of the model used to execute the run.",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "description": "Semantic version or revision of the model or workflow.",
+          "minLength": 1
+        },
+        "seed": {
+          "type": "integer",
+          "description": "Deterministic seed captured for reproducing stochastic behaviour.",
+          "minimum": 0
+        },
+        "sampler": {
+          "$ref": "#/$defs/sampler"
+        }
+      }
+    },
+    "sampler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "temp",
+        "top_p",
+        "rng"
+      ],
+      "properties": {
+        "temp": {
+          "type": "number",
+          "description": "Sampling temperature used when generating tokens.",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "top_p": {
+          "type": "number",
+          "description": "Nucleus sampling cutoff applied during generation.",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "rng": {
+          "type": "string",
+          "description": "Random number generator implementation (e.g., pcg64).",
+          "minLength": 1
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "match_kind"
+      ],
+      "properties": {
+        "match_kind": {
+          "type": "string",
+          "description": "Replay strategy used to validate the run.",
+          "enum": [
+            "exact",
+            "semantic",
+            "process"
+          ]
+        },
+        "epsilon": {
+          "type": "number",
+          "description": "Tolerance used when comparing semantic digests.",
+          "minimum": 0
+        },
+        "distance_metric": {
+          "type": "string",
+          "description": "Metric employed to measure semantic distance.",
+          "minLength": 1
+        },
+        "original_semantic_digest": {
+          "type": "string",
+          "description": "Digest produced during the original run when using semantic proofs.",
+          "minLength": 1
+        },
+        "replay_semantic_digest": {
+          "type": "string",
+          "description": "Digest produced during replay for comparison against the original.",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "match_kind": {
+                "const": "semantic"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "epsilon",
+              "distance_metric",
+              "original_semantic_digest"
+            ]
+          }
+        }
+      ]
+    },
+    "policy_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hash",
+        "egress",
+        "estimator"
+      ],
+      "properties": {
+        "hash": {
+          "type": "string",
+          "description": "Digest of the policy document applied to the run.",
+          "pattern": "^[a-z0-9]+:[A-Za-z0-9]+$"
+        },
+        "egress": {
+          "type": "boolean",
+          "description": "Whether the run allowed network egress."
+        },
+        "estimator": {
+          "type": "string",
+          "description": "Computation used to derive the gCO₂e estimate for the run.",
+          "minLength": 1
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "usd",
+        "tokens",
+        "g_co2e"
+      ],
+      "properties": {
+        "usd": {
+          "type": "number",
+          "description": "USD budget consumed by the run.",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": "integer",
+          "description": "Total tokens billed for the run.",
+          "minimum": 0
+        },
+        "g_co2e": {
+          "type": "number",
+          "description": "Estimated grams of CO₂ equivalent attributed to the run.",
+          "minimum": 0
+        }
+      }
+    },
+    "provenance_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_type",
+        "sha256"
+      ],
+      "properties": {
+        "claim_type": {
+          "type": "string",
+          "description": "Nature of the asset (e.g., input, output, config).",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "description": "SHA-256 digest of the canonicalised asset.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "sgrade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "score",
+        "components"
+      ],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "description": "Overall stewardship grade assigned to the run (0-100).",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provenance",
+            "energy",
+            "replay",
+            "consent",
+            "incidents"
+          ],
+          "properties": {
+            "provenance": {
+              "type": "number",
+              "description": "Contribution from provenance completeness (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "energy": {
+              "type": "number",
+              "description": "Contribution from energy reporting (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "replay": {
+              "type": "number",
+              "description": "Contribution from replay verification (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "consent": {
+              "type": "number",
+              "description": "Contribution from consent and policy compliance (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "incidents": {
+              "type": "number",
+              "description": "Penalty from recorded incidents (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}
