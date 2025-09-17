@@ -44,6 +44,8 @@ intelexta/
 ├─ scripts/
 │  ├─ dev.sh
 │  └─ build-release.sh
+├─ schemas/
+│  └─ car-v0.2.schema.json   # Locked JSON Schema for Content-Addressable Receipts
 ├─ app/                      # React (Vite) frontend
 │  └─ src/
 │     ├─ main.tsx
@@ -63,10 +65,15 @@ intelexta/
       ├─ store/
       │  ├─ mod.rs
       │  └─ schema.sql
-      ├─ governance.rs       # Policy router logic
-      ├─ provenance.rs       # Signing and hash-chaining
-      └─ orchestrator.rs     # DAG execution engine
+   ├─ governance.rs       # Policy router logic
+   ├─ provenance.rs       # Signing and hash-chaining
+   └─ orchestrator.rs     # DAG execution engine
 ```
+
+## Schemas
+
+The canonical JSON Schema for Content-Addressable Receipts (CAR v0.2) lives in [`schemas/car-v0.2.schema.json`](schemas/car-v0.2.schema.json).
+Builds verify that the file exists, so keep it in place when updating tooling or CI.
 
 ## Status
 

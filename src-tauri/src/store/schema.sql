@@ -1,4 +1,4 @@
--- src-tauri/src/store/schema.sql
+-- In src-tauri/src/store/schema.sql
 
 -- For managing schema evolution idempotently
 CREATE TABLE IF NOT EXISTS migrations (
@@ -35,63 +35,30 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     run_id TEXT NOT NULL,
     parent_checkpoint_id TEXT, -- For chaining interactive turns
     turn_index INTEGER,        -- Strict ordering for interactive mode
-    timestamp TEXT NOT NULL,
-
     kind TEXT NOT NULL DEFAULT 'Step', -- 'Step' | 'Incident'
-    incident_json TEXT,                -- Details if kind = 'Incident'
-
+    incident_json TEXT,        -- Details if kind = 'Incident'
+    timestamp TEXT NOT NULL,
     inputs_sha256 TEXT,
     outputs_sha256 TEXT,
-    semantic_digest TEXT,              -- For concordant proof mode
-
-    -- Hash chain for integrity
     prev_chain TEXT,
     curr_chain TEXT NOT NULL UNIQUE,
-
-    -- Cryptographic signature
     signature TEXT NOT NULL,
-
     usage_tokens INTEGER NOT NULL DEFAULT 0,
-
     FOREIGN KEY (run_id) REFERENCES runs(id),
     FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id)
 );
 
--- A portable, verifiable receipt for a completed run
 CREATE TABLE IF NOT EXISTS receipts (
     id TEXT PRIMARY KEY, -- The CAR ID (sha256 of canonical body)
     run_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     file_path TEXT NOT NULL,
-    match_kind TEXT,      -- Result of replay: 'exact'|'semantic'|'process'
-    epsilon REAL,         -- Tolerance for concordant match
-    s_grade INTEGER,      -- Provenance score (0-100)
+    match_kind TEXT,     -- Result of replay: 'exact'|'semantic'|'process'
+    epsilon REAL,        -- Tolerance for concordant match
+    s_grade INTEGER,     -- Provenance score (0-100)
     FOREIGN KEY (run_id) REFERENCES runs(id)
 );
-
--- CREATE TABLE IF NOT EXISTS documents (
---     id TEXT PRIMARY KEY,
---     project_id TEXT NOT NULL,
---     path TEXT NOT NULL,
---     sha256 TEXT NOT NULL,
---     mime TEXT,
---     added_at TEXT NOT NULL,
---     FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
--- );
-
--- CREATE TABLE IF NOT EXISTS metrics (
---     id TEXT PRIMARY KEY,
---     run_id TEXT NOT NULL,
---     tokens_in INTEGER,
---     tokens_out INTEGER,
---     usd_cost REAL,
---     gco2e REAL,
---     latency_ms INTEGER,
---     FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE CASCADE
--- );
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_ckpt_run ON checkpoints(run_id);
-CREATE INDEX IF NOT EXISTS idx_ckpt_parent ON checkpoints(parent_checkpoint_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ckpt_chain ON checkpoints(run_id, turn_index);
