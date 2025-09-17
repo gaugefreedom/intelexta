@@ -11,7 +11,8 @@ use intelexta::{api, store};
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let app_data_dir = app.path()
+            let app_data_dir = app
+                .path()
                 .app_local_data_dir()
                 .expect("failed to find app data dir");
 
@@ -20,8 +21,7 @@ fn main() {
             let db_path = app_data_dir.join("intelexta.sqlite");
 
             let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
-            let pool = r2d2::Pool::new(manager)
-                .expect("failed to create db pool");
+            let pool = r2d2::Pool::new(manager).expect("failed to create db pool");
 
             // Call the migrate function from its new location in the store module
             store::migrate_db(&pool.get()?)?;
@@ -34,7 +34,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             api::create_project,
             api::list_projects,
-            api::start_hello_run
+            api::start_hello_run,
+            api::list_runs,
+            api::list_checkpoints,
+            api::get_policy,
+            api::update_policy
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

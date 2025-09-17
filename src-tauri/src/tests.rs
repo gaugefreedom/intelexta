@@ -3,7 +3,14 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex, Once};
 
-use crate::{api, orchestrator, provenance, store, DbPool};
+use crate::{
+    api, orchestrator, provenance,
+    store::{
+        self,
+        policies::{self, Policy},
+    },
+    DbPool,
+};
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Verifier};
@@ -227,5 +234,42 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     let signing_key = provenance::load_secret_key(&project.id)?;
     let verifying_key = signing_key.verifying_key();
     verifying_key.verify(curr_chain.as_bytes(), &signature)?;
+    Ok(())
+}
+
+#[test]
+fn get_policy_returns_default_for_new_project() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Policy Defaults".into(), &pool)?;
+
+    let conn = pool.get()?;
+    let policy = policies::get(&conn, &project.id)?;
+
+    assert_eq!(policy, Policy::default());
+    Ok(())
+}
+
+#[test]
+fn update_policy_persists_values() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Policy Persist".into(), &pool)?;
+
+    let desired = Policy {
+        allow_network: true,
+        budget_tokens: 512,
+        budget_usd: 4.25,
+        budget_g_co2e: 0.75,
+    };
+
+    {
+        let conn = pool.get()?;
+        policies::upsert(&conn, &project.id, &desired)?;
+    }
+
+    let conn = pool.get()?;
+    let fetched = policies::get(&conn, &project.id)?;
+    assert_eq!(fetched, desired);
     Ok(())
 }
