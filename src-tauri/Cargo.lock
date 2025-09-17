@@ -1853,6 +1853,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "intelexta-verify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "io-uring"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
