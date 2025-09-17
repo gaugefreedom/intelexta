@@ -7,7 +7,7 @@ use uuid::Uuid;
 #[tauri::command]
 pub fn list_projects(pool: State<DbPool>) -> Result<Vec<Project>, Error> {
     // Get the connection from the pool
-    let conn = pool.get()?; 
+    let conn = pool.get()?;
     // Pass a reference to the connection
     let projects = store::projects::list(&conn)?;
     Ok(projects)
@@ -15,6 +15,10 @@ pub fn list_projects(pool: State<DbPool>) -> Result<Vec<Project>, Error> {
 
 #[tauri::command]
 pub fn create_project(name: String, pool: State<DbPool>) -> Result<Project, Error> {
+    create_project_with_pool(name, pool.inner())
+}
+
+pub(crate) fn create_project_with_pool(name: String, pool: &DbPool) -> Result<Project, Error> {
     let project_id = Uuid::new_v4().to_string();
     let kp = provenance::generate_keypair();
 
@@ -32,11 +36,11 @@ pub fn create_project(name: String, pool: State<DbPool>) -> Result<Project, Erro
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HelloRunSpec {
-  pub project_id: String,
-  pub name: String,
-  pub seed: u64,
-  pub dag_json: String,
-  pub token_budget: u64,
+    pub project_id: String,
+    pub name: String,
+    pub seed: u64,
+    pub dag_json: String,
+    pub token_budget: u64,
 }
 
 #[tauri::command]
