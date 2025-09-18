@@ -29,6 +29,7 @@ pub struct RunSpec {
 
 pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let conn = pool.get()?;
+    
     let signing_key = match provenance::load_secret_key(&spec.project_id) {
         Ok(sk) => Ok(sk),
         Err(err) => {

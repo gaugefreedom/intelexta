@@ -26,12 +26,29 @@ pub fn create_project(name: String, pool: State<DbPool>) -> Result<Project, Erro
 pub(crate) fn create_project_with_pool(name: String, pool: &DbPool) -> Result<Project, Error> {
     let project_id = Uuid::new_v4().to_string();
     let kp = provenance::generate_keypair();
+
+    // Step 1: Attempt to store the key.
     provenance::store_secret_key(&project_id, &kp.secret_key_b64)
-        .map_err(|e| Error::Api(e.to_string()))?;
+        .map_err(|e| Error::Api(format!("Failed to store secret key: {}", e)))?;
+
+    // --- FIX STARTS HERE ---
+    // Step 2: VERIFY that the key can be loaded immediately after.
+    // This is a crucial check to ensure the OS keychain is working correctly.
+    if let Err(e) = provenance::load_secret_key(&project_id) {
+        let error_message = format!(
+            "Keychain verification failed after storing key. The OS keychain might not be available or configured correctly. Please ensure you have a secret service daemon (like gnome-keyring) running. Original error: {}",
+            e
+        );
+        return Err(Error::Api(error_message));
+    }
+    // --- FIX ENDS HERE ---
+
     let conn = pool.get()?;
     let project = store::projects::create(&conn, &project_id, &name, &kp.public_key_b64)?;
+
     Ok(project)
 }
+
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -3,8 +3,9 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::Serialize;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use anyhow::anyhow; // <-- Add this import
 
-// FIX: Use a constant for the service name to prevent typos.
+// Use a constant for the service name to prevent typos.
 const KEYCHAIN_SERVICE_NAME: &str = "intelexta";
 
 pub struct KeypairOut {
@@ -22,25 +23,33 @@ pub fn generate_keypair() -> KeypairOut {
 }
 
 pub fn store_secret_key(project_id: &str, secret_key_b64: &str) -> anyhow::Result<()> {
-    // FIX: Use the constant here.
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id)?;
     entry.set_password(secret_key_b64)?;
     Ok(())
 }
 
 pub fn load_secret_key(project_id: &str) -> anyhow::Result<SigningKey> {
-    // FIX: Use the constant here.
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id)?;
     
-    // Propagate the underlying keyring error so callers can detect a missing entry
-    // and repair the secret if necessary.
-    let b64 = entry.get_password().map_err(|err| match err {
-        keyring::Error::NoEntry => keyring::Error::NoEntry.into(),
-        other => other.into(),
-    })?;
+    // --- FIX STARTS HERE ---
+    // Handle errors explicitly to resolve the compiler ambiguity and ensure
+    // the `NoEntry` error is propagated correctly for the repair logic.
+    let b64 = match entry.get_password() {
+        Ok(password) => password,
+        Err(keyring::Error::NoEntry) => {
+            // This specific error is caught in orchestrator.rs to repair the key.
+            // We need to wrap it in anyhow::Error but still allow it to be identified.
+            return Err(anyhow!(keyring::Error::NoEntry));
+        }
+        Err(other_err) => {
+            // Handle any other keychain errors.
+            return Err(anyhow!(other_err));
+        }
+    };
+    // --- FIX ENDS HERE ---
 
     let bytes = STANDARD.decode(b64)?;
-    let sk = SigningKey::from_bytes(&bytes.try_into().map_err(|_| anyhow::anyhow!("bad sk len"))?);
+    let sk = SigningKey::from_bytes(&bytes.try_into().map_err(|_| anyhow!("bad sk len"))?);
     Ok(sk)
 }
 
