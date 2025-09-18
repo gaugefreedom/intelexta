@@ -43,6 +43,8 @@ pub struct HelloRunSpec {
     pub token_budget: u64,
 }
 
+// In src-tauri/src/api.rs
+
 #[tauri::command]
 pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String, Error> {
     let rs = orchestrator::RunSpec {
@@ -52,7 +54,16 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
         dag_json: spec.dag_json,
         token_budget: spec.token_budget,
     };
-    orchestrator::start_hello_run(&pool, rs).map_err(|e| Error::Api(e.to_string()))
+
+    // --- FIX: The debugging code now lives INSIDE the function ---
+    let result = orchestrator::start_hello_run(&pool, rs);
+
+    // If the result is an error, print the detailed reason to the terminal.
+    if let Err(e) = &result {
+        println!("[DEBUG] orchestrator::start_hello_run failed with: {:?}", e);
+    }
+    
+    result.map_err(|e| Error::Api(e.to_string()))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

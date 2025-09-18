@@ -2,8 +2,10 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::Serialize;
-// ADD THIS LINE to import the new Base64 Engine
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+// FIX: Use a constant for the service name to prevent typos.
+const KEYCHAIN_SERVICE_NAME: &str = "intelexta";
 
 pub struct KeypairOut {
     pub public_key_b64: String,
@@ -14,22 +16,31 @@ pub fn generate_keypair() -> KeypairOut {
     let sk = SigningKey::generate(&mut OsRng);
     let pk = sk.verifying_key();
     KeypairOut {
-        // Use the new Engine API
         public_key_b64: STANDARD.encode(pk.as_bytes()),
         secret_key_b64: STANDARD.encode(sk.to_bytes()),
     }
 }
 
 pub fn store_secret_key(project_id: &str, secret_key_b64: &str) -> anyhow::Result<()> {
-    let entry = keyring::Entry::new("intelexta", project_id)?;
+    // FIX: Use the constant here.
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id)?;
     entry.set_password(secret_key_b64)?;
     Ok(())
 }
 
 pub fn load_secret_key(project_id: &str) -> anyhow::Result<SigningKey> {
-    let entry = keyring::Entry::new("intelexta", project_id)?;
-    let b64 = entry.get_password()?;
-    // Use the new Engine API
+    // FIX: Use the constant here.
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id)?;
+    
+    // FIX: Add more specific error handling for the "NoEntry" case.
+    let b64 = match entry.get_password() {
+        Ok(password) => Ok(password),
+        Err(keyring::Error::NoEntry) => {
+            Err(anyhow::anyhow!("No secret key found in storage for project '{}'", project_id))
+        }
+        Err(e) => Err(e.into()),
+    }?;
+
     let bytes = STANDARD.decode(b64)?;
     let sk = SigningKey::from_bytes(&bytes.try_into().map_err(|_| anyhow::anyhow!("bad sk len"))?);
     Ok(sk)
@@ -37,13 +48,11 @@ pub fn load_secret_key(project_id: &str) -> anyhow::Result<SigningKey> {
 
 pub fn public_key_from_secret(sk: &SigningKey) -> String {
     let pk: VerifyingKey = sk.verifying_key();
-    // Use the new Engine API
     STANDARD.encode(pk.as_bytes())
 }
 
 pub fn sign_bytes(sk: &SigningKey, bytes: &[u8]) -> String {
     let sig: Signature = sk.sign(bytes);
-    // Use the new Engine API
     STANDARD.encode(sig.to_bytes())
 }
 

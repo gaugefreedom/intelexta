@@ -23,14 +23,18 @@ fn main() {
             let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
             let pool = r2d2::Pool::new(manager).expect("failed to create db pool");
 
-            // Call the migrate function from its new location in the store module
-            store::migrate_db(&pool.get()?)?;
+            // --- FIX IS HERE ---
+            // 1. Get a mutable connection from the pool.
+            let mut conn = pool.get()?;
+            // 2. Pass a mutable reference to the migrate function.
+            store::migrate_db(&mut conn)?;
+            // --- END FIX ---
 
             app.manage(pool);
 
             Ok(())
         })
-        // Add our two API commands to the handler
+        // Add our API commands to the handler
         .invoke_handler(tauri::generate_handler![
             api::create_project,
             api::list_projects,
