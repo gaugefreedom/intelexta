@@ -1,11 +1,9 @@
-use std::any::Any;
-use std::collections::HashMap;
 use std::convert::TryInto;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::Once;
 use uuid::Uuid;
 
 use crate::{
-    api, orchestrator, provenance,
+    api, keychain, orchestrator, provenance,
     store::{
         self,
         policies::{self, Policy},
@@ -15,8 +13,6 @@ use crate::{
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Verifier};
-use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, CredentialPersistence};
-use keyring::Error as KeyringError;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 
@@ -38,79 +34,8 @@ fn setup_pool() -> Result<DbPool> {
 fn init_keyring_mock() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        keyring::set_default_credential_builder(Box::new(InMemoryCredentialBuilder::default()));
+        keychain::force_in_memory_keyring();
     });
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct EntryKey {
-    target: Option<String>,
-    service: String,
-    user: String,
-}
-
-#[derive(Clone, Debug, Default)]
-struct InMemoryCredentialBuilder {
-    store: Arc<Mutex<HashMap<EntryKey, Vec<u8>>>>,
-}
-
-#[derive(Clone, Debug)]
-struct InMemoryCredential {
-    key: EntryKey,
-    store: Arc<Mutex<HashMap<EntryKey, Vec<u8>>>>,
-}
-
-impl CredentialBuilderApi for InMemoryCredentialBuilder {
-    fn build(
-        &self,
-        target: Option<&str>,
-        service: &str,
-        user: &str,
-    ) -> keyring::Result<Box<Credential>> {
-        let key = EntryKey {
-            target: target.map(|s| s.to_string()),
-            service: service.to_string(),
-            user: user.to_string(),
-        };
-        Ok(Box::new(InMemoryCredential {
-            key,
-            store: Arc::clone(&self.store),
-        }))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn persistence(&self) -> CredentialPersistence {
-        CredentialPersistence::ProcessOnly
-    }
-}
-
-impl CredentialApi for InMemoryCredential {
-    fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
-        let mut store = self.store.lock().unwrap();
-        store.insert(self.key.clone(), secret.to_vec());
-        Ok(())
-    }
-
-    fn get_secret(&self) -> keyring::Result<Vec<u8>> {
-        let store = self.store.lock().unwrap();
-        store.get(&self.key).cloned().ok_or(KeyringError::NoEntry)
-    }
-
-    fn delete_credential(&self) -> keyring::Result<()> {
-        let mut store = self.store.lock().unwrap();
-        if store.remove(&self.key).is_some() {
-            Ok(())
-        } else {
-            Err(KeyringError::NoEntry)
-        }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[test]

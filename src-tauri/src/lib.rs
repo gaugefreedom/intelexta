@@ -34,14 +34,14 @@ impl serde::Serialize for Error {
 
 // Re-export modules to be accessible from main.rs
 pub mod api;
+pub mod car;
+pub mod chunk;
 pub mod governance;
+pub mod ingest;
+pub mod keychain;
 pub mod orchestrator;
 pub mod provenance;
 pub mod store;
-pub mod car;
-pub mod chunk;
-pub mod ingest;
-
 
 // === Core Data Structures for Sprint 0 ===
 
@@ -61,7 +61,7 @@ pub enum CheckpointKind {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Incident {
-    pub kind: String, // e.g., "budget_exceeded", "policy_change"
+    pub kind: String,     // e.g., "budget_exceeded", "policy_change"
     pub severity: String, // "info" | "warn" | "error"
     pub details: String,
     pub related_checkpoint_id: Option<String>,
