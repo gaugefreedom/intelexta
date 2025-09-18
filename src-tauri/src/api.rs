@@ -101,6 +101,7 @@ pub struct CheckpointSummary {
     pub kind: String,
     pub inputs_sha256: Option<String>,
     pub outputs_sha256: Option<String>,
+    pub semantic_digest: Option<String>,
     pub usage_tokens: u64,
 }
 
@@ -111,7 +112,7 @@ pub fn list_checkpoints(
 ) -> Result<Vec<CheckpointSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, timestamp, kind, inputs_sha256, outputs_sha256, usage_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
+        "SELECT id, timestamp, kind, inputs_sha256, outputs_sha256, semantic_digest, usage_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
     )?;
 
     let rows = stmt.query_map(params![run_id], |row| {
@@ -121,8 +122,9 @@ pub fn list_checkpoints(
             kind: row.get(2)?,
             inputs_sha256: row.get(3)?,
             outputs_sha256: row.get(4)?,
+            semantic_digest: row.get(5)?,
             usage_tokens: {
-                let value: i64 = row.get(5)?;
+                let value: i64 = row.get(6)?;
                 value.max(0) as u64
             },
         })
