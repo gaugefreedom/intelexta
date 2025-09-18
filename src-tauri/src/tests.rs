@@ -1,3 +1,4 @@
+// In src-tauri/src/tests.rs
 use std::convert::TryInto;
 use std::sync::Once;
 use uuid::Uuid;
