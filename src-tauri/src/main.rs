@@ -38,7 +38,8 @@ fn main() {
             api::list_runs,
             api::list_checkpoints,
             api::get_policy,
-            api::update_policy
+            api::update_policy,
+            api::emit_car
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -57,30 +57,25 @@ export async function createProject(name: string): Promise<Project> {
 }
 
 export async function listRuns(projectId: string): Promise<RunSummary[]> {
-  return await invoke<RunSummary[]>('list_runs', { projectId, project_id: projectId });
+  return await invoke<RunSummary[]>('list_runs', { projectId });
 }
 
 export async function listCheckpoints(runId: string): Promise<CheckpointSummary[]> {
-  return await invoke<CheckpointSummary[]>('list_checkpoints', { runId, run_id: runId });
+  return await invoke<CheckpointSummary[]>('list_checkpoints', { runId });
 }
 
 export async function getPolicy(projectId: string): Promise<Policy> {
-  return await invoke<Policy>('get_policy', { projectId, project_id: projectId });
+  return await invoke<Policy>('get_policy', { projectId });
 }
 
 export async function updatePolicy(projectId: string, policy: Policy): Promise<void> {
-  await invoke('update_policy', { projectId, project_id: projectId, policy });
+  await invoke('update_policy', { projectId, policy });
 }
 
 export async function startHelloRun(spec: HelloRunSpec): Promise<string> {
-  return await invoke<string>('start_hello_run', {
-    projectId: spec.projectId,
-    project_id: spec.projectId,
-    name: spec.name,
-    seed: spec.seed,
-    dagJson: spec.dagJson,
-    dag_json: spec.dagJson,
-    tokenBudget: spec.tokenBudget,
-    token_budget: spec.tokenBudget,
-  });
+  return await invoke<string>('start_hello_run', { spec });
+}
+
+export async function emitCar(runId: string): Promise<string> {
+  return await invoke<string>('emit_car', { runId });
 }

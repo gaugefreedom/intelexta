@@ -2,6 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex, Once};
+use uuid::Uuid;
 
 use crate::{
     api, orchestrator, provenance,
@@ -281,6 +282,49 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     let signing_key = provenance::load_secret_key(&project.id)?;
     let verifying_key = signing_key.verifying_key();
     verifying_key.verify(curr_chain.as_bytes(), &signature)?;
+    Ok(())
+}
+
+#[test]
+fn emit_car_command_writes_receipt_and_file() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Emit CAR".into(), &pool)?;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "emit-car-run".into(),
+            seed: 7,
+            dag_json: "{}".into(),
+            token_budget: 100,
+        },
+    )?;
+
+    let base_dir = std::env::temp_dir().join(format!("intelexta-tests-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&base_dir)?;
+
+    let emitted_path = api::emit_car_to_base_dir(&run_id, &pool, &base_dir)?;
+    assert!(emitted_path.exists(), "CAR file should exist on disk");
+
+    let conn = pool.get()?;
+    let (receipt_id, file_path_db, match_kind, epsilon): (
+        String,
+        String,
+        Option<String>,
+        Option<f64>,
+    ) = conn.query_row(
+        "SELECT id, file_path, match_kind, epsilon FROM receipts WHERE run_id = ?1",
+        params![&run_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+
+    assert!(!receipt_id.is_empty());
+    assert_eq!(file_path_db, emitted_path.to_string_lossy().to_string());
+    assert_eq!(match_kind.as_deref(), Some("pending"));
+    assert!(epsilon.is_none());
+
     Ok(())
 }
 

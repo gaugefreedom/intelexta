@@ -7,16 +7,13 @@ import {
   CheckpointSummary,
   IncidentSummary,
   RunSummary,
-  emitCar, // Make sure emitCar is imported
+  emitCar,
 } from "../lib/api";
 
-// FROM: codex/extend-checkpointsummary-to-include-incident
-// These helper functions are needed for displaying incidents.
 function formatIncidentMessage(incident?: IncidentSummary | null): string {
   if (!incident) {
     return "Policy incident reported";
   }
-
   switch (incident.kind) {
     case "budget_exceeded":
       return `Budget exceeded: ${incident.details}`;
@@ -29,13 +26,10 @@ function formatIncidentMessage(incident?: IncidentSummary | null): string {
   }
 }
 
-// FROM: codex/extend-checkpointsummary-to-include-incident
-// This helper provides styling for different incident severities.
 function incidentSeverityColor(incident?: IncidentSummary | null): string {
   if (!incident) {
-    return "#f48771"; // default error color
+    return "#f48771";
   }
-
   switch (incident.severity) {
     case "warn":
       return "#dcdcaa";
@@ -47,8 +41,6 @@ function incidentSeverityColor(incident?: IncidentSummary | null): string {
   }
 }
 
-// MERGED COMPONENT SIGNATURE
-// It now accepts both `projectId` and `refreshToken`.
 export default function InspectorPanel({
   projectId,
   refreshToken,
@@ -57,22 +49,18 @@ export default function InspectorPanel({
   refreshToken: number;
 }) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
-  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(
-    null
-  );
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
   const [checkpoints, setCheckpoints] = React.useState<CheckpointSummary[]>([]);
   const [loadingRuns, setLoadingRuns] = React.useState<boolean>(false);
-  const [loadingCheckpoints, setLoadingCheckpoints] = React.useState<boolean>(
-    false
-  );
+  const [loadingCheckpoints, setLoadingCheckpoints] = React.useState<boolean>(false);
   const [runsError, setRunsError] = React.useState<string | null>(null);
-  const [checkpointError, setCheckpointError] = React.useState<string | null>(
-    null
-  );
-  const [emitCarStatus, setEmitCarStatus] = React.useState<string | null>(null);
+  const [checkpointError, setCheckpointError] = React.useState<string | null>(null);
+  
+  // MERGED STATE: Using the more explicit state management from the `emit_car` branch.
+  const [emittingCar, setEmittingCar] = React.useState<boolean>(false);
+  const [emitSuccess, setEmitSuccess] = React.useState<string | null>(null);
+  const [emitError, setEmitError] = React.useState<string | null>(null);
 
-  // FROM: main
-  // This useEffect hook correctly uses `refreshToken` to refetch runs.
   React.useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -82,7 +70,6 @@ export default function InspectorPanel({
       .then((runList) => {
         if (cancelled) return;
         setRuns(runList);
-        // Automatically select the first run if none is selected or the selected one disappears
         if (!selectedRunId || !runList.find((r) => r.id === selectedRunId)) {
           setSelectedRunId(runList.length > 0 ? runList[0].id : null);
         }
@@ -99,21 +86,17 @@ export default function InspectorPanel({
           setLoadingRuns(false);
         }
       });
-
     return () => {
       cancelled = true;
     };
   }, [projectId, refreshToken]);
 
-  // FROM: main
-  // This useEffect hook correctly uses `refreshToken` to refetch checkpoints.
   React.useEffect(() => {
     if (!selectedRunId) {
       setCheckpoints([]);
       setCheckpointError(null);
       return;
     }
-
     let cancelled = false;
     setLoadingCheckpoints(true);
     setCheckpointError(null);
@@ -126,9 +109,7 @@ export default function InspectorPanel({
       .catch((err) => {
         if (!cancelled) {
           console.error("Failed to load checkpoints", err);
-          setCheckpointError(
-            "Could not load checkpoints for the selected run."
-          );
+          setCheckpointError("Could not load checkpoints for the selected run.");
           setCheckpoints([]);
         }
       })
@@ -137,33 +118,44 @@ export default function InspectorPanel({
           setLoadingCheckpoints(false);
         }
       });
-
     return () => {
       cancelled = true;
     };
-  }, [selectedRunId, refreshToken]); // refreshToken ensures checkpoints refresh if runs do
+  }, [selectedRunId, refreshToken]);
 
-  const handleEmitCar = async () => {
-    if (!selectedRunId) return;
-    setEmitCarStatus("Emitting...");
-    try {
-      const path = await emitCar(selectedRunId);
-      setEmitCarStatus(`CAR emitted to: ${path}`);
-    } catch (err) {
-      console.error("Failed to emit CAR", err);
-      setEmitCarStatus(`Error: ${err}`);
+  // MERGED LOGIC: Using the useEffect and useCallback from the `emit_car` branch.
+  React.useEffect(() => {
+    setEmitSuccess(null);
+    setEmitError(null);
+  }, [selectedRunId]);
+
+  const handleEmitCar = React.useCallback(() => {
+    if (!selectedRunId) {
+      return;
     }
-  };
-  
-  // FROM: codex/extend-checkpointsummary-to-include-incident
-  // This is the rich rendering logic for the table, now including the Emit CAR button.
+    setEmittingCar(true);
+    setEmitSuccess(null);
+    setEmitError(null);
+    emitCar(selectedRunId)
+      .then((path) => {
+        setEmitSuccess(`Receipt saved to ${path}`);
+      })
+      .catch((err) => {
+        console.error("Failed to emit CAR", err);
+        const message = err instanceof Error ? err.message : String(err);
+        setEmitError(`Failed to emit CAR: ${message}`);
+      })
+      .finally(() => {
+        setEmittingCar(false);
+      });
+  }, [selectedRunId]);
+
   return (
     <div>
       <h2>Inspector</h2>
       <div style={{ fontSize: "0.85rem", marginBottom: "0.5rem", color: "#9cdcfe" }}>
         Project: {projectId}
       </div>
-
       <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
         <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
           Run
@@ -184,16 +176,19 @@ export default function InspectorPanel({
         </label>
         {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
         
+        {/* MERGED JSX: Using the more detailed button and feedback from the `emit_car` branch. */}
         <button
           type="button"
           onClick={handleEmitCar}
-          disabled={!selectedRunId || !!emitCarStatus?.startsWith("Emitting")}
+          disabled={!selectedRunId || emittingCar}
           style={{ alignSelf: "flex-start" }}
         >
-          Emit CAR
+          {emittingCar ? "Emitting…" : "Emit CAR"}
         </button>
-        {emitCarStatus && <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{emitCarStatus}</span>}
-
+        {emitSuccess && (
+          <span style={{ fontSize: '0.8rem', color: "#a5d6a7" }}>{emitSuccess}</span>
+        )}
+        {emitError && <span style={{ fontSize: '0.8rem', color: "#f48771" }}>{emitError}</span>}
       </div>
 
       {loadingCheckpoints ? (
@@ -216,7 +211,6 @@ export default function InspectorPanel({
                   const isIncident = ckpt.kind === "Incident";
                   const message = isIncident ? formatIncidentMessage(ckpt.incident) : null;
                   const severityColor = incidentSeverityColor(ckpt.incident);
-
                   return (
                     <tr
                       key={ckpt.id}
