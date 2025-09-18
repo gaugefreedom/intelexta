@@ -1,6 +1,8 @@
 // src-tauri/src/orchestrator.rs
 use crate::{governance, provenance, DbPool};
+use anyhow::anyhow;
 use chrono::Utc;
+use keyring::Error as KeyringError;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -27,6 +29,33 @@ pub struct RunSpec {
 
 pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let conn = pool.get()?;
+    let signing_key = match provenance::load_secret_key(&spec.project_id) {
+        Ok(sk) => Ok(sk),
+        Err(err) => {
+            let missing_secret = err
+                .downcast_ref::<KeyringError>()
+                .map(|key_err| matches!(key_err, KeyringError::NoEntry))
+                .unwrap_or(false);
+
+            if missing_secret {
+                let kp = provenance::generate_keypair();
+                provenance::store_secret_key(&spec.project_id, &kp.secret_key_b64)?;
+                let updated = conn.execute(
+                    "UPDATE projects SET pubkey = ?1 WHERE id = ?2",
+                    params![&kp.public_key_b64, &spec.project_id],
+                )?;
+                if updated == 0 {
+                    return Err(anyhow!(
+                        "project {} not found while repairing missing secret",
+                        spec.project_id
+                    ));
+                }
+                provenance::load_secret_key(&spec.project_id)
+            } else {
+                Err(err)
+            }
+        }
+    }?;
     let run_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let spec_json = serde_json::to_string(&spec)?;
@@ -48,7 +77,6 @@ pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let budget_ok = governance::enforce_budget(spec.token_budget, usage_tokens);
 
     // Load secret & compute signed, hash-chained checkpoint
-    let sk = provenance::load_secret_key(&spec.project_id)?;
     let prev_chain = ""; // first checkpoint in run
     let body_json = match &budget_ok {
         Ok(_) => serde_json::json!(CheckpointBody {
@@ -76,7 +104,7 @@ pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
 
     let canon = provenance::canonical_json(&body_json);
     let curr_chain = provenance::sha256_hex(&[prev_chain.as_bytes(), &canon].concat());
-    let signature = provenance::sign_bytes(&sk, curr_chain.as_bytes());
+    let signature = provenance::sign_bytes(&signing_key, curr_chain.as_bytes());
 
     let ckpt_id = Uuid::new_v4().to_string();
     let semantic_digest: Option<String> = None;
@@ -109,7 +137,7 @@ mod tests {
     use keyring::{mock, set_default_credential_builder};
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
-    use rusqlite::params;
+    use rusqlite::{params, types::Type};
     use std::convert::{TryFrom, TryInto};
 
     #[test]
@@ -258,6 +286,78 @@ mod tests {
         let expected_signature =
             provenance::sign_bytes(&signing_key, expected_curr_chain.as_bytes());
         assert_eq!(signature, expected_signature);
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_hello_run_repairs_missing_secret() -> Result<()> {
+        set_default_credential_builder(mock::default_credential_builder());
+
+        let manager = SqliteConnectionManager::memory();
+        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
+        {
+            let conn = pool.get()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            store::migrate_db(&conn)?;
+        }
+
+        let project_id = "proj-missing-secret";
+        let placeholder = provenance::generate_keypair();
+
+        {
+            let conn = pool.get()?;
+            let created_at = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO projects (id, name, created_at, pubkey) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    project_id,
+                    "Project Without Secret",
+                    created_at,
+                    &placeholder.public_key_b64
+                ],
+            )?;
+        }
+
+        let spec = RunSpec {
+            project_id: project_id.to_string(),
+            name: "hello-run".to_string(),
+            seed: 7,
+            dag_json: "{\"nodes\":[]}".to_string(),
+            token_budget: 1_000,
+        };
+
+        let run_id = start_hello_run(&pool, spec.clone())?;
+
+        let conn = pool.get()?;
+        let stored_pubkey: String = conn.query_row(
+            "SELECT pubkey FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )?;
+
+        let signing_key = provenance::load_secret_key(project_id)?;
+        let repaired_pubkey = provenance::public_key_from_secret(&signing_key);
+        assert_eq!(stored_pubkey, repaired_pubkey);
+
+        let stored_spec: RunSpec = conn.query_row(
+            "SELECT spec_json FROM runs WHERE id = ?1",
+            params![&run_id],
+            |row| {
+                let payload: String = row.get(0)?;
+                serde_json::from_str(&payload).map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(err))
+                })
+            },
+        )?;
+        assert_eq!(stored_spec, spec);
+
+        let checkpoint_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(checkpoint_count, 1);
 
         Ok(())
     }
