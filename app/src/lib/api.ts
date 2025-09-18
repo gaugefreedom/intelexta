@@ -21,6 +21,7 @@ export interface CheckpointSummary {
   kind: string;
   inputs_sha256?: string | null;
   outputs_sha256?: string | null;
+  semantic_digest?: string | null;
   usage_tokens: number;
 }
 

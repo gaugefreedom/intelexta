@@ -180,10 +180,22 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
         timestamp,
         inputs_sha,
         outputs_sha,
+        semantic_digest,
         usage_tokens,
-    ): (String, Option<String>, String, String, String, String, Option<String>, Option<String>, i64) =
+    ): (
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        i64,
+    ) =
         conn.query_row(
-            "SELECT kind, incident_json, signature, curr_chain, prev_chain, timestamp, inputs_sha256, outputs_sha256, usage_tokens FROM checkpoints WHERE run_id = ?1",
+            "SELECT kind, incident_json, signature, curr_chain, prev_chain, timestamp, inputs_sha256, outputs_sha256, semantic_digest, usage_tokens FROM checkpoints WHERE run_id = ?1",
             params![run_id.clone()],
             |row| {
                 Ok((
@@ -196,12 +208,14 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
                     row.get(6)?,
                     row.get(7)?,
                     row.get(8)?,
+                    row.get(9)?,
                 ))
             },
         )?;
 
     assert_eq!(kind, "Step");
     assert!(incident_json.is_none());
+    assert!(semantic_digest.is_none());
     assert_eq!(prev_chain, "");
     assert_eq!(usage_tokens, 10);
 
