@@ -19,9 +19,18 @@ export interface CheckpointSummary {
   id: string;
   timestamp: string;
   kind: string;
+  incident?: IncidentSummary | null;
   inputs_sha256?: string | null;
   outputs_sha256?: string | null;
+  semantic_digest?: string | null;
   usage_tokens: number;
+}
+
+export interface IncidentSummary {
+  kind: string;
+  severity: string;
+  details: string;
+  relatedCheckpointId?: string | null;
 }
 
 export interface Policy {
@@ -29,6 +38,14 @@ export interface Policy {
   budgetTokens: number;
   budgetUsd: number;
   budgetGCo2e: number;
+}
+
+export interface HelloRunSpec {
+  projectId: string;
+  name: string;
+  seed: number;
+  dagJson: string;
+  tokenBudget: number;
 }
 
 export async function listProjects(): Promise<Project[]> {
@@ -40,21 +57,25 @@ export async function createProject(name: string): Promise<Project> {
 }
 
 export async function listRuns(projectId: string): Promise<RunSummary[]> {
-  return await invoke<RunSummary[]>('list_runs', { projectId, project_id: projectId });
+  return await invoke<RunSummary[]>('list_runs', { projectId });
 }
 
 export async function listCheckpoints(runId: string): Promise<CheckpointSummary[]> {
-  return await invoke<CheckpointSummary[]>('list_checkpoints', { runId, run_id: runId });
+  return await invoke<CheckpointSummary[]>('list_checkpoints', { runId });
 }
 
 export async function getPolicy(projectId: string): Promise<Policy> {
-  return await invoke<Policy>('get_policy', { projectId, project_id: projectId });
+  return await invoke<Policy>('get_policy', { projectId });
 }
 
 export async function updatePolicy(projectId: string, policy: Policy): Promise<void> {
-  await invoke('update_policy', { projectId, project_id: projectId, policy });
+  await invoke('update_policy', { projectId, policy });
+}
+
+export async function startHelloRun(spec: HelloRunSpec): Promise<string> {
+  return await invoke<string>('start_hello_run', { spec });
 }
 
 export async function emitCar(runId: string): Promise<string> {
-  return await invoke<string>('emit_car', { runId, run_id: runId });
+  return await invoke<string>('emit_car', { runId });
 }

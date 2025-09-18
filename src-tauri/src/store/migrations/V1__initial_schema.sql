@@ -1,6 +1,5 @@
--- In src-tauri/src/store/schema.sql
-
--- For managing schema evolution idempotently
+-- V1__initial_schema.sql
+-- Initial schema migration
 CREATE TABLE IF NOT EXISTS migrations (
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -44,7 +43,6 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     curr_chain TEXT NOT NULL UNIQUE,
     signature TEXT NOT NULL,
     usage_tokens INTEGER NOT NULL DEFAULT 0,
-    semantic_digest TEXT,
     FOREIGN KEY (run_id) REFERENCES runs(id),
     FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id)
 );

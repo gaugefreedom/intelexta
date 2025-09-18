@@ -18,6 +18,7 @@ anyhow = "1"
 tauri = { version = "2.0.0-rc.15", features = [] }
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.31", features = ["bundled", "chrono", "serde_json"] }
+rusqlite_migration = "1"
 uuid = { version = "1", features = ["v4"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
