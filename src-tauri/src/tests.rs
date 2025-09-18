@@ -157,6 +157,35 @@ fn orchestrator_writes_incident_checkpoint_when_budget_fails() -> Result<()> {
 }
 
 #[test]
+fn list_checkpoints_includes_incident_payload() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("API Budget".into(), &pool)?;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "budget-api".into(),
+            seed: 7,
+            dag_json: "{}".into(),
+            token_budget: 5,
+        },
+    )?;
+
+    let checkpoints = api::list_checkpoints_with_pool(run_id, &pool)?;
+    assert_eq!(checkpoints.len(), 1);
+
+    let incident_ckpt = &checkpoints[0];
+    assert_eq!(incident_ckpt.kind, "Incident");
+    let incident = incident_ckpt.incident.as_ref().expect("incident payload");
+    assert_eq!(incident.kind, "budget_exceeded");
+    assert_eq!(incident.severity, "error");
+    assert_eq!(incident.details, "usage=10 > budget=5");
+    Ok(())
+}
+
+#[test]
 fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;

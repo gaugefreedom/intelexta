@@ -19,10 +19,18 @@ export interface CheckpointSummary {
   id: string;
   timestamp: string;
   kind: string;
+  incident?: IncidentSummary | null;
   inputs_sha256?: string | null;
   outputs_sha256?: string | null;
   semantic_digest?: string | null;
   usage_tokens: number;
+}
+
+export interface IncidentSummary {
+  kind: string;
+  severity: string;
+  details: string;
+  relatedCheckpointId?: string | null;
 }
 
 export interface Policy {

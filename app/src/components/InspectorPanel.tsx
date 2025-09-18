@@ -1,11 +1,54 @@
+// In app/src/components/InspectorPanel.tsx
+
 import React from "react";
 import {
   listCheckpoints,
   listRuns,
   CheckpointSummary,
+  IncidentSummary,
   RunSummary,
+  emitCar, // Make sure emitCar is imported
 } from "../lib/api";
 
+// FROM: codex/extend-checkpointsummary-to-include-incident
+// These helper functions are needed for displaying incidents.
+function formatIncidentMessage(incident?: IncidentSummary | null): string {
+  if (!incident) {
+    return "Policy incident reported";
+  }
+
+  switch (incident.kind) {
+    case "budget_exceeded":
+      return `Budget exceeded: ${incident.details}`;
+    default: {
+      const readableKind = incident.kind
+        .replace(/_/g, " ")
+        .replace(/(^|\s)\S/g, (match) => match.toUpperCase());
+      return `${readableKind}: ${incident.details}`;
+    }
+  }
+}
+
+// FROM: codex/extend-checkpointsummary-to-include-incident
+// This helper provides styling for different incident severities.
+function incidentSeverityColor(incident?: IncidentSummary | null): string {
+  if (!incident) {
+    return "#f48771"; // default error color
+  }
+
+  switch (incident.severity) {
+    case "warn":
+      return "#dcdcaa";
+    case "info":
+      return "#9cdcfe";
+    case "error":
+    default:
+      return "#f48771";
+  }
+}
+
+// MERGED COMPONENT SIGNATURE
+// It now accepts both `projectId` and `refreshToken`.
 export default function InspectorPanel({
   projectId,
   refreshToken,
@@ -14,14 +57,24 @@ export default function InspectorPanel({
   refreshToken: number;
 }) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
-  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(
+    null
+  );
   const [checkpoints, setCheckpoints] = React.useState<CheckpointSummary[]>([]);
   const [loadingRuns, setLoadingRuns] = React.useState<boolean>(false);
-  const [loadingCheckpoints, setLoadingCheckpoints] = React.useState<boolean>(false);
+  const [loadingCheckpoints, setLoadingCheckpoints] = React.useState<boolean>(
+    false
+  );
   const [runsError, setRunsError] = React.useState<string | null>(null);
-  const [checkpointError, setCheckpointError] = React.useState<string | null>(null);
+  const [checkpointError, setCheckpointError] = React.useState<string | null>(
+    null
+  );
+  const [emitCarStatus, setEmitCarStatus] = React.useState<string | null>(null);
 
+  // FROM: main
+  // This useEffect hook correctly uses `refreshToken` to refetch runs.
   React.useEffect(() => {
+    if (!projectId) return;
     let cancelled = false;
     setLoadingRuns(true);
     setRunsError(null);
@@ -29,7 +82,10 @@ export default function InspectorPanel({
       .then((runList) => {
         if (cancelled) return;
         setRuns(runList);
-        setSelectedRunId(runList.length > 0 ? runList[0].id : null);
+        // Automatically select the first run if none is selected or the selected one disappears
+        if (!selectedRunId || !runList.find((r) => r.id === selectedRunId)) {
+          setSelectedRunId(runList.length > 0 ? runList[0].id : null);
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -49,6 +105,8 @@ export default function InspectorPanel({
     };
   }, [projectId, refreshToken]);
 
+  // FROM: main
+  // This useEffect hook correctly uses `refreshToken` to refetch checkpoints.
   React.useEffect(() => {
     if (!selectedRunId) {
       setCheckpoints([]);
@@ -68,7 +126,9 @@ export default function InspectorPanel({
       .catch((err) => {
         if (!cancelled) {
           console.error("Failed to load checkpoints", err);
-          setCheckpointError("Could not load checkpoints for the selected run.");
+          setCheckpointError(
+            "Could not load checkpoints for the selected run."
+          );
           setCheckpoints([]);
         }
       })
@@ -81,8 +141,22 @@ export default function InspectorPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedRunId, refreshToken]);
+  }, [selectedRunId, refreshToken]); // refreshToken ensures checkpoints refresh if runs do
 
+  const handleEmitCar = async () => {
+    if (!selectedRunId) return;
+    setEmitCarStatus("Emitting...");
+    try {
+      const path = await emitCar(selectedRunId);
+      setEmitCarStatus(`CAR emitted to: ${path}`);
+    } catch (err) {
+      console.error("Failed to emit CAR", err);
+      setEmitCarStatus(`Error: ${err}`);
+    }
+  };
+  
+  // FROM: codex/extend-checkpointsummary-to-include-incident
+  // This is the rich rendering logic for the table, now including the Emit CAR button.
   return (
     <div>
       <h2>Inspector</h2>
@@ -109,9 +183,17 @@ export default function InspectorPanel({
           </select>
         </label>
         {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
-        <button type="button" disabled style={{ alignSelf: "flex-start" }}>
-          Emit CAR (coming soon)
+        
+        <button
+          type="button"
+          onClick={handleEmitCar}
+          disabled={!selectedRunId || !!emitCarStatus?.startsWith("Emitting")}
+          style={{ alignSelf: "flex-start" }}
+        >
+          Emit CAR
         </button>
+        {emitCarStatus && <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{emitCarStatus}</span>}
+
       </div>
 
       {loadingCheckpoints ? (
@@ -130,19 +212,59 @@ export default function InspectorPanel({
                 </tr>
               </thead>
               <tbody>
-                {checkpoints.map((ckpt) => (
-                  <tr key={ckpt.id} style={{ borderBottom: "1px solid #222" }}>
-                    <td style={{ padding: "4px" }}>{new Date(ckpt.timestamp).toLocaleString()}</td>
-                    <td style={{ padding: "4px" }}>{ckpt.kind}</td>
-                    <td style={{ padding: "4px", fontFamily: "monospace" }}>
-                      {ckpt.inputs_sha256 ?? "—"}
-                    </td>
-                    <td style={{ padding: "4px", fontFamily: "monospace" }}>
-                      {ckpt.outputs_sha256 ?? "—"}
-                    </td>
-                    <td style={{ padding: "4px", textAlign: "right" }}>{ckpt.usage_tokens}</td>
-                  </tr>
-                ))}
+                {checkpoints.map((ckpt) => {
+                  const isIncident = ckpt.kind === "Incident";
+                  const message = isIncident ? formatIncidentMessage(ckpt.incident) : null;
+                  const severityColor = incidentSeverityColor(ckpt.incident);
+
+                  return (
+                    <tr
+                      key={ckpt.id}
+                      style={{
+                        borderBottom: "1px solid #222",
+                        backgroundColor: isIncident ? "#2d1616" : undefined,
+                      }}
+                    >
+                      <td style={{ padding: "4px", verticalAlign: "top" }}>
+                        {new Date(ckpt.timestamp).toLocaleString()}
+                      </td>
+                      <td style={{ padding: "4px" }}>
+                        <div style={{ fontWeight: 600 }}>{ckpt.kind}</div>
+                        {isIncident && (
+                          <div style={{ marginTop: "4px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                            {ckpt.incident?.severity && (
+                              <span
+                                style={{
+                                  alignSelf: "flex-start",
+                                  fontSize: "0.7rem",
+                                  letterSpacing: "0.08em",
+                                  fontWeight: 700,
+                                  padding: "2px 6px",
+                                  borderRadius: "999px",
+                                  border: `1px solid ${severityColor}`,
+                                  color: severityColor,
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                {ckpt.incident.severity.toUpperCase()}
+                              </span>
+                            )}
+                            <span style={{ fontWeight: 700, color: severityColor }}>{message}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>
+                        {ckpt.inputs_sha256 ?? "—"}
+                      </td>
+                      <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>
+                        {ckpt.outputs_sha256 ?? "—"}
+                      </td>
+                      <td style={{ padding: "4px", textAlign: "right", verticalAlign: "top" }}>
+                        {ckpt.usage_tokens}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -152,7 +274,6 @@ export default function InspectorPanel({
       ) : (
         <p>Select a run to inspect its checkpoints.</p>
       )}
-
       {checkpointError && <div style={{ color: "#f48771", marginTop: "8px" }}>{checkpointError}</div>}
     </div>
   );
