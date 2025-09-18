@@ -8,7 +8,7 @@ use chrono::Utc;
 use rusqlite::{params, types::Type};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 #[tauri::command]

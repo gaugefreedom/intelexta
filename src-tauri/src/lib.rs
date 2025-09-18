@@ -17,6 +17,8 @@ pub enum Error {
     Pool(#[from] r2d2::Error),
     #[error(transparent)]
     Keyring(#[from] keyring::Error),
+    #[error(transparent)]
+    Migration(#[from] rusqlite_migration::Error),
     #[error("API Error: {0}")]
     Api(String),
 }
