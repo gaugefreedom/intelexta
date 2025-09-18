@@ -136,6 +136,7 @@ Phase 1: Foundational Backend Setup
             ▪ In runs: kind TEXT NOT NULL DEFAULT 'exact', sampler_json TEXT
             ▪ In checkpoints: semantic_digest TEXT
             ▪ In receipts: match_kind TEXT, epsilon REAL
+        1.1 Task: integrate a dedicated Rust migration crate like rusqlite_migrations or refinery. This automates schema changes, ensures they are applied consistently and in the correct order, and makes the database setup far more robust and maintainable
     2. Task: Implement Secure Key Storage
         ◦ File: src-tauri/Cargo.toml
         ◦ Action: Add the keyring crate.
@@ -364,6 +365,7 @@ Phase 2: Frontend for Conversational UI
         ◦ File: app/src/components/
         ◦ Action: Style the message display to clearly distinguish between "Human" and "AI" turns.
         ◦ Action: For each message bubble, add a small, clickable icon or link that reveals the underlying checkpoint_id. This visually connects the conversation to its verifiable proof on the backend.
+    4. Task: Visual feedback during the AI's turn. When the user's message is sent, immediately show a "placeholder" AI message with a typing indicator or spinner. Replace it with the real message when the submit_turn call returns. This dramatically improves the user experience of the Interactive mode, making it feel responsive and alive, just like a modern chat application.
 3. Acceptance Criteria (Definition of "Done")
     • INTERACTIVE-01 (Backend): Calling submit_turn correctly creates two new, linked checkpoints (one for human input, one for AI output) in the database with sequential turn_index values.
     • INTERACTIVE-02 (UI): Starting a new Interactive run correctly switches the EditorPanel from the configuration form to the conversational UI.
@@ -451,6 +453,7 @@ Phase 1: Ecosystem Expansion (Online Providers)
         ◦ File: src-tauri/src/orchestrator.rs
         ◦ Action: In the execute_llm_run function, add logic to handle online models.
         ◦ Logic: If a run specifies an online model, the orchestrator will fetch the appropriate API key from the keychain, construct an authenticated HTTPS request, and send the prompt to the provider's API. It must also handle network errors gracefully.
+    4. Task: Before making any network call, the orchestrator must first check policy.allow_network == true and the list of allowed providers. If false, it must immediately create a signed Incident checkpoint (egress_denied) and stop.
 Phase 2: User Onboarding & Experience
     1. Task: Create a First-Launch Tutorial Project
         ◦ Problem: New users are currently met with a blank slate, which can be intimidating.
@@ -469,6 +472,7 @@ Phase 3: Quality of Life for Power Users
         ◦ Problem: Currently, the CAR is a raw JSON file. It's verifiable but not very readable.
         ◦ File: app/src/components/
         ◦ Action: Create a new component, CarViewer.tsx. When a user clicks on a CAR receipt in the UI, instead of just showing the file path, open a dedicated view that renders the CAR's contents as a clean, well-formatted report (e.g., "Run Details," "Budget Consumption," "Provenance Chain," "Replay Result").
+    3. Task: Implement intelexta-verify CLI (V1): The goal would be to build a working version of the command-line tool that can perform the Integrity Check and Reproducibility Check for Exact mode runs.
 3. Acceptance Criteria (Definition of "Done")
     • ECO-01 (API Keys): A user can navigate to a settings page, enter an OpenAI API key, and have it securely saved in the OS keychain.
     • ECO-02 (Online Run): A run can be configured and successfully executed using an online model (e.g., gpt-4o-mini), with its accurate USD cost (based on the rate card) and token usage recorded in a checkpoint.
