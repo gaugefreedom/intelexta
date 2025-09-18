@@ -1,4 +1,4 @@
-**Project Master Context: Intelexta (v3)**
+**Project Master Context: Intelexta (v4)**
 
 Use this document as the foundational context for all discussions, code generation, and strategic refinements related to the Intelexta project.
 
@@ -23,9 +23,10 @@ Intelexta is designed with a "secure by default" posture to protect the user and
 
 4. User Experience Philosophy: Control Plane, Not Chat
 Intelexta deliberately trades the raw velocity of a conventional chat UI for the rigor of a verifiable control plane.
-    • Velocity vs. Verifiability: Tools like Cursor are optimized for developer velocity. Intelexta is optimized for process verifiability. Every UI element is designed to support the goal of producing a provable, auditable output.
+    • VeVelocity vs. Verifiability: Tools like Cursor are optimized for developer velocity. Intelexta is optimized for process verifiability. Every UI element is designed to support the goal of producing a provable, auditable output.
     • Sprint 1A Interface ("Launch Control"): The EditorPanel is a structured form, not a chat box. This is fundamental, as the form's explicit fields (RunSpec) are the evidence that gets canonicalized, hashed, and signed to initiate a verifiable run.
-    • Future Symbiosis (Interactive Mode): The vision for true symbiosis is realized in the Interactive proof mode. This UI will resemble a notebook or chat, but each turn (human prompt, AI response) is captured as a distinct, signed checkpoint in the hash-chain. The transcript itself becomes the auditable artifact of co-creation, clearly attributing each contribution.
+    • The Path to Intelligent Orchestration: The current orchestrator.rs module and the dag_json field in the RunSpec are the foundational seeds for the advanced "Intelligent Orchestration" capability. The V1 product focuses on perfecting single-step ("single-node DAG") execution across all proof modes. Future versions will expand the orchestrator's capabilities to manage complex, multi-node DAGs for intelligent pipelines.
+    • Future Symbiosis (Interactive Mode): The vision for true symbiosis is realized in the Interactive proof mode. This UI will resemble a notebook or chat, but each turn (human prompt, AI response) is captured as a distinct, signed checkpoint in the hash-chain. The transcript itself becomes the auditable artifact of co-creation.
 
 5. Artifact Taxonomy
     • Checkpoint: The atomic unit of proof. A signed, hash-chained record of a single step in a workflow.
@@ -33,7 +34,43 @@ Intelexta deliberately trades the raw velocity of a conventional chat UI for the
     • CAR (Content-Addressable Receipt): A portable, self-contained JSON file that serves as a verifiable receipt for a single Run.
     • IXP (Intelexta Project Export): A compressed archive (.zip) containing the entire project state: project.json, policy.json, and all associated runs, checkpoints, and CARs.
 
-6. Core Data Structures & Technical Concepts
+ 6. Product Roadmap & Future Capabilities
+
+(This new section formally documents the path from MVP to the full vision.)
+
+Intelexta is developed through a phased roadmap. The V1.0 release focuses on establishing the core "proof engine" as a robust, usable tool. Post-V1 releases will expand its power and ecosystem connectivity.
+
+    • V1.0 (Core Engine): Sprints 1-3
+
+        • Goal: Ship a polished, local-first control plane for verifiable AI workflows.
+
+        • Key Features: Exact, Concordant, and Interactive proof modes; portable, signed CAR generation; project export/import (.ixp); and integration with local and online AI models under strict governance.
+
+    • V1.X (Post-MVP): Sprints 4+
+
+        • Goal: Evolve from a control plane into an intelligent workflow builder and a trusted hub for verifiable knowledge.
+
+        • Intelligent Orchestration (DAG Engine): The orchestrator.rs will be enhanced to support multi-step, branching workflows defined in dag_json. This will enable users to chain AI calls, run comparisons, and build complex, reproducible research pipelines.
+
+        • Optional Blockchain Anchoring: A feature to take a finalized CAR's ID and publish it to a public blockchain. This provides a decentralized, immutable, and universally verifiable timestamp, proving the CAR's existence at a specific point in time. This is critical for academic, legal, and IP-sensitive use cases.
+
+        • Collaboration & Integration: Features for team-based projects, Git integration for CARs, and a robust command-line interface (CLI) for headless execution and scripting.
+    
+    • The Verification Ecosystem: The intelexta-verify CLI
+
+        • To complete the trust chain and enable third-party validation, the Intelexta project includes a crucial companion: intelexta-verify. This is a lightweight, open-source, standalone command-line tool.
+
+        • Purpose: It allows anyone to verify a .car.json file without needing to install the full Intelexta desktop application. This is essential for academic reviewers, legal teams, and auditors.
+
+        • Core Functions:
+
+            1. Integrity Check: Verifies the CAR's internal signatures and hash-chain to prove it is tamper-evident.
+
+            2. Reproducibility Check: Reads the RunSpec from the CAR and re-executes the entire workflow to prove the results are reproducible.
+
+            3. Timestamp Check (Optional): For anchored CARs, it queries the public blockchain to confirm the immutable timestamp.
+
+7. Core Data Structures & Technical Concepts
     • Rust Structs (Locked):
       // Policy & Budgets
       // Run Configuration
@@ -43,7 +80,7 @@ Intelexta deliberately trades the raw velocity of a conventional chat UI for the
         ◦ Interactive: For collaboration. Acceptance is a "process proof"—verifying the sequence of checkpoints.
     • Canonicalization: All hashed material must be processed by a stable-JSON helper (sorted keys, no insignificant whitespace) before hashing to ensure deterministic digests.
     • CAR v0.2 Schema: The CAR id is the sha256 of its canonicalized body (excluding signatures). See previous discussions for the full field list.
-7. Key Metrics (For Mission Reporting)
+8. Key Metrics (For Mission Reporting)
     • Replay Fidelity: Pass-rate of replay attempts for each proof mode.
     • CAR Coverage: Percentage of runs that successfully emit a CAR.
     • Energy Transparency: Percentage of runs with a non-null gCO₂e estimate.
