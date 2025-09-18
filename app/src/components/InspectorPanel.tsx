@@ -4,6 +4,7 @@ import {
   listRuns,
   CheckpointSummary,
   RunSummary,
+  emitCar,
 } from "../lib/api";
 
 export default function InspectorPanel({ projectId }: { projectId: string }) {
@@ -14,6 +15,9 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
   const [loadingCheckpoints, setLoadingCheckpoints] = React.useState<boolean>(false);
   const [runsError, setRunsError] = React.useState<string | null>(null);
   const [checkpointError, setCheckpointError] = React.useState<string | null>(null);
+  const [emittingCar, setEmittingCar] = React.useState<boolean>(false);
+  const [emitSuccess, setEmitSuccess] = React.useState<string | null>(null);
+  const [emitError, setEmitError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -76,6 +80,33 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
     };
   }, [selectedRunId]);
 
+  React.useEffect(() => {
+    setEmitSuccess(null);
+    setEmitError(null);
+  }, [selectedRunId]);
+
+  const handleEmitCar = React.useCallback(() => {
+    if (!selectedRunId) {
+      return;
+    }
+
+    setEmittingCar(true);
+    setEmitSuccess(null);
+    setEmitError(null);
+    emitCar(selectedRunId)
+      .then((path) => {
+        setEmitSuccess(`Receipt saved to ${path}`);
+      })
+      .catch((err) => {
+        console.error("Failed to emit CAR", err);
+        const message = err instanceof Error ? err.message : String(err);
+        setEmitError(`Failed to emit CAR: ${message}`);
+      })
+      .finally(() => {
+        setEmittingCar(false);
+      });
+  }, [selectedRunId]);
+
   return (
     <div>
       <h2>Inspector</h2>
@@ -102,9 +133,18 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
           </select>
         </label>
         {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
-        <button type="button" disabled style={{ alignSelf: "flex-start" }}>
-          Emit CAR (coming soon)
+        <button
+          type="button"
+          onClick={handleEmitCar}
+          disabled={!selectedRunId || emittingCar}
+          style={{ alignSelf: "flex-start" }}
+        >
+          {emittingCar ? "Emitting…" : "Emit CAR"}
         </button>
+        {emitSuccess && (
+          <span style={{ color: "#a5d6a7" }}>{emitSuccess}</span>
+        )}
+        {emitError && <span style={{ color: "#f48771" }}>{emitError}</span>}
       </div>
 
       {loadingCheckpoints ? (

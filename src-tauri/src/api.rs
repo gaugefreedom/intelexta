@@ -1,12 +1,13 @@
 // In src-tauri/src/api.rs
 use crate::{
-    orchestrator, provenance,
+    car, orchestrator, provenance,
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 #[tauri::command]
@@ -146,4 +147,71 @@ pub fn get_policy(project_id: String, pool: State<DbPool>) -> Result<Policy, Err
 pub fn update_policy(project_id: String, policy: Policy, pool: State<DbPool>) -> Result<(), Error> {
     let conn = pool.get()?;
     store::policies::upsert(&conn, &project_id, &policy)
+}
+
+pub(crate) fn emit_car_to_base_dir(
+    run_id: &str,
+    pool: &DbPool,
+    base_dir: &Path,
+) -> Result<PathBuf, Error> {
+    let conn = pool.get()?;
+
+    let (project_id, _name, _created_at): (String, String, String) = conn
+        .query_row(
+            "SELECT project_id, name, created_at FROM runs WHERE id = ?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Error::Api(format!("run {run_id} not found")),
+            other => Error::from(other),
+        })?;
+
+    let car = car::build_car(run_id).map_err(|err| Error::Api(err.to_string()))?;
+
+    let receipts_dir = base_dir.join(&project_id).join("receipts");
+    std::fs::create_dir_all(&receipts_dir)
+        .map_err(|err| Error::Api(format!("failed to create receipts dir: {err}")))?;
+
+    let sanitized_car_id = car.id.replace(':', "_");
+    let file_path = receipts_dir.join(format!("{sanitized_car_id}.json"));
+    let json = serde_json::to_string_pretty(&car)
+        .map_err(|err| Error::Api(format!("failed to serialize CAR: {err}")))?;
+    std::fs::write(&file_path, json)
+        .map_err(|err| Error::Api(format!("failed to write CAR file: {err}")))?;
+
+    let created_at = car.created_at.to_rfc3339();
+    let file_path_str = file_path.to_string_lossy().to_string();
+    let match_kind: Option<String> = Some("pending".to_string());
+    let epsilon: Option<f64> = None;
+    let s_grade = car.sgrade.score as i64;
+    conn.execute(
+        "INSERT INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            &car.id,
+            run_id,
+            &created_at,
+            &file_path_str,
+            &match_kind,
+            &epsilon,
+            &s_grade,
+        ],
+    )?;
+
+    Ok(file_path)
+}
+
+#[tauri::command]
+pub fn emit_car(
+    run_id: String,
+    pool: State<DbPool>,
+    app_handle: AppHandle,
+) -> Result<String, Error> {
+    let base_dir = app_handle
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
+
+    let path = emit_car_to_base_dir(&run_id, pool.inner(), &base_dir)?;
+    Ok(path.to_string_lossy().to_string())
 }

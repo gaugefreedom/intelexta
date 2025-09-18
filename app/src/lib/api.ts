@@ -54,3 +54,7 @@ export async function getPolicy(projectId: string): Promise<Policy> {
 export async function updatePolicy(projectId: string, policy: Policy): Promise<void> {
   await invoke('update_policy', { projectId, project_id: projectId, policy });
 }
+
+export async function emitCar(runId: string): Promise<string> {
+  return await invoke<string>('emit_car', { runId, run_id: runId });
+}
