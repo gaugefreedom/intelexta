@@ -32,14 +32,12 @@ pub fn load_secret_key(project_id: &str) -> anyhow::Result<SigningKey> {
     // FIX: Use the constant here.
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id)?;
     
-    // FIX: Add more specific error handling for the "NoEntry" case.
-    let b64 = match entry.get_password() {
-        Ok(password) => Ok(password),
-        Err(keyring::Error::NoEntry) => {
-            Err(anyhow::anyhow!("No secret key found in storage for project '{}'", project_id))
-        }
-        Err(e) => Err(e.into()),
-    }?;
+    // Propagate the underlying keyring error so callers can detect a missing entry
+    // and repair the secret if necessary.
+    let b64 = entry.get_password().map_err(|err| match err {
+        keyring::Error::NoEntry => keyring::Error::NoEntry.into(),
+        other => other.into(),
+    })?;
 
     let bytes = STANDARD.decode(b64)?;
     let sk = SigningKey::from_bytes(&bytes.try_into().map_err(|_| anyhow::anyhow!("bad sk len"))?);
