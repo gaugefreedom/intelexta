@@ -6,17 +6,12 @@
 
 use tauri::Manager;
 // Use our new lib.rs as the entry point for all modules
-use intelexta::{api, store};
+use intelexta::{api, keychain, store};
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // --- FIX STARTS HERE ---
-            // Because the OS keychain is unreliable on this system, we are forcing
-            // the keyring crate to use its in-memory mock backend for development.
-            // NOTE: This is for development only. Secrets will not persist between app restarts.
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-            // --- FIX ENDS HERE ---
+            keychain::ensure_available();
             let app_data_dir = app
                 .path()
                 .app_local_data_dir()
