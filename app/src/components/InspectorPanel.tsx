@@ -3,8 +3,42 @@ import {
   listCheckpoints,
   listRuns,
   CheckpointSummary,
+  IncidentSummary,
   RunSummary,
 } from "../lib/api";
+
+function formatIncidentMessage(incident?: IncidentSummary | null): string {
+  if (!incident) {
+    return "Policy incident reported";
+  }
+
+  switch (incident.kind) {
+    case "budget_exceeded":
+      return `Budget exceeded: ${incident.details}`;
+    default: {
+      const readableKind = incident.kind
+        .replace(/_/g, " ")
+        .replace(/(^|\s)\S/g, (match) => match.toUpperCase());
+      return `${readableKind}: ${incident.details}`;
+    }
+  }
+}
+
+function incidentSeverityColor(incident?: IncidentSummary | null): string {
+  if (!incident) {
+    return "#f48771";
+  }
+
+  switch (incident.severity) {
+    case "warn":
+      return "#dcdcaa";
+    case "info":
+      return "#9cdcfe";
+    case "error":
+    default:
+      return "#f48771";
+  }
+}
 
 export default function InspectorPanel({ projectId }: { projectId: string }) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
@@ -123,19 +157,59 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
                 </tr>
               </thead>
               <tbody>
-                {checkpoints.map((ckpt) => (
-                  <tr key={ckpt.id} style={{ borderBottom: "1px solid #222" }}>
-                    <td style={{ padding: "4px" }}>{new Date(ckpt.timestamp).toLocaleString()}</td>
-                    <td style={{ padding: "4px" }}>{ckpt.kind}</td>
-                    <td style={{ padding: "4px", fontFamily: "monospace" }}>
-                      {ckpt.inputs_sha256 ?? "—"}
-                    </td>
-                    <td style={{ padding: "4px", fontFamily: "monospace" }}>
-                      {ckpt.outputs_sha256 ?? "—"}
-                    </td>
-                    <td style={{ padding: "4px", textAlign: "right" }}>{ckpt.usage_tokens}</td>
-                  </tr>
-                ))}
+                {checkpoints.map((ckpt) => {
+                  const isIncident = ckpt.kind === "Incident";
+                  const message = isIncident ? formatIncidentMessage(ckpt.incident) : null;
+                  const severityColor = incidentSeverityColor(ckpt.incident);
+
+                  return (
+                    <tr
+                      key={ckpt.id}
+                      style={{
+                        borderBottom: "1px solid #222",
+                        backgroundColor: isIncident ? "#2d1616" : undefined,
+                      }}
+                    >
+                      <td style={{ padding: "4px", verticalAlign: "top" }}>
+                        {new Date(ckpt.timestamp).toLocaleString()}
+                      </td>
+                      <td style={{ padding: "4px" }}>
+                        <div style={{ fontWeight: 600 }}>{ckpt.kind}</div>
+                        {isIncident && (
+                          <div style={{ marginTop: "4px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                            {ckpt.incident?.severity && (
+                              <span
+                                style={{
+                                  alignSelf: "flex-start",
+                                  fontSize: "0.7rem",
+                                  letterSpacing: "0.08em",
+                                  fontWeight: 700,
+                                  padding: "2px 6px",
+                                  borderRadius: "999px",
+                                  border: `1px solid ${severityColor}`,
+                                  color: severityColor,
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                {ckpt.incident.severity.toUpperCase()}
+                              </span>
+                            )}
+                            <span style={{ fontWeight: 700, color: severityColor }}>{message}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ padding: "4px", fontFamily: "monospace" }}>
+                        {ckpt.inputs_sha256 ?? "—"}
+                      </td>
+                      <td style={{ padding: "4px", fontFamily: "monospace" }}>
+                        {ckpt.outputs_sha256 ?? "—"}
+                      </td>
+                      <td style={{ padding: "4px", textAlign: "right", verticalAlign: "top" }}>
+                        {ckpt.usage_tokens}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

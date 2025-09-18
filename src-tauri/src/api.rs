@@ -4,7 +4,7 @@ use crate::{
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
-use rusqlite::params;
+use rusqlite::{params, types::Type};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
@@ -99,9 +99,20 @@ pub struct CheckpointSummary {
     pub id: String,
     pub timestamp: String,
     pub kind: String,
+    pub incident: Option<IncidentSummary>,
     pub inputs_sha256: Option<String>,
     pub outputs_sha256: Option<String>,
     pub usage_tokens: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncidentSummary {
+    pub kind: String,
+    pub severity: String,
+    pub details: String,
+    #[serde(alias = "related_checkpoint_id")]
+    pub related_checkpoint_id: Option<String>,
 }
 
 #[tauri::command]
@@ -109,20 +120,36 @@ pub fn list_checkpoints(
     run_id: String,
     pool: State<DbPool>,
 ) -> Result<Vec<CheckpointSummary>, Error> {
+    list_checkpoints_with_pool(run_id, pool.inner())
+}
+
+pub(crate) fn list_checkpoints_with_pool(
+    run_id: String,
+    pool: &DbPool,
+) -> Result<Vec<CheckpointSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, timestamp, kind, inputs_sha256, outputs_sha256, usage_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
+        "SELECT id, timestamp, kind, incident_json, inputs_sha256, outputs_sha256, usage_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
     )?;
 
     let rows = stmt.query_map(params![run_id], |row| {
+        let incident_json: Option<String> = row.get(3)?;
+        let incident = incident_json
+            .map(|payload| serde_json::from_str::<IncidentSummary>(&payload))
+            .transpose()
+            .map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
+            })?;
+
         Ok(CheckpointSummary {
             id: row.get(0)?,
             timestamp: row.get(1)?,
             kind: row.get(2)?,
-            inputs_sha256: row.get(3)?,
-            outputs_sha256: row.get(4)?,
+            incident,
+            inputs_sha256: row.get(4)?,
+            outputs_sha256: row.get(5)?,
             usage_tokens: {
-                let value: i64 = row.get(5)?;
+                let value: i64 = row.get(6)?;
                 value.max(0) as u64
             },
         })
