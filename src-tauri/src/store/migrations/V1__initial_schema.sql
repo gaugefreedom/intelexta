@@ -1,3 +1,4 @@
+-- V1__initial_schema.sql
 -- Initial schema migration
 CREATE TABLE IF NOT EXISTS migrations (
     version INTEGER PRIMARY KEY,
