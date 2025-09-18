@@ -6,7 +6,13 @@ import {
   RunSummary,
 } from "../lib/api";
 
-export default function InspectorPanel({ projectId }: { projectId: string }) {
+export default function InspectorPanel({
+  projectId,
+  refreshToken,
+}: {
+  projectId: string;
+  refreshToken: number;
+}) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
   const [checkpoints, setCheckpoints] = React.useState<CheckpointSummary[]>([]);
@@ -41,11 +47,12 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, refreshToken]);
 
   React.useEffect(() => {
     if (!selectedRunId) {
       setCheckpoints([]);
+      setCheckpointError(null);
       return;
     }
 
@@ -74,7 +81,7 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedRunId]);
+  }, [selectedRunId, refreshToken]);
 
   return (
     <div>

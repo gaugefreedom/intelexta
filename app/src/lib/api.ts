@@ -31,6 +31,14 @@ export interface Policy {
   budgetGCo2e: number;
 }
 
+export interface HelloRunSpec {
+  projectId: string;
+  name: string;
+  seed: number;
+  dagJson: string;
+  tokenBudget: number;
+}
+
 export async function listProjects(): Promise<Project[]> {
   return await invoke<Project[]>('list_projects');
 }
@@ -53,4 +61,17 @@ export async function getPolicy(projectId: string): Promise<Policy> {
 
 export async function updatePolicy(projectId: string, policy: Policy): Promise<void> {
   await invoke('update_policy', { projectId, project_id: projectId, policy });
+}
+
+export async function startHelloRun(spec: HelloRunSpec): Promise<string> {
+  return await invoke<string>('start_hello_run', {
+    projectId: spec.projectId,
+    project_id: spec.projectId,
+    name: spec.name,
+    seed: spec.seed,
+    dagJson: spec.dagJson,
+    dag_json: spec.dagJson,
+    tokenBudget: spec.tokenBudget,
+    token_budget: spec.tokenBudget,
+  });
 }
