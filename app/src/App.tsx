@@ -7,6 +7,11 @@ import InspectorPanel from './components/InspectorPanel';
 
 export default function App() {
   const [selectedProject, setSelectedProject] = React.useState<string | null>(null);
+  const [runsRefreshToken, setRunsRefreshToken] = React.useState(0);
+
+  const handleRunStarted = React.useCallback((_: string) => {
+    setRunsRefreshToken((token) => token + 1);
+  }, []);
 
   return (
     <main style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif', background: '#1e1e1e', color: '#d4d4d4' }}>
@@ -18,10 +23,14 @@ export default function App() {
           {selectedProject ? <ContextPanel projectId={selectedProject} /> : <div>Select a project</div>}
         </div>
         <div style={{ flex: 1, padding: '8px' }}>
-          {selectedProject ? <EditorPanel projectId={selectedProject} /> : null}
+          {selectedProject ? (
+            <EditorPanel projectId={selectedProject} onRunStarted={handleRunStarted} />
+          ) : null}
         </div>
         <div style={{ width: '350px', borderLeft: '1px solid #333', padding: '8px' }}>
-          {selectedProject ? <InspectorPanel projectId={selectedProject} /> : null}
+          {selectedProject ? (
+            <InspectorPanel projectId={selectedProject} refreshToken={runsRefreshToken} />
+          ) : null}
         </div>
       </div>
     </main>

@@ -26,6 +26,10 @@ fn setup_pool() -> Result<DbPool> {
         let conn = pool.get()?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         store::migrate_db(&conn)?;
+        let latest_version = store::migrations::latest_version();
+        let recorded: Option<i64> =
+            conn.query_row("SELECT MAX(version) FROM migrations", [], |row| row.get(0))?;
+        assert_eq!(recorded.unwrap_or_default(), latest_version);
     }
     Ok(pool)
 }
