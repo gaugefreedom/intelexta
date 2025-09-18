@@ -1,3 +1,5 @@
+// In app/src/components/InspectorPanel.tsx
+
 import React from "react";
 import {
   listCheckpoints,
@@ -5,8 +7,11 @@ import {
   CheckpointSummary,
   IncidentSummary,
   RunSummary,
+  emitCar, // Make sure emitCar is imported
 } from "../lib/api";
 
+// FROM: codex/extend-checkpointsummary-to-include-incident
+// These helper functions are needed for displaying incidents.
 function formatIncidentMessage(incident?: IncidentSummary | null): string {
   if (!incident) {
     return "Policy incident reported";
@@ -24,9 +29,11 @@ function formatIncidentMessage(incident?: IncidentSummary | null): string {
   }
 }
 
+// FROM: codex/extend-checkpointsummary-to-include-incident
+// This helper provides styling for different incident severities.
 function incidentSeverityColor(incident?: IncidentSummary | null): string {
   if (!incident) {
-    return "#f48771";
+    return "#f48771"; // default error color
   }
 
   switch (incident.severity) {
@@ -40,16 +47,34 @@ function incidentSeverityColor(incident?: IncidentSummary | null): string {
   }
 }
 
-export default function InspectorPanel({ projectId }: { projectId: string }) {
+// MERGED COMPONENT SIGNATURE
+// It now accepts both `projectId` and `refreshToken`.
+export default function InspectorPanel({
+  projectId,
+  refreshToken,
+}: {
+  projectId: string;
+  refreshToken: number;
+}) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
-  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(
+    null
+  );
   const [checkpoints, setCheckpoints] = React.useState<CheckpointSummary[]>([]);
   const [loadingRuns, setLoadingRuns] = React.useState<boolean>(false);
-  const [loadingCheckpoints, setLoadingCheckpoints] = React.useState<boolean>(false);
+  const [loadingCheckpoints, setLoadingCheckpoints] = React.useState<boolean>(
+    false
+  );
   const [runsError, setRunsError] = React.useState<string | null>(null);
-  const [checkpointError, setCheckpointError] = React.useState<string | null>(null);
+  const [checkpointError, setCheckpointError] = React.useState<string | null>(
+    null
+  );
+  const [emitCarStatus, setEmitCarStatus] = React.useState<string | null>(null);
 
+  // FROM: main
+  // This useEffect hook correctly uses `refreshToken` to refetch runs.
   React.useEffect(() => {
+    if (!projectId) return;
     let cancelled = false;
     setLoadingRuns(true);
     setRunsError(null);
@@ -57,7 +82,10 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
       .then((runList) => {
         if (cancelled) return;
         setRuns(runList);
-        setSelectedRunId(runList.length > 0 ? runList[0].id : null);
+        // Automatically select the first run if none is selected or the selected one disappears
+        if (!selectedRunId || !runList.find((r) => r.id === selectedRunId)) {
+          setSelectedRunId(runList.length > 0 ? runList[0].id : null);
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -75,11 +103,14 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, refreshToken]);
 
+  // FROM: main
+  // This useEffect hook correctly uses `refreshToken` to refetch checkpoints.
   React.useEffect(() => {
     if (!selectedRunId) {
       setCheckpoints([]);
+      setCheckpointError(null);
       return;
     }
 
@@ -95,7 +126,9 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
       .catch((err) => {
         if (!cancelled) {
           console.error("Failed to load checkpoints", err);
-          setCheckpointError("Could not load checkpoints for the selected run.");
+          setCheckpointError(
+            "Could not load checkpoints for the selected run."
+          );
           setCheckpoints([]);
         }
       })
@@ -108,8 +141,22 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedRunId]);
+  }, [selectedRunId, refreshToken]); // refreshToken ensures checkpoints refresh if runs do
 
+  const handleEmitCar = async () => {
+    if (!selectedRunId) return;
+    setEmitCarStatus("Emitting...");
+    try {
+      const path = await emitCar(selectedRunId);
+      setEmitCarStatus(`CAR emitted to: ${path}`);
+    } catch (err) {
+      console.error("Failed to emit CAR", err);
+      setEmitCarStatus(`Error: ${err}`);
+    }
+  };
+  
+  // FROM: codex/extend-checkpointsummary-to-include-incident
+  // This is the rich rendering logic for the table, now including the Emit CAR button.
   return (
     <div>
       <h2>Inspector</h2>
@@ -136,9 +183,17 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
           </select>
         </label>
         {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
-        <button type="button" disabled style={{ alignSelf: "flex-start" }}>
-          Emit CAR (coming soon)
+        
+        <button
+          type="button"
+          onClick={handleEmitCar}
+          disabled={!selectedRunId || !!emitCarStatus?.startsWith("Emitting")}
+          style={{ alignSelf: "flex-start" }}
+        >
+          Emit CAR
         </button>
+        {emitCarStatus && <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{emitCarStatus}</span>}
+
       </div>
 
       {loadingCheckpoints ? (
@@ -198,10 +253,10 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: "4px", fontFamily: "monospace" }}>
+                      <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>
                         {ckpt.inputs_sha256 ?? "—"}
                       </td>
-                      <td style={{ padding: "4px", fontFamily: "monospace" }}>
+                      <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>
                         {ckpt.outputs_sha256 ?? "—"}
                       </td>
                       <td style={{ padding: "4px", textAlign: "right", verticalAlign: "top" }}>
@@ -219,7 +274,6 @@ export default function InspectorPanel({ projectId }: { projectId: string }) {
       ) : (
         <p>Select a run to inspect its checkpoints.</p>
       )}
-
       {checkpointError && <div style={{ color: "#f48771", marginTop: "8px" }}>{checkpointError}</div>}
     </div>
   );

@@ -79,9 +79,11 @@ pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let signature = provenance::sign_bytes(&sk, curr_chain.as_bytes());
 
     let ckpt_id = Uuid::new_v4().to_string();
+    let semantic_digest: Option<String> = None;
+
     conn.execute(
-        "INSERT INTO checkpoints (id, run_id, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO checkpoints (id, run_id, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             &ckpt_id,
             &run_id,
@@ -90,7 +92,7 @@ pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
             now,
             body_json.get("inputs_sha256").and_then(|v| v.as_str()),
             body_json.get("outputs_sha256").and_then(|v| v.as_str()),
-            prev_chain, curr_chain, signature, (usage_tokens as i64)
+            prev_chain, curr_chain, signature, (usage_tokens as i64), semantic_digest
         ]
     )?;
 
@@ -191,9 +193,21 @@ mod tests {
             signature,
             usage_tokens_db,
             incident_json,
-        ): (String, String, Option<String>, Option<String>, String, String, String, i64, Option<String>) = conn
+            semantic_digest,
+        ): (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+        ) = conn
             .query_row(
-                "SELECT kind, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, incident_json FROM checkpoints WHERE run_id = ?1",
+                "SELECT kind, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, incident_json, semantic_digest FROM checkpoints WHERE run_id = ?1",
                 params![&run_id],
                 |row| {
                     Ok((
@@ -206,12 +220,14 @@ mod tests {
                         row.get(6)?,
                         row.get(7)?,
                         row.get(8)?,
+                        row.get(9)?,
                     ))
                 },
             )?;
 
         assert_eq!(kind, "Step");
         assert!(incident_json.is_none());
+        assert!(semantic_digest.is_none());
         assert_eq!(prev_chain, "");
 
         let expected_inputs = provenance::sha256_hex(b"hello");

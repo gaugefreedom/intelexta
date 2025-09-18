@@ -4,6 +4,7 @@ use crate::{
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
+use chrono::Utc;
 use rusqlite::{params, types::Type};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -102,6 +103,7 @@ pub struct CheckpointSummary {
     pub incident: Option<IncidentSummary>,
     pub inputs_sha256: Option<String>,
     pub outputs_sha256: Option<String>,
+    pub semantic_digest: Option<String>,
     pub usage_tokens: u64,
 }
 
@@ -129,10 +131,15 @@ pub(crate) fn list_checkpoints_with_pool(
 ) -> Result<Vec<CheckpointSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, timestamp, kind, incident_json, inputs_sha256, outputs_sha256, usage_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
+        // MERGED QUERY: Includes both `incident_json` and `semantic_digest`.
+        "SELECT id, timestamp, kind, incident_json, inputs_sha256, outputs_sha256, semantic_digest, usage_tokens 
+         FROM checkpoints 
+         WHERE run_id = ?1 
+         ORDER BY timestamp ASC",
     )?;
 
     let rows = stmt.query_map(params![run_id], |row| {
+        // Logic from the 'incident' branch to parse the JSON payload from column 3.
         let incident_json: Option<String> = row.get(3)?;
         let incident = incident_json
             .map(|payload| serde_json::from_str::<IncidentSummary>(&payload))
@@ -141,15 +148,18 @@ pub(crate) fn list_checkpoints_with_pool(
                 rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
             })?;
 
+        // MERGED STRUCT POPULATION: All fields are now present with correct indices.
         Ok(CheckpointSummary {
             id: row.get(0)?,
             timestamp: row.get(1)?,
             kind: row.get(2)?,
-            incident,
+            incident, // From the 'incident' branch
             inputs_sha256: row.get(4)?,
             outputs_sha256: row.get(5)?,
+            semantic_digest: row.get(6)?, // From the 'main' branch
             usage_tokens: {
-                let value: i64 = row.get(6)?;
+                // The column index for usage_tokens is now 7.
+                let value: i64 = row.get(7)?;
                 value.max(0) as u64
             },
         })
