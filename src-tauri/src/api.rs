@@ -202,8 +202,7 @@ pub(crate) fn emit_car_to_base_dir(
             other => Error::from(other),
         })?;
 
-    // NOTE: This is still a placeholder builder until Sprint 1B
-    let car = car::build_car(run_id).map_err(|err| Error::Api(err.to_string()))?;
+    let car = car::build_car(&conn, run_id).map_err(|err| Error::Api(err.to_string()))?;
 
     // **FIX FOR [P1]**: Generate a unique ID for the receipt to prevent DB constraint errors.
     let receipt_id = Uuid::new_v4().to_string();
