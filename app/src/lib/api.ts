@@ -11,7 +11,7 @@ export interface Project {
 export interface RunSummary {
   id: string;
   name: string;
-  created_at: string;
+  createdAt: string;
   kind: string;
 }
 
@@ -20,10 +20,10 @@ export interface CheckpointSummary {
   timestamp: string;
   kind: string;
   incident?: IncidentSummary | null;
-  inputs_sha256?: string | null;
-  outputs_sha256?: string | null;
-  semantic_digest?: string | null;
-  usage_tokens: number;
+  inputsSha256?: string | null;
+  outputsSha256?: string | null;
+  semanticDigest?: string | null;
+  usageTokens: number;
 }
 
 export interface IncidentSummary {
