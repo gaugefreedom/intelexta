@@ -1,6 +1,16 @@
 import React from "react";
 import { startHelloRun } from "../lib/api";
 
+function generateRandomSeed(): number {
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const array = new Uint32Array(1);
+    crypto.getRandomValues(array);
+    return array[0];
+  }
+
+  return Math.floor(Math.random() * 1_000_000_000);
+}
+
 interface EditorPanelProps {
   projectId: string;
   onRunStarted?: (runId: string) => void;
@@ -8,7 +18,7 @@ interface EditorPanelProps {
 
 export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProps) {
   const [name, setName] = React.useState("");
-  const [seed, setSeed] = React.useState("");
+  const [seed, setSeed] = React.useState(() => String(generateRandomSeed()));
   const [dagJson, setDagJson] = React.useState("");
   const [tokenBudget, setTokenBudget] = React.useState("");
   const [formError, setFormError] = React.useState<string | null>(null);
