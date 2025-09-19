@@ -98,10 +98,10 @@ fn probe_system_keyring() -> keyring::Result<()> {
     entry.set_password(secret)?;
     let retrieved = entry.get_password()?;
     if retrieved != secret {
-        let _ = entry.delete_password();
+        let _ = entry.delete_credential();
         return Err(keyring::Error::NoEntry);
     }
-    match entry.delete_password() {
+    match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(err) => Err(err),
     }
