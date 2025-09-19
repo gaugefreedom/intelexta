@@ -32,6 +32,12 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   React.useEffect(() => {
+    if (model !== "stub-model" && proofMode !== "concordant") {
+      setProofMode("concordant");
+    }
+  }, [model, proofMode]);
+
+  React.useEffect(() => {
     let cancelled = false;
     setModelsLoading(true);
     setModelsError(null);
@@ -159,6 +165,8 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
     }
   };
 
+  const exactModeDisabled = model !== "stub-model";
+
   return (
     <div>
       <h2>Editor</h2>
@@ -234,6 +242,7 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
               value="exact"
               checked={proofMode === "exact"}
               onChange={() => setProofMode("exact")}
+              disabled={exactModeDisabled}
             />
             Exact
           </label>
