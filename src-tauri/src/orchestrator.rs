@@ -28,6 +28,29 @@ struct CheckpointBody<'a> {
     completion_tokens: u64,
 }
 
+#[derive(Clone, Copy)]
+struct CheckpointMessageInput<'a> {
+    role: &'a str,
+    body: &'a str,
+}
+
+struct CheckpointInsert<'a> {
+    run_id: &'a str,
+    parent_checkpoint_id: Option<&'a str>,
+    turn_index: Option<u32>,
+    kind: &'a str,
+    timestamp: &'a str,
+    incident: Option<&'a serde_json::Value>,
+    inputs_sha256: Option<&'a str>,
+    outputs_sha256: Option<&'a str>,
+    prev_chain: &'a str,
+    usage_tokens: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    semantic_digest: Option<&'a str>,
+    message: Option<CheckpointMessageInput<'a>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunProofMode {
@@ -342,6 +365,67 @@ pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     start_hello_run_with_client(pool, spec, &client)
 }
 
+fn persist_checkpoint(
+    conn: &Connection,
+    signing_key: &SigningKey,
+    params: &CheckpointInsert<'_>,
+) -> anyhow::Result<String> {
+    let checkpoint_body = CheckpointBody {
+        run_id: params.run_id,
+        kind: params.kind,
+        timestamp: params.timestamp.to_string(),
+        inputs_sha256: params.inputs_sha256,
+        outputs_sha256: params.outputs_sha256,
+        incident: params.incident,
+        usage_tokens: params.usage_tokens,
+        prompt_tokens: params.prompt_tokens,
+        completion_tokens: params.completion_tokens,
+    };
+
+    let body_json = serde_json::to_value(&checkpoint_body)?;
+    let canonical = provenance::canonical_json(&body_json);
+    let curr_chain = provenance::sha256_hex(&[params.prev_chain.as_bytes(), &canonical].concat());
+    let signature = provenance::sign_bytes(signing_key, curr_chain.as_bytes());
+    let checkpoint_id = Uuid::new_v4().to_string();
+    let incident_json = params.incident.map(|value| value.to_string());
+
+    conn.execute(
+        "INSERT INTO checkpoints (id, run_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        params![
+            &checkpoint_id,
+            params.run_id,
+            params.parent_checkpoint_id,
+            params.turn_index.map(|value| value as i64),
+            params.kind,
+            incident_json.as_deref(),
+            params.timestamp,
+            params.inputs_sha256,
+            params.outputs_sha256,
+            params.prev_chain,
+            curr_chain,
+            signature,
+            (params.usage_tokens as i64),
+            params.semantic_digest,
+            (params.prompt_tokens as i64),
+            (params.completion_tokens as i64),
+        ],
+    )?;
+
+    if let Some(message) = params.message {
+        conn.execute(
+            "INSERT INTO checkpoint_messages (checkpoint_id, role, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![
+                &checkpoint_id,
+                message.role,
+                message.body,
+                params.timestamp,
+            ],
+        )?;
+    }
+
+    Ok(checkpoint_id)
+}
+
 pub(crate) fn start_hello_run_with_client(
     pool: &DbPool,
     spec: RunSpec,
@@ -389,24 +473,6 @@ pub(crate) fn start_hello_run_with_client(
         }
     };
 
-    let checkpoint_body = CheckpointBody {
-        run_id: &run_id,
-        kind,
-        timestamp: now.clone(),
-        inputs_sha256: inputs_sha,
-        outputs_sha256: outputs_sha,
-        incident: incident_value.as_ref(),
-        usage_tokens: total_usage,
-        prompt_tokens,
-        completion_tokens,
-    };
-
-    let body_json = serde_json::to_value(&checkpoint_body)?;
-    let canon = provenance::canonical_json(&body_json);
-    let curr_chain = provenance::sha256_hex(&[prev_chain.as_bytes(), &canon].concat());
-    let signature = provenance::sign_bytes(&signing_key, curr_chain.as_bytes());
-
-    let ckpt_id = Uuid::new_v4().to_string();
     let semantic_digest = if spec.proof_mode.is_concordant() {
         Some(
             execution
@@ -417,28 +483,24 @@ pub(crate) fn start_hello_run_with_client(
     } else {
         None
     };
-    let incident_json_str = incident_value.map(|v| v.to_string());
+    let checkpoint_insert = CheckpointInsert {
+        run_id: &run_id,
+        parent_checkpoint_id: None,
+        turn_index: None,
+        kind,
+        timestamp: &now,
+        incident: incident_value.as_ref(),
+        inputs_sha256: inputs_sha,
+        outputs_sha256: outputs_sha,
+        prev_chain,
+        usage_tokens: total_usage,
+        prompt_tokens,
+        completion_tokens,
+        semantic_digest: semantic_digest.as_deref(),
+        message: None,
+    };
 
-    conn.execute(
-        "INSERT INTO checkpoints (id, run_id, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
-        params![
-            &ckpt_id,
-            &run_id,
-            kind,
-            incident_json_str,
-            now,
-            inputs_sha,
-            outputs_sha,
-            prev_chain,
-            curr_chain,
-            signature,
-            (total_usage as i64),
-            semantic_digest,
-            (prompt_tokens as i64),
-            (completion_tokens as i64),
-        ],
-    )?;
+    persist_checkpoint(&conn, &signing_key, &checkpoint_insert)?;
 
     Ok(run_id)
 }

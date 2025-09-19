@@ -28,6 +28,9 @@ export interface CheckpointSummary {
   usageTokens: number;
   promptTokens: number;
   completionTokens: number;
+  parentCheckpointId?: string | null;
+  turnIndex?: number | null;
+  message?: CheckpointMessage | null;
 }
 
 export interface IncidentSummary {
@@ -35,6 +38,13 @@ export interface IncidentSummary {
   severity: string;
   details: string;
   relatedCheckpointId?: string | null;
+}
+
+export interface CheckpointMessage {
+  role: string;
+  body: string;
+  createdAt: string;
+  updatedAt?: string | null;
 }
 
 export interface ReplayReport {

@@ -54,6 +54,31 @@ function proofBadgeFor(kind: string): { label: string; color: string; title: str
   }
 }
 
+function messageRoleBadge(role: string): { label: string; color: string } {
+  const normalized = role.trim().toLowerCase();
+  switch (normalized) {
+    case "human":
+    case "user":
+      return { label: "Human", color: "#9cdcfe" };
+    case "assistant":
+    case "ai":
+    case "model":
+      return { label: "AI", color: "#c586c0" };
+    default:
+      return { label: role.toUpperCase(), color: "#dcdcaa" };
+  }
+}
+
+function abbreviateId(value?: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  if (value.length <= 8) {
+    return value;
+  }
+  return `${value.slice(0, 8)}…`;
+}
+
 export default function InspectorPanel({
   projectId,
   refreshToken,
@@ -342,7 +367,9 @@ export default function InspectorPanel({
               <thead>
                 <tr style={{ borderBottom: "1px solid #333" }}>
                   <th style={{ textAlign: "left", padding: "4px" }}>Timestamp</th>
+                  <th style={{ textAlign: "left", padding: "4px" }}>Turn</th>
                   <th style={{ textAlign: "left", padding: "4px" }}>Kind</th>
+                  <th style={{ textAlign: "left", padding: "4px" }}>Message</th>
                   <th style={{ textAlign: "left", padding: "4px" }}>Inputs SHA</th>
                   <th style={{ textAlign: "left", padding: "4px" }}>Outputs SHA</th>
                   <th style={{ textAlign: "right", padding: "4px" }}>Usage</th>
@@ -351,8 +378,15 @@ export default function InspectorPanel({
               <tbody>
                 {checkpoints.map((ckpt) => {
                   const isIncident = ckpt.kind === "Incident";
-                  const message = isIncident ? formatIncidentMessage(ckpt.incident) : null;
+                  const incidentMessage = isIncident
+                    ? formatIncidentMessage(ckpt.incident)
+                    : null;
                   const severityColor = incidentSeverityColor(ckpt.incident);
+                  const turnLabel = ckpt.turnIndex ?? null;
+                  const parentLabel = abbreviateId(ckpt.parentCheckpointId);
+                  const messageBadge = ckpt.message
+                    ? messageRoleBadge(ckpt.message.role)
+                    : null;
                   return (
                     <tr
                       key={ckpt.id}
@@ -364,11 +398,50 @@ export default function InspectorPanel({
                       <td style={{ padding: "4px", verticalAlign: "top" }}>
                         {new Date(ckpt.timestamp).toLocaleString()}
                       </td>
+                      <td style={{ padding: "4px", verticalAlign: "top" }}>
+                        {turnLabel !== null ? (
+                          <div style={{ fontWeight: 600 }}>{turnLabel}</div>
+                        ) : (
+                          "—"
+                        )}
+                        {parentLabel && (
+                          <div
+                            style={{
+                              marginTop: "4px",
+                              fontSize: "0.7rem",
+                              color: "#a6a6a6",
+                              fontFamily: "monospace",
+                            }}
+                          >
+                            Parent · {parentLabel}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: "4px" }}>
                         <div style={{ fontWeight: 600 }}>{ckpt.kind}</div>
-                        {isIncident && (
-                          <div style={{ marginTop: "4px", display: "flex", flexDirection: "column", gap: "4px" }}>
-                            {ckpt.incident?.severity && (
+                        {isIncident && ckpt.incident?.severity && (
+                          <span
+                            style={{
+                              display: "inline-block",
+                              marginTop: "4px",
+                              fontSize: "0.7rem",
+                              letterSpacing: "0.08em",
+                              fontWeight: 700,
+                              padding: "2px 6px",
+                              borderRadius: "999px",
+                              border: `1px solid ${severityColor}`,
+                              color: severityColor,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {ckpt.incident.severity.toUpperCase()}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: "4px", verticalAlign: "top" }}>
+                        {ckpt.message ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                            {messageBadge && (
                               <span
                                 style={{
                                   alignSelf: "flex-start",
@@ -377,16 +450,30 @@ export default function InspectorPanel({
                                   fontWeight: 700,
                                   padding: "2px 6px",
                                   borderRadius: "999px",
-                                  border: `1px solid ${severityColor}`,
-                                  color: severityColor,
+                                  border: `1px solid ${messageBadge.color}`,
+                                  color: messageBadge.color,
                                   textTransform: "uppercase",
                                 }}
                               >
-                                {ckpt.incident.severity.toUpperCase()}
+                                {messageBadge.label}
                               </span>
                             )}
-                            <span style={{ fontWeight: 700, color: severityColor }}>{message}</span>
+                            <div
+                              style={{
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-word",
+                                lineHeight: 1.4,
+                              }}
+                            >
+                              {ckpt.message.body}
+                            </div>
                           </div>
+                        ) : isIncident ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                            <div style={{ fontWeight: 700, color: severityColor }}>{incidentMessage}</div>
+                          </div>
+                        ) : (
+                          <span>—</span>
                         )}
                       </td>
                       <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>

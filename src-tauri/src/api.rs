@@ -123,6 +123,9 @@ pub struct CheckpointSummary {
     pub usage_tokens: u64,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub parent_checkpoint_id: Option<String>,
+    pub turn_index: Option<u32>,
+    pub message: Option<CheckpointMessageSummary>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,6 +136,15 @@ pub struct IncidentSummary {
     pub details: String,
     #[serde(alias = "related_checkpoint_id")]
     pub related_checkpoint_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointMessageSummary {
+    pub role: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: Option<String>,
 }
 
 #[tauri::command]
@@ -149,7 +161,11 @@ pub(crate) fn list_checkpoints_with_pool(
 ) -> Result<Vec<CheckpointSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, timestamp, kind, incident_json, inputs_sha256, outputs_sha256, semantic_digest, usage_tokens, prompt_tokens, completion_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
+        "SELECT c.id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, m.role, m.body, m.created_at, m.updated_at
+         FROM checkpoints c
+         LEFT JOIN checkpoint_messages m ON m.checkpoint_id = c.id
+         WHERE c.run_id = ?1
+         ORDER BY c.timestamp ASC",
     )?;
     let rows = stmt.query_map(params![run_id], |row| {
         let incident_json: Option<String> = row.get(3)?;
@@ -159,6 +175,23 @@ pub(crate) fn list_checkpoints_with_pool(
             .map_err(|err| {
                 rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
             })?;
+        let parent_checkpoint_id: Option<String> = row.get(10)?;
+        let turn_index = row
+            .get::<_, Option<i64>>(11)?
+            .map(|value| value.max(0) as u32);
+        let message_role: Option<String> = row.get(12)?;
+        let message_body: Option<String> = row.get(13)?;
+        let message_created_at: Option<String> = row.get(14)?;
+        let message_updated_at: Option<String> = row.get(15)?;
+        let message = match (message_role, message_body, message_created_at) {
+            (Some(role), Some(body), Some(created_at)) => Some(CheckpointMessageSummary {
+                role,
+                body,
+                created_at,
+                updated_at: message_updated_at,
+            }),
+            _ => None,
+        };
         Ok(CheckpointSummary {
             id: row.get(0)?,
             timestamp: row.get(1)?,
@@ -179,6 +212,9 @@ pub(crate) fn list_checkpoints_with_pool(
                 let value: i64 = row.get(9)?;
                 value.max(0) as u64
             },
+            parent_checkpoint_id,
+            turn_index,
+            message,
         })
     })?;
     let mut checkpoints = Vec::new();

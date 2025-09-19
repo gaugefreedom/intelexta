@@ -119,6 +119,65 @@ fn list_checkpoints_includes_incident_payload() -> Result<()> {
     assert_eq!(incident.kind, "budget_exceeded");
     assert_eq!(incident.severity, "error");
     assert_eq!(incident.details, "usage=10 > budget=5");
+    assert!(incident_ckpt.parent_checkpoint_id.is_none());
+    assert!(incident_ckpt.turn_index.is_none());
+    assert!(incident_ckpt.message.is_none());
+    Ok(())
+}
+
+#[test]
+fn list_checkpoints_includes_message_payload() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Message".into(), &pool)?;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "message-run".into(),
+            seed: 3,
+            dag_json: "{}".into(),
+            token_budget: 50,
+            model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
+        },
+    )?;
+
+    let checkpoint_id: String = {
+        let conn = pool.get()?;
+        conn.query_row(
+            "SELECT id FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?
+    };
+
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "UPDATE checkpoints SET turn_index = 0, parent_checkpoint_id = ?2 WHERE id = ?1",
+            params![&checkpoint_id, &checkpoint_id],
+        )?;
+        conn.execute(
+            "INSERT INTO checkpoint_messages (checkpoint_id, role, body, created_at, updated_at) VALUES (?1, 'human', 'Hello, agent.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            params![&checkpoint_id],
+        )?;
+    }
+
+    let checkpoints = api::list_checkpoints_with_pool(run_id, &pool)?;
+    assert_eq!(checkpoints.len(), 1);
+    let checkpoint = &checkpoints[0];
+    assert_eq!(checkpoint.turn_index, Some(0));
+    assert_eq!(
+        checkpoint.parent_checkpoint_id.as_deref(),
+        Some(checkpoint.id.as_str())
+    );
+    let message = checkpoint.message.as_ref().expect("stored message");
+    assert_eq!(message.role, "human");
+    assert_eq!(message.body, "Hello, agent.");
+    assert!(!message.created_at.is_empty());
     Ok(())
 }
 

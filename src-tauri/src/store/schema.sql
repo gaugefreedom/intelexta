@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id)
 );
 
+CREATE TABLE IF NOT EXISTS checkpoint_messages (
+    checkpoint_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS receipts (
     id TEXT PRIMARY KEY, -- The CAR ID (sha256 of canonical body)
     run_id TEXT NOT NULL,
