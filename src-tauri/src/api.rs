@@ -213,8 +213,12 @@ pub(crate) fn replay_run_with_pool(
         .optional()?;
 
     let report = match kind_opt.as_deref() {
+        Some("exact") => replay::replay_exact_run(run_id.clone(), pool),
         Some("concordant") => replay::replay_concordant_run(run_id.clone(), pool),
-        Some(_) => replay::replay_exact_run(run_id.clone(), pool),
+        Some(other) => Err(anyhow::anyhow!(
+            "Replay not implemented for run kind: '{}'",
+            other
+        )),
         None => Ok(replay::ReplayReport {
             run_id: run_id.clone(),
             match_status: false,
