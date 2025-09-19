@@ -8,6 +8,8 @@ import {
   IncidentSummary,
   RunSummary,
   emitCar,
+  replayRun,
+  ReplayReport,
 } from "../lib/api";
 
 function formatIncidentMessage(incident?: IncidentSummary | null): string {
@@ -60,6 +62,9 @@ export default function InspectorPanel({
   const [emittingCar, setEmittingCar] = React.useState<boolean>(false);
   const [emitSuccess, setEmitSuccess] = React.useState<string | null>(null);
   const [emitError, setEmitError] = React.useState<string | null>(null);
+  const [replayingRun, setReplayingRun] = React.useState<boolean>(false);
+  const [replayReport, setReplayReport] = React.useState<ReplayReport | null>(null);
+  const [replayError, setReplayError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!projectId) return;
@@ -127,6 +132,8 @@ export default function InspectorPanel({
   React.useEffect(() => {
     setEmitSuccess(null);
     setEmitError(null);
+    setReplayReport(null);
+    setReplayError(null);
   }, [selectedRunId]);
 
   const handleEmitCar = React.useCallback(() => {
@@ -136,9 +143,11 @@ export default function InspectorPanel({
     setEmittingCar(true);
     setEmitSuccess(null);
     setEmitError(null);
+    setReplayReport(null);
+    setReplayError(null);
     emitCar(selectedRunId)
       .then((path) => {
-        setEmitSuccess(`Receipt saved to ${path}`);
+        setEmitSuccess(`CAR file saved to ${path}`);
       })
       .catch((err) => {
         console.error("Failed to emit CAR", err);
@@ -149,6 +158,48 @@ export default function InspectorPanel({
         setEmittingCar(false);
       });
   }, [selectedRunId]);
+
+  const handleReplayRun = React.useCallback(() => {
+    if (!selectedRunId) {
+      return;
+    }
+    setReplayingRun(true);
+    setReplayError(null);
+    setReplayReport(null);
+    replayRun(selectedRunId)
+      .then((report) => {
+        setReplayReport(report);
+      })
+      .catch((err) => {
+        console.error("Failed to replay run", err);
+        const message = err instanceof Error ? err.message : String(err);
+        setReplayError(`Failed to replay run: ${message}`);
+      })
+      .finally(() => {
+        setReplayingRun(false);
+      });
+  }, [selectedRunId]);
+
+  const actionDisabled = !selectedRunId || emittingCar || replayingRun;
+
+  const replayFeedback = React.useMemo(() => {
+    if (!replayReport) {
+      return null;
+    }
+    const expectedDigest = replayReport.originalDigest || "∅";
+    const replayedDigest = replayReport.replayDigest || "∅";
+    if (replayReport.matchStatus) {
+      return {
+        tone: "success" as const,
+        message: `Success: digests match (${replayedDigest})`,
+      };
+    }
+    const details = replayReport.errorMessage ?? "digests differ";
+    return {
+      tone: "error" as const,
+      message: `Mismatch: ${details} (expected ${expectedDigest}, replayed ${replayedDigest})`,
+    };
+  }, [replayReport]);
 
   return (
     <div>
@@ -177,18 +228,41 @@ export default function InspectorPanel({
         {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
         
         {/* MERGED JSX: Using the more detailed button and feedback from the `emit_car` branch. */}
-        <button
-          type="button"
-          onClick={handleEmitCar}
-          disabled={!selectedRunId || emittingCar}
-          style={{ alignSelf: "flex-start" }}
-        >
-          {emittingCar ? "Emitting…" : "Emit CAR"}
-        </button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            type="button"
+            onClick={handleEmitCar}
+            disabled={actionDisabled}
+            style={{ alignSelf: "flex-start" }}
+          >
+            {emittingCar ? "Emitting…" : "Emit CAR"}
+          </button>
+          <button
+            type="button"
+            onClick={handleReplayRun}
+            disabled={actionDisabled}
+            style={{ alignSelf: "flex-start" }}
+          >
+            {replayingRun ? "Replaying…" : "Replay Run"}
+          </button>
+        </div>
         {emitSuccess && (
-          <span style={{ fontSize: '0.8rem', color: "#a5d6a7" }}>{emitSuccess}</span>
+          <span style={{ fontSize: "0.8rem", color: "#a5d6a7" }}>{emitSuccess}</span>
         )}
-        {emitError && <span style={{ fontSize: '0.8rem', color: "#f48771" }}>{emitError}</span>}
+        {emitError && <span style={{ fontSize: "0.8rem", color: "#f48771" }}>{emitError}</span>}
+        {replayFeedback && (
+          <span
+            style={{
+              fontSize: "0.8rem",
+              color: replayFeedback.tone === "success" ? "#a5d6a7" : "#f48771",
+            }}
+          >
+            {replayFeedback.message}
+          </span>
+        )}
+        {replayError && (
+          <span style={{ fontSize: "0.8rem", color: "#f48771" }}>{replayError}</span>
+        )}
       </div>
 
       {loadingCheckpoints ? (
