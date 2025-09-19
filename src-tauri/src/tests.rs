@@ -443,22 +443,43 @@ fn emit_car_command_writes_receipt_and_file() -> Result<()> {
     let emitted_path = api::emit_car_to_base_dir(&run_id, &pool, &base_dir)?;
     assert!(emitted_path.exists(), "CAR file should exist on disk");
 
+    let persisted_car: car::Car = serde_json::from_str(&std::fs::read_to_string(&emitted_path)?)?;
+    let expected_filename = format!("{}.car.json", persisted_car.id);
+    let actual_filename = emitted_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("CAR filename");
+    assert_eq!(actual_filename, expected_filename);
+
     let conn = pool.get()?;
-    let (receipt_id, file_path_db, match_kind, epsilon): (
+    let (receipt_id, file_path_db, match_kind, epsilon, s_grade): (
         String,
         String,
         Option<String>,
         Option<f64>,
+        i64,
     ) = conn.query_row(
-        "SELECT id, file_path, match_kind, epsilon FROM receipts WHERE run_id = ?1",
+        "SELECT id, file_path, match_kind, epsilon, s_grade FROM receipts WHERE run_id = ?1",
         params![&run_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
     )?;
 
-    assert!(!receipt_id.is_empty());
+    assert_eq!(receipt_id, persisted_car.id);
     assert_eq!(file_path_db, emitted_path.to_string_lossy().to_string());
-    assert_eq!(match_kind.as_deref(), Some("pending"));
-    assert!(epsilon.is_none());
+    assert_eq!(
+        match_kind.as_deref(),
+        Some(persisted_car.proof.match_kind.as_str())
+    );
+    assert_eq!(epsilon, persisted_car.proof.epsilon);
+    assert_eq!(s_grade, i64::from(persisted_car.sgrade.score));
 
     Ok(())
 }

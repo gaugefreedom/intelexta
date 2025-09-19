@@ -4,7 +4,6 @@ use crate::{
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
-use chrono::Utc;
 use rusqlite::{params, types::Type};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -204,32 +203,29 @@ pub(crate) fn emit_car_to_base_dir(
 
     let car = car::build_car(&conn, run_id).map_err(|err| Error::Api(err.to_string()))?;
 
-    // **FIX FOR [P1]**: Generate a unique ID for the receipt to prevent DB constraint errors.
-    let receipt_id = Uuid::new_v4().to_string();
-
     let receipts_dir = base_dir.join(&project_id).join("receipts");
     std::fs::create_dir_all(&receipts_dir)
         .map_err(|err| Error::Api(format!("failed to create receipts dir: {err}")))?;
 
-    let file_path = receipts_dir.join(format!("{receipt_id}.car.json"));
+    let file_path = receipts_dir.join(format!("{}.car.json", car.id));
     let json = serde_json::to_string_pretty(&car)
         .map_err(|err| Error::Api(format!("failed to serialize CAR: {err}")))?;
     std::fs::write(&file_path, json)
         .map_err(|err| Error::Api(format!("failed to write CAR file: {err}")))?;
 
-    let created_at = Utc::now().to_rfc3339();
+    let created_at = car.created_at.to_rfc3339();
     let file_path_str = file_path.to_string_lossy().to_string();
 
     conn.execute(
         "INSERT INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
-            &receipt_id, // Use the unique ID here
+            &car.id,
             run_id,
             &created_at,
             &file_path_str,
-            "pending", // Placeholder
-            0.0,       // Placeholder
-            car.sgrade.score as i64,
+            &car.proof.match_kind,
+            car.proof.epsilon,
+            i64::from(car.sgrade.score),
         ],
     )?;
 
