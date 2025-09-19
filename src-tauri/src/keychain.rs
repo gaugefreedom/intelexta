@@ -6,7 +6,7 @@ use std::sync::{
     Arc, Mutex, Once,
 };
 
-use keyring::credential::{CredentialApi, CredentialBuilderApi, CredentialPersistence};
+use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, CredentialPersistence};
 use keyring::Error as KeyringError;
 
 /// Shared service name used for all keychain entries written by the app.
@@ -34,6 +34,11 @@ struct InMemoryCredential {
 }
 
 /// Ensure that the keyring backend is usable.
+///
+/// On systems where the OS keychain is unavailable (for example, because
+/// the secret-service D-Bus daemon is not running), this falls back to an
+/// in-memory credential store so that development can continue.
+///
 pub fn ensure_available() {
     if using_in_memory_fallback() {
         return;
@@ -46,10 +51,12 @@ pub fn ensure_available() {
 
     KEYCHAIN_INITIALIZED.call_once(|| {
         if let Err(err) = probe_system_keyring() {
-            eprintln!(
-                "[intelexta] Falling back to in-memory keyring because the system keychain is unavailable: {}",
-                err
-            );
+            eprintln!([
+                "[intelexta] Falling back to in-memory keyring because the",
+                "system keychain is unavailable:",
+                &err.to_string(),
+            ]
+            .join(" "));
             install_in_memory_keyring();
         }
     });
@@ -104,9 +111,7 @@ impl CredentialBuilderApi for InMemoryCredentialBuilder {
         target: Option<&str>,
         service: &str,
         user: &str,
-    // --- FIX IS HERE ---
-    // The trait requires the returned object to be thread-safe (`Send + Sync`).
-    ) -> keyring::Result<Box<dyn CredentialApi + Send + Sync>> {
+    ) -> keyring::Result<Box<Credential>> {
         let key = EntryKey {
             target: target.map(|value| value.to_string()),
             service: service.to_string(),

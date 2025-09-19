@@ -1,11 +1,12 @@
 // In src-tauri/src/provenance.rs
-use anyhow::anyhow;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
-use serde::Serialize; // <-- Add this import
+use serde::Serialize;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use anyhow::anyhow; // <-- Add this import
 
-use crate::keychain::KEYCHAIN_SERVICE_NAME;
+// Use a constant for the service name to prevent typos.
+const KEYCHAIN_SERVICE_NAME: &str = "intelexta";
 
 pub struct KeypairOut {
     pub public_key_b64: String,
@@ -29,7 +30,7 @@ pub fn store_secret_key(project_id: &str, secret_key_b64: &str) -> anyhow::Resul
 
 pub fn load_secret_key(project_id: &str) -> anyhow::Result<SigningKey> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id)?;
-
+    
     // --- FIX STARTS HERE ---
     // Handle errors explicitly to resolve the compiler ambiguity and ensure
     // the `NoEntry` error is propagated correctly for the repair logic.
@@ -76,10 +77,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
 mod tests {
     use super::*;
     #[derive(Serialize)]
-    struct S {
-        b: u8,
-        a: u8,
-    }
+    struct S { b: u8, a: u8 }
 
     #[test]
     fn canon_same_struct_same_bytes() {

@@ -29,7 +29,7 @@ pub struct RunSpec {
 
 pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let conn = pool.get()?;
-
+    
     let signing_key = match provenance::load_secret_key(&spec.project_id) {
         Ok(sk) => Ok(sk),
         Err(err) => {
@@ -131,10 +131,11 @@ pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{keychain, provenance, store};
+    use crate::{provenance, store};
     use anyhow::{anyhow, Result};
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
+    use keyring::{mock, set_default_credential_builder};
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
     use rusqlite::{params, types::Type};
@@ -142,7 +143,7 @@ mod tests {
 
     #[test]
     fn start_hello_run_persists_run_and_checkpoint() -> Result<()> {
-        keychain::force_in_memory_keyring();
+        set_default_credential_builder(mock::default_credential_builder());
 
         let manager = SqliteConnectionManager::memory();
         let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
@@ -292,7 +293,7 @@ mod tests {
 
     #[test]
     fn start_hello_run_repairs_missing_secret() -> Result<()> {
-        keychain::force_in_memory_keyring();
+        set_default_credential_builder(mock::default_credential_builder());
 
         let manager = SqliteConnectionManager::memory();
         let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;

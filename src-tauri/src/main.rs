@@ -6,12 +6,11 @@
 
 use tauri::Manager;
 // Use our new lib.rs as the entry point for all modules
-use intelexta::{api, keychain, store};
+use intelexta::{api, store};
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            keychain::ensure_available();
             let app_data_dir = app
                 .path()
                 .app_local_data_dir()
