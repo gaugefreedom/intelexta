@@ -1,6 +1,6 @@
 // In src-tauri/src/replay.rs
 use crate::{
-    orchestrator::{RunProofMode, RunSpec},
+    orchestrator::{self, RunProofMode, RunSpec},
     provenance, DbPool,
 };
 use anyhow::{anyhow, Result};
@@ -141,25 +141,19 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
         .epsilon
         .ok_or_else(|| anyhow!("concordant run missing epsilon"))?;
 
-    if spec.model != "stub-model" {
-        return Ok(ReplayReport {
-            run_id,
-            match_status: false,
-            original_digest: String::new(),
-            replay_digest: String::new(),
-            error_message: Some("semantic replay not implemented for model".to_string()),
-            semantic_original_digest: None,
-            semantic_replay_digest: None,
-            semantic_distance: None,
-            epsilon: Some(epsilon),
-        });
-    }
-
-    let mut replay_bytes = b"hello".to_vec();
-    replay_bytes.extend_from_slice(&spec.seed.to_le_bytes());
-    let replay_digest = provenance::sha256_hex(&replay_bytes);
-    let semantic_source = hex::encode(&replay_bytes);
-    let replay_semantic_digest = provenance::semantic_digest(&semantic_source);
+    let (replay_digest, replay_semantic_digest) = if spec.model == "stub-model" {
+        let mut replay_bytes = b"hello".to_vec();
+        replay_bytes.extend_from_slice(&spec.seed.to_le_bytes());
+        let replay_digest = provenance::sha256_hex(&replay_bytes);
+        let semantic_source = hex::encode(&replay_bytes);
+        let replay_semantic_digest = provenance::semantic_digest(&semantic_source);
+        (replay_digest, replay_semantic_digest)
+    } else {
+        let replay_generation = orchestrator::replay_llm_generation(&spec)?;
+        let replay_digest = provenance::sha256_hex(replay_generation.response.as_bytes());
+        let replay_semantic_digest = provenance::semantic_digest(&replay_generation.response);
+        (replay_digest, replay_semantic_digest)
+    };
 
     let (original_digest_opt, semantic_digest_opt): (Option<String>, Option<String>) = conn
         .query_row(

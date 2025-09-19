@@ -110,6 +110,11 @@ impl LlmClient for DefaultOllamaClient {
     }
 }
 
+pub fn replay_llm_generation(spec: &RunSpec) -> anyhow::Result<LlmGeneration> {
+    let client = DefaultOllamaClient::new();
+    client.stream_generate(&spec.model, &spec.dag_json)
+}
+
 #[derive(Debug, Deserialize)]
 struct OllamaTagsResponse {
     models: Vec<OllamaModelEntry>,
