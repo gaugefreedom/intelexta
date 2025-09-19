@@ -210,14 +210,15 @@ export default function InspectorPanel({
       typeof replayReport.epsilon === "number" &&
       typeof replayReport.semanticDistance === "number"
     ) {
-      const distance = replayReport.semanticDistance;
+      const rawDistance = replayReport.semanticDistance;
+      const normalizedDistance = rawDistance / 64;
       const epsilon = replayReport.epsilon;
-      const comparison = distance <= epsilon ? "≤" : ">";
+      const comparison = normalizedDistance <= epsilon ? "<=" : ">";
       const statusLabel = replayReport.matchStatus ? "PASS" : "FAIL";
       const tone = replayReport.matchStatus ? "success" : "error";
-      const distanceDisplay = distance.toFixed(2);
+      const distanceDisplay = normalizedDistance.toFixed(2);
       const epsilonDisplay = epsilon.toFixed(2);
-      const messageBase = `Concordant Proof: ${statusLabel} (Distance: ${distanceDisplay} ${comparison} ε: ${epsilonDisplay})`;
+      const messageBase = `Concordant Proof: ${statusLabel} (Normalized Distance: ${distanceDisplay} ${comparison} ε: ${epsilonDisplay})`;
       const suffix =
         !replayReport.matchStatus && replayReport.errorMessage
           ? ` — ${replayReport.errorMessage}`
