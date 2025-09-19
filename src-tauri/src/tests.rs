@@ -21,9 +21,9 @@ fn setup_pool() -> Result<DbPool> {
     let manager = SqliteConnectionManager::memory();
     let pool = r2d2::Pool::builder().max_size(1).build(manager)?;
     {
-        let conn = pool.get()?;
+        let mut conn = pool.get()?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        store::migrate_db(&conn)?;
+        store::migrate_db(&mut conn)?;
         let latest_version = store::migrations::latest_version();
         let recorded: Option<i64> =
             conn.query_row("SELECT MAX(version) FROM migrations", [], |row| row.get(0))?;
@@ -35,8 +35,12 @@ fn setup_pool() -> Result<DbPool> {
 fn init_keyring_mock() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        keychain::force_in_memory_keyring();
+        let base_dir =
+            std::env::temp_dir().join(format!("intelexta-keychain-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&base_dir).expect("create keychain test dir");
+        std::env::set_var("INTELEXTA_KEYCHAIN_DIR", &base_dir);
     });
+    keychain::force_fallback_for_tests();
 }
 
 #[test]
