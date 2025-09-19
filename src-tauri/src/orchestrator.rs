@@ -1,8 +1,12 @@
 // src-tauri/src/orchestrator.rs
 use crate::{governance, provenance, DbPool};
+use anyhow::{anyhow, Context};
 use chrono::Utc;
-use rusqlite::params;
+use ed25519_dalek::SigningKey;
+use keyring::Error as KeyringError;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::io::ErrorKind;
 use uuid::Uuid;
 
 #[derive(Serialize)]
@@ -28,7 +32,7 @@ pub struct RunSpec {
 pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let conn = pool.get()?;
 
-    let signing_key = provenance::load_secret_key(&spec.project_id)?;
+    let signing_key = ensure_project_signing_key(&conn, &spec.project_id)?;
     let run_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let spec_json = serde_json::to_string(&spec)?;
@@ -100,6 +104,57 @@ pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     Ok(run_id)
 }
 
+fn ensure_project_signing_key(conn: &Connection, project_id: &str) -> anyhow::Result<SigningKey> {
+    match provenance::load_secret_key(project_id) {
+        Ok(signing_key) => Ok(signing_key),
+        Err(err) => {
+            let missing_in_keyring = err
+                .downcast_ref::<KeyringError>()
+                .map(|inner| matches!(inner, KeyringError::NoEntry))
+                .unwrap_or(false);
+
+            let missing_on_disk = err
+                .downcast_ref::<std::io::Error>()
+                .map(|io_err| io_err.kind() == ErrorKind::NotFound)
+                .unwrap_or(false);
+
+            if missing_in_keyring || missing_on_disk {
+                println!(
+                    "[intelexta] WARNING: Secret for project {} missing; generating a new key pair.",
+                    project_id
+                );
+                regenerate_project_signing_key(conn, project_id)
+                    .context("failed to regenerate missing project secret")
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+fn regenerate_project_signing_key(
+    conn: &Connection,
+    project_id: &str,
+) -> anyhow::Result<SigningKey> {
+    let keypair = provenance::generate_keypair();
+
+    provenance::store_secret_key(project_id, &keypair.secret_key_b64)
+        .context("failed to persist regenerated project secret")?;
+
+    let updated = conn.execute(
+        "UPDATE projects SET pubkey = ?1 WHERE id = ?2",
+        params![keypair.public_key_b64, project_id],
+    )?;
+
+    if updated == 0 {
+        return Err(anyhow!(
+            "project {project_id} not found while regenerating secret"
+        ));
+    }
+
+    provenance::load_secret_key(project_id).context("failed to load regenerated project secret")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +166,7 @@ mod tests {
     use r2d2_sqlite::SqliteConnectionManager;
     use rusqlite::params;
     use std::convert::{TryFrom, TryInto};
+    use std::path::PathBuf;
     use std::sync::Once;
 
     fn init_keychain_backend() {
@@ -272,6 +328,68 @@ mod tests {
         let expected_signature =
             provenance::sign_bytes(&signing_key, expected_curr_chain.as_bytes());
         assert_eq!(signature, expected_signature);
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_hello_run_regenerates_secret_when_missing() -> Result<()> {
+        init_keychain_backend();
+
+        let manager = SqliteConnectionManager::memory();
+        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
+        {
+            let mut conn = pool.get()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            store::migrate_db(&mut conn)?;
+        }
+
+        let project_id = "proj-missing-secret";
+        let placeholder_keys = provenance::generate_keypair();
+        let original_pubkey = placeholder_keys.public_key_b64.clone();
+
+        {
+            let conn = pool.get()?;
+            let created_at = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO projects (id, name, created_at, pubkey) VALUES (?1, ?2, ?3, ?4)",
+                params![project_id, "Missing Secret", created_at, &original_pubkey],
+            )?;
+        }
+
+        // Intentionally skip storing a secret for this project to simulate a missing key entry.
+
+        let spec = RunSpec {
+            project_id: project_id.to_string(),
+            name: "recover-secret".to_string(),
+            seed: 99,
+            dag_json: "{}".to_string(),
+            token_budget: 25,
+        };
+
+        let run_id = start_hello_run(&pool, spec)?;
+        assert!(!run_id.is_empty());
+
+        let conn = pool.get()?;
+        let pubkey_after: String = conn.query_row(
+            "SELECT pubkey FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )?;
+
+        // The orchestrator should have rotated the key and stored a new secret.
+        assert_ne!(pubkey_after, original_pubkey);
+
+        let recovered_secret = provenance::load_secret_key(project_id)?;
+        let derived_pubkey = provenance::public_key_from_secret(&recovered_secret);
+        assert_eq!(pubkey_after, derived_pubkey);
+
+        let fallback_dir = PathBuf::from(std::env::var("INTELEXTA_KEYCHAIN_DIR")?);
+        let fallback_path = fallback_dir.join(format!("{}.key", project_id));
+        assert!(
+            fallback_path.exists(),
+            "regenerated key should be persisted to fallback store"
+        );
 
         Ok(())
     }
