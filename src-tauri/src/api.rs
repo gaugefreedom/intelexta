@@ -1,6 +1,6 @@
 // In src-tauri/src/api.rs
 use crate::{
-    car, orchestrator, provenance,
+    car, orchestrator, provenance, replay,
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
@@ -36,7 +36,6 @@ pub(crate) fn create_project_with_pool(name: String, pool: &DbPool) -> Result<Pr
     Ok(project)
 }
 
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HelloRunSpec {
@@ -66,7 +65,7 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
     if let Err(e) = &result {
         println!("[DEBUG] orchestrator::start_hello_run failed with: {:?}", e);
     }
-    
+
     result.map_err(|e| Error::Api(e.to_string()))
 }
 
@@ -144,7 +143,9 @@ pub(crate) fn list_checkpoints_with_pool(
         let incident = incident_json
             .map(|payload| serde_json::from_str::<IncidentSummary>(&payload))
             .transpose()
-            .map_err(|err| rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err)))?;
+            .map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
+            })?;
         Ok(CheckpointSummary {
             id: row.get(0)?,
             timestamp: row.get(1)?,
@@ -173,6 +174,11 @@ pub fn get_policy(project_id: String, pool: State<DbPool>) -> Result<Policy, Err
 }
 
 #[tauri::command]
+pub fn replay_run(run_id: String, pool: State<DbPool>) -> Result<replay::ReplayReport, Error> {
+    replay::replay_exact_run(run_id, pool.inner()).map_err(|err| Error::Api(err.to_string()))
+}
+
+#[tauri::command]
 pub fn update_policy(project_id: String, policy: Policy, pool: State<DbPool>) -> Result<(), Error> {
     let conn = pool.get()?;
     store::policies::upsert(&conn, &project_id, &policy)
@@ -185,18 +191,20 @@ pub(crate) fn emit_car_to_base_dir(
     base_dir: &Path,
 ) -> Result<PathBuf, Error> {
     let conn = pool.get()?;
-    let project_id: String = conn.query_row(
-        "SELECT project_id FROM runs WHERE id = ?1",
-        params![run_id],
-        |row| row.get(0),
-    ).map_err(|err| match err {
-        rusqlite::Error::QueryReturnedNoRows => Error::Api(format!("run {run_id} not found")),
-        other => Error::from(other),
-    })?;
+    let project_id: String = conn
+        .query_row(
+            "SELECT project_id FROM runs WHERE id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Error::Api(format!("run {run_id} not found")),
+            other => Error::from(other),
+        })?;
 
     // NOTE: This is still a placeholder builder until Sprint 1B
     let car = car::build_car(run_id).map_err(|err| Error::Api(err.to_string()))?;
-    
+
     // **FIX FOR [P1]**: Generate a unique ID for the receipt to prevent DB constraint errors.
     let receipt_id = Uuid::new_v4().to_string();
 
@@ -212,7 +220,7 @@ pub(crate) fn emit_car_to_base_dir(
 
     let created_at = Utc::now().to_rfc3339();
     let file_path_str = file_path.to_string_lossy().to_string();
-    
+
     conn.execute(
         "INSERT INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![

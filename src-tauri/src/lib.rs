@@ -41,6 +41,7 @@ pub mod ingest;
 pub mod keychain;
 pub mod orchestrator;
 pub mod provenance;
+pub mod replay;
 pub mod store;
 
 // === Core Data Structures for Sprint 0 ===
