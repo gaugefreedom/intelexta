@@ -13,6 +13,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 const STUB_MODEL_ID: &str = "stub-model";
+const OLLAMA_HOST: &str = "127.0.0.1:11434";
 
 #[derive(Serialize)]
 struct CheckpointBody<'a> {
@@ -109,6 +110,102 @@ impl LlmClient for DefaultOllamaClient {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaModelEntry {
+    name: String,
+}
+
+pub fn list_local_models() -> anyhow::Result<Vec<String>> {
+    let mut models = fetch_ollama_models().unwrap_or_default();
+    if !models.iter().any(|m| m == STUB_MODEL_ID) {
+        models.insert(0, STUB_MODEL_ID.to_string());
+    }
+    if models.is_empty() {
+        models.push(STUB_MODEL_ID.to_string());
+    }
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
+fn fetch_ollama_models() -> anyhow::Result<Vec<String>> {
+    let request = format!(
+        "GET /api/tags HTTP/1.1\r\nHost: {OLLAMA_HOST}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+
+    let mut stream = TcpStream::connect(OLLAMA_HOST)?;
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line)?;
+    if !status_line.starts_with("HTTP/1.1 200") {
+        return Err(anyhow!(format!(
+            "unexpected Ollama tags response: {}",
+            status_line.trim()
+        )));
+    }
+
+    let mut transfer_chunked = false;
+    let mut content_length: Option<usize> = None;
+    loop {
+        let mut header_line = String::new();
+        reader.read_line(&mut header_line)?;
+        if header_line == "\r\n" || header_line.is_empty() {
+            break;
+        }
+        let lower = header_line.to_ascii_lowercase();
+        if lower.contains("transfer-encoding") && lower.contains("chunked") {
+            transfer_chunked = true;
+        } else if lower.starts_with("content-length") {
+            if let Some((_, value)) = header_line.split_once(':') {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+        }
+    }
+
+    let mut body = Vec::new();
+    if transfer_chunked {
+        loop {
+            let mut size_line = String::new();
+            reader.read_line(&mut size_line)?;
+            if size_line.trim().is_empty() {
+                continue;
+            }
+            let size = usize::from_str_radix(size_line.trim(), 16)?;
+            if size == 0 {
+                // Consume trailing CRLF after terminating chunk
+                let mut crlf = [0u8; 2];
+                reader.read_exact(&mut crlf)?;
+                break;
+            }
+
+            let mut chunk = vec![0u8; size];
+            reader.read_exact(&mut chunk)?;
+            body.extend_from_slice(&chunk);
+
+            let mut crlf = [0u8; 2];
+            reader.read_exact(&mut crlf)?;
+        }
+    } else if let Some(len) = content_length {
+        let mut buf = vec![0u8; len];
+        reader.read_exact(&mut buf)?;
+        body = buf;
+    } else {
+        reader.read_to_end(&mut body)?;
+    }
+
+    let tags: OllamaTagsResponse = serde_json::from_slice(&body)?;
+    let models = tags.models.into_iter().map(|entry| entry.name).collect();
+    Ok(models)
+}
+
 fn perform_ollama_stream(model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
     let body = serde_json::json!({
         "model": model,
@@ -118,12 +215,12 @@ fn perform_ollama_stream(model: &str, prompt: &str) -> anyhow::Result<LlmGenerat
     .to_string();
 
     let request = format!(
-        "POST /api/generate HTTP/1.1\r\nHost: 127.0.0.1:11434\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "POST /api/generate HTTP/1.1\r\nHost: {OLLAMA_HOST}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.as_bytes().len(),
         body
     );
 
-    let mut stream = TcpStream::connect("127.0.0.1:11434")?;
+    let mut stream = TcpStream::connect(OLLAMA_HOST)?;
     stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.write_all(request.as_bytes())?;
     stream.flush()?;

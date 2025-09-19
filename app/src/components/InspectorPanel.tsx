@@ -43,6 +43,17 @@ function incidentSeverityColor(incident?: IncidentSummary | null): string {
   }
 }
 
+function proofBadgeFor(kind: string): { label: string; color: string; title: string } {
+  switch (kind) {
+    case "concordant":
+      return { label: "[C]", color: "#c586c0", title: "Concordant proof mode" };
+    case "exact":
+      return { label: "[E]", color: "#9cdcfe", title: "Exact proof mode" };
+    default:
+      return { label: "[I]", color: "#dcdcaa", title: "Indeterminate proof mode" };
+  }
+}
+
 export default function InspectorPanel({
   projectId,
   refreshToken,
@@ -65,6 +76,13 @@ export default function InspectorPanel({
   const [replayingRun, setReplayingRun] = React.useState<boolean>(false);
   const [replayReport, setReplayReport] = React.useState<ReplayReport | null>(null);
   const [replayError, setReplayError] = React.useState<string | null>(null);
+
+  const selectedRun = React.useMemo(() => {
+    if (!selectedRunId) {
+      return null;
+    }
+    return runs.find((run) => run.id === selectedRunId) ?? null;
+  }, [runs, selectedRunId]);
 
   React.useEffect(() => {
     if (!projectId) return;
@@ -181,23 +199,47 @@ export default function InspectorPanel({
   }, [selectedRunId]);
 
   const actionDisabled = !selectedRunId || emittingCar || replayingRun;
+  const replayButtonLabel = selectedRun?.kind === "concordant" ? "Replay (Concordant)" : "Replay Run";
+  const selectedRunBadge = selectedRun ? proofBadgeFor(selectedRun.kind) : null;
 
   const replayFeedback = React.useMemo(() => {
     if (!replayReport) {
       return null;
     }
+    if (
+      typeof replayReport.epsilon === "number" &&
+      typeof replayReport.semanticDistance === "number"
+    ) {
+      const distance = replayReport.semanticDistance;
+      const epsilon = replayReport.epsilon;
+      const comparison = distance <= epsilon ? "≤" : ">";
+      const statusLabel = replayReport.matchStatus ? "PASS" : "FAIL";
+      const tone = replayReport.matchStatus ? "success" : "error";
+      const distanceDisplay = distance.toFixed(2);
+      const epsilonDisplay = epsilon.toFixed(2);
+      const messageBase = `Concordant Proof: ${statusLabel} (Distance: ${distanceDisplay} ${comparison} ε: ${epsilonDisplay})`;
+      const suffix =
+        !replayReport.matchStatus && replayReport.errorMessage
+          ? ` — ${replayReport.errorMessage}`
+          : "";
+      return {
+        tone,
+        message: `${messageBase}${suffix}`,
+      };
+    }
+
     const expectedDigest = replayReport.originalDigest || "∅";
     const replayedDigest = replayReport.replayDigest || "∅";
     if (replayReport.matchStatus) {
       return {
         tone: "success" as const,
-        message: `Success: digests match (${replayedDigest})`,
+        message: `Exact Proof: PASS (Digest: ${replayedDigest})`,
       };
     }
     const details = replayReport.errorMessage ?? "digests differ";
     return {
       tone: "error" as const,
-      message: `Mismatch: ${details} (expected ${expectedDigest}, replayed ${replayedDigest})`,
+      message: `Exact Proof: FAIL — ${details} (expected ${expectedDigest}, replayed ${replayedDigest})`,
     };
   }, [replayReport]);
 
@@ -210,20 +252,45 @@ export default function InspectorPanel({
       <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
         <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
           Run
-          <select
-            value={selectedRunId ?? ""}
-            onChange={(event) => setSelectedRunId(event.target.value || null)}
-            disabled={loadingRuns || runs.length === 0}
-          >
-            <option value="" disabled>
-              {loadingRuns ? "Loading…" : "Select a run"}
-            </option>
-            {runs.map((run) => (
-              <option key={run.id} value={run.id}>
-                {run.name} · {new Date(run.createdAt).toLocaleString()}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {selectedRunBadge && (
+              <span
+                title={selectedRunBadge.title}
+                style={{
+                  border: `1px solid ${selectedRunBadge.color}`,
+                  color: selectedRunBadge.color,
+                  borderRadius: "999px",
+                  fontSize: "0.7rem",
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  padding: "1px 6px",
+                  minWidth: "3ch",
+                  textAlign: "center",
+                }}
+              >
+                {selectedRunBadge.label}
+              </span>
+            )}
+            <select
+              value={selectedRunId ?? ""}
+              onChange={(event) => setSelectedRunId(event.target.value || null)}
+              disabled={loadingRuns || runs.length === 0}
+              style={{ flex: 1 }}
+            >
+              <option value="" disabled>
+                {loadingRuns ? "Loading…" : "Select a run"}
               </option>
-            ))}
-          </select>
+              {runs.map((run) => {
+                const badge = proofBadgeFor(run.kind);
+                const timestamp = new Date(run.createdAt).toLocaleString();
+                return (
+                  <option key={run.id} value={run.id}>
+                    {`${badge.label} ${run.name} · ${timestamp}`}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         </label>
         {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
         
@@ -243,7 +310,7 @@ export default function InspectorPanel({
             disabled={actionDisabled}
             style={{ alignSelf: "flex-start" }}
           >
-            {replayingRun ? "Replaying…" : "Replay Run"}
+            {replayingRun ? "Replaying…" : replayButtonLabel}
           </button>
         </div>
         {emitSuccess && (

@@ -1,5 +1,5 @@
 import React from "react";
-import { startHelloRun } from "../lib/api";
+import { listLocalModels, startHelloRun, RunProofMode } from "../lib/api";
 
 function generateRandomSeed(): number {
   if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
@@ -22,9 +22,48 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
   const [dagJson, setDagJson] = React.useState("");
   const [tokenBudget, setTokenBudget] = React.useState("");
   const [model, setModel] = React.useState("stub-model");
+  const [availableModels, setAvailableModels] = React.useState<string[]>(["stub-model"]);
+  const [modelsLoading, setModelsLoading] = React.useState(false);
+  const [modelsError, setModelsError] = React.useState<string | null>(null);
+  const [proofMode, setProofMode] = React.useState<RunProofMode>("exact");
+  const [epsilon, setEpsilon] = React.useState(0.15);
   const [formError, setFormError] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError(null);
+    listLocalModels()
+      .then((models) => {
+        if (cancelled) return;
+        const filtered = models.filter((entry) => entry.trim().length > 0);
+        if (filtered.length === 0) {
+          setAvailableModels(["stub-model"]);
+          setModel("stub-model");
+          return;
+        }
+        setAvailableModels(filtered);
+        setModel((current) => (filtered.includes(current) ? current : filtered[0]));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Failed to load local models", err);
+        setModelsError("Unable to load local models. Falling back to defaults.");
+        setAvailableModels(["stub-model"]);
+        setModel("stub-model");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setModelsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -88,6 +127,15 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
       return;
     }
 
+    let epsilonValue: number | null = null;
+    if (proofMode === "concordant") {
+      epsilonValue = Number(epsilon);
+      if (!Number.isFinite(epsilonValue) || epsilonValue < 0) {
+        setFormError("Epsilon must be a finite, non-negative number.");
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     try {
       const runId = await startHelloRun({
@@ -97,6 +145,8 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
         dagJson: dagJsonInput,
         tokenBudget: parsedTokenBudget,
         model: modelInput,
+        proofMode,
+        epsilon: epsilonValue,
       });
       setSuccessMessage(`Run started successfully. ID: ${runId}`);
       onRunStarted?.(runId);
@@ -148,13 +198,78 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
 
         <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
           Model
-          <input
-            type="text"
+          <select
             value={model}
             onChange={(event) => setModel(event.target.value)}
-            placeholder="e.g. stub-model or llama3"
-          />
+            disabled={modelsLoading || availableModels.length === 0}
+          >
+            {availableModels.map((modelId) => (
+              <option key={modelId} value={modelId}>
+                {modelId}
+              </option>
+            ))}
+          </select>
+          {modelsLoading ? (
+            <span style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Loading local models…</span>
+          ) : modelsError ? (
+            <span style={{ fontSize: "0.75rem", color: "#f48771" }}>{modelsError}</span>
+          ) : null}
         </label>
+
+        <fieldset
+          style={{
+            border: "1px solid #333",
+            borderRadius: "6px",
+            padding: "8px 12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+          }}
+        >
+          <legend style={{ padding: "0 4px" }}>Proof mode</legend>
+          <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <input
+              type="radio"
+              name="proof-mode"
+              value="exact"
+              checked={proofMode === "exact"}
+              onChange={() => setProofMode("exact")}
+            />
+            Exact
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <input
+              type="radio"
+              name="proof-mode"
+              value="concordant"
+              checked={proofMode === "concordant"}
+              onChange={() => setProofMode("concordant")}
+            />
+            Concordant
+          </label>
+          {proofMode === "concordant" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "0.85rem", color: "#9cdcfe" }}>
+                Semantic tolerance (ε)
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={epsilon}
+                onChange={(event) => setEpsilon(Number(event.target.value))}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem" }}>
+                <span>0.00</span>
+                <span>
+                  ε = {epsilon.toFixed(2)}
+                </span>
+                <span>1.00</span>
+              </div>
+            </div>
+          )}
+        </fieldset>
 
         <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
           DAG JSON
