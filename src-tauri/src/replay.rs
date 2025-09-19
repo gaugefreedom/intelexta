@@ -186,13 +186,14 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
         .ok_or_else(|| anyhow!("invalid semantic digest encoding"))?;
     report.semantic_distance = Some(distance);
 
-    if (distance as f64) <= epsilon {
+    let normalized_distance = distance as f64 / 64.0;
+    if normalized_distance <= epsilon {
         report.match_status = true;
     } else {
         report.error_message = Some(format!(
-            "semantic distance {distance} exceeded epsilon {epsilon}"
+            "semantic distance {:.2} exceeded epsilon {:.2}",
+            normalized_distance, epsilon
         ));
     }
-
     Ok(report)
 }
