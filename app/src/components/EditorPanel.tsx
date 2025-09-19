@@ -26,6 +26,7 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
   const [modelsLoading, setModelsLoading] = React.useState(false);
   const [modelsError, setModelsError] = React.useState<string | null>(null);
   const [proofMode, setProofMode] = React.useState<RunProofMode>("exact");
+  const [uiState, setUiState] = React.useState<"configure" | "conversation">("configure");
   const [epsilon, setEpsilon] = React.useState(0.15);
   const [formError, setFormError] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
@@ -36,6 +37,10 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
       setProofMode("concordant");
     }
   }, [model, proofMode]);
+
+  React.useEffect(() => {
+    setUiState(proofMode === "interactive" ? "conversation" : "configure");
+  }, [proofMode]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -165,7 +170,8 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
     }
   };
 
-  const exactModeDisabled = model !== "stub-model";
+  const stubOnlyModeDisabled = model !== "stub-model";
+  const isConversationalUiActive = uiState === "conversation";
 
   return (
     <div>
@@ -242,7 +248,7 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
               value="exact"
               checked={proofMode === "exact"}
               onChange={() => setProofMode("exact")}
-              disabled={exactModeDisabled}
+              disabled={stubOnlyModeDisabled}
             />
             Exact
           </label>
@@ -255,6 +261,17 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
               onChange={() => setProofMode("concordant")}
             />
             Concordant
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <input
+              type="radio"
+              name="proof-mode"
+              value="interactive"
+              checked={proofMode === "interactive"}
+              onChange={() => setProofMode("interactive")}
+              disabled={stubOnlyModeDisabled}
+            />
+            Interactive
           </label>
           {proofMode === "concordant" && (
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -276,6 +293,11 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
                 </span>
                 <span>1.00</span>
               </div>
+            </div>
+          )}
+          {isConversationalUiActive && (
+            <div style={{ fontSize: "0.8rem", color: "#4ec9b0" }}>
+              Interactive runs open the conversational workspace after launch.
             </div>
           )}
         </fieldset>

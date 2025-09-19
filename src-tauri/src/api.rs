@@ -51,6 +51,7 @@ pub struct HelloRunSpec {
     pub model: String,
     #[serde(default)]
     pub proof_mode: orchestrator::RunProofMode,
+    #[serde(default)]
     pub epsilon: Option<f64>,
 }
 
