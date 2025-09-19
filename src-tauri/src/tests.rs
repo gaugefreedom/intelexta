@@ -4,7 +4,7 @@ use std::sync::Once;
 use uuid::Uuid;
 
 use crate::{
-    api, keychain, orchestrator, provenance,
+    api, keychain, orchestrator, provenance, replay,
     store::{
         self,
         policies::{self, Policy},
@@ -212,6 +212,77 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     let signing_key = provenance::load_secret_key(&project.id)?;
     let verifying_key = signing_key.verifying_key();
     verifying_key.verify(curr_chain.as_bytes(), &signature)?;
+    Ok(())
+}
+
+#[test]
+fn replay_exact_run_successfully_matches_digest() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Replay Happy".into(), &pool)?;
+    let seed = 2024_u64;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "replay-happy".into(),
+            seed,
+            dag_json: "{}".into(),
+            token_budget: 50,
+        },
+    )?;
+
+    let report = replay::replay_exact_run(run_id.clone(), &pool)?;
+
+    assert!(report.match_status);
+    assert!(report.error_message.is_none());
+    assert!(!report.original_digest.is_empty());
+    assert_eq!(report.original_digest, report.replay_digest);
+
+    let mut expected_input = b"hello".to_vec();
+    expected_input.extend_from_slice(&seed.to_le_bytes());
+    let expected_digest = provenance::sha256_hex(&expected_input);
+    assert_eq!(report.original_digest, expected_digest);
+
+    Ok(())
+}
+
+#[test]
+fn replay_exact_run_reports_mismatched_digest() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Replay Tamper".into(), &pool)?;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "replay-tamper".into(),
+            seed: 7,
+            dag_json: "{}".into(),
+            token_budget: 50,
+        },
+    )?;
+
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "UPDATE checkpoints SET outputs_sha256 = ?1 WHERE run_id = ?2",
+            params!["bad-digest", &run_id],
+        )?;
+    }
+
+    let report = replay::replay_exact_run(run_id, &pool)?;
+
+    assert!(!report.match_status);
+    assert_eq!(
+        report.error_message.as_deref(),
+        Some("outputs digest mismatch")
+    );
+    assert_eq!(report.original_digest, "bad-digest");
+    assert_ne!(report.original_digest, report.replay_digest);
+
     Ok(())
 }
 

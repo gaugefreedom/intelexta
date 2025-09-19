@@ -45,6 +45,7 @@ fn main() {
             api::list_checkpoints,
             api::get_policy,
             api::update_policy,
+            api::replay_run,
             api::emit_car
         ])
         .build(tauri::generate_context!())
