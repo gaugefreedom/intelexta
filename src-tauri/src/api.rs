@@ -4,7 +4,7 @@ use crate::{
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
-use rusqlite::{params, types::Type};
+use rusqlite::{params, types::Type, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -44,6 +44,9 @@ pub struct HelloRunSpec {
     pub dag_json: String,
     pub token_budget: u64,
     pub model: String,
+    #[serde(default)]
+    pub proof_mode: orchestrator::RunProofMode,
+    pub epsilon: Option<f64>,
 }
 
 // In src-tauri/src/api.rs
@@ -57,6 +60,8 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
         dag_json: spec.dag_json,
         token_budget: spec.token_budget,
         model: spec.model,
+        proof_mode: spec.proof_mode,
+        epsilon: spec.epsilon,
     };
 
     // --- FIX: The debugging code now lives INSIDE the function ---
@@ -186,7 +191,40 @@ pub fn get_policy(project_id: String, pool: State<DbPool>) -> Result<Policy, Err
 
 #[tauri::command]
 pub fn replay_run(run_id: String, pool: State<DbPool>) -> Result<replay::ReplayReport, Error> {
-    replay::replay_exact_run(run_id, pool.inner()).map_err(|err| Error::Api(err.to_string()))
+    replay_run_with_pool(run_id, pool.inner())
+}
+
+pub(crate) fn replay_run_with_pool(
+    run_id: String,
+    pool: &DbPool,
+) -> Result<replay::ReplayReport, Error> {
+    let conn = pool.get()?;
+    let kind_opt: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM runs WHERE id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let report = match kind_opt.as_deref() {
+        Some("concordant") => replay::replay_concordant_run(run_id.clone(), pool),
+        Some(_) => replay::replay_exact_run(run_id.clone(), pool),
+        None => Ok(replay::ReplayReport {
+            run_id: run_id.clone(),
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: Some("run not found".to_string()),
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: None,
+        }),
+    }
+    .map_err(|err| Error::Api(err.to_string()))?;
+
+    Ok(report)
 }
 
 #[tauri::command]

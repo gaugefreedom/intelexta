@@ -15,6 +15,8 @@ export interface RunSummary {
   kind: string;
 }
 
+export type RunProofMode = 'exact' | 'concordant';
+
 export interface CheckpointSummary {
   id: string;
   timestamp: string;
@@ -41,6 +43,10 @@ export interface ReplayReport {
   originalDigest: string;
   replayDigest: string;
   errorMessage?: string | null;
+  semanticOriginalDigest?: string | null;
+  semanticReplayDigest?: string | null;
+  semanticDistance?: number | null;
+  epsilon?: number | null;
 }
 
 export interface Policy {
@@ -57,6 +63,8 @@ export interface HelloRunSpec {
   dagJson: string;
   tokenBudget: number;
   model: string;
+  proofMode?: RunProofMode;
+  epsilon?: number | null;
 }
 
 export async function listProjects(): Promise<Project[]> {
