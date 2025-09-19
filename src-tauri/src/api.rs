@@ -43,6 +43,7 @@ pub struct HelloRunSpec {
     pub seed: u64,
     pub dag_json: String,
     pub token_budget: u64,
+    pub model: String,
 }
 
 // In src-tauri/src/api.rs
@@ -55,6 +56,7 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
         seed: spec.seed,
         dag_json: spec.dag_json,
         token_budget: spec.token_budget,
+        model: spec.model,
     };
 
     // --- FIX: The debugging code now lives INSIDE the function ---
@@ -109,6 +111,8 @@ pub struct CheckpointSummary {
     pub outputs_sha256: Option<String>,
     pub semantic_digest: Option<String>,
     pub usage_tokens: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -135,7 +139,7 @@ pub(crate) fn list_checkpoints_with_pool(
 ) -> Result<Vec<CheckpointSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, timestamp, kind, incident_json, inputs_sha256, outputs_sha256, semantic_digest, usage_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
+        "SELECT id, timestamp, kind, incident_json, inputs_sha256, outputs_sha256, semantic_digest, usage_tokens, prompt_tokens, completion_tokens FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
     )?;
     let rows = stmt.query_map(params![run_id], |row| {
         let incident_json: Option<String> = row.get(3)?;
@@ -155,6 +159,14 @@ pub(crate) fn list_checkpoints_with_pool(
             semantic_digest: row.get(6)?,
             usage_tokens: {
                 let value: i64 = row.get(7)?;
+                value.max(0) as u64
+            },
+            prompt_tokens: {
+                let value: i64 = row.get(8)?;
+                value.max(0) as u64
+            },
+            completion_tokens: {
+                let value: i64 = row.get(9)?;
                 value.max(0) as u64
             },
         })

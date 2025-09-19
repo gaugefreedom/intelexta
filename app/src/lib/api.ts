@@ -24,6 +24,8 @@ export interface CheckpointSummary {
   outputsSha256?: string | null;
   semanticDigest?: string | null;
   usageTokens: number;
+  promptTokens: number;
+  completionTokens: number;
 }
 
 export interface IncidentSummary {
@@ -54,6 +56,7 @@ export interface HelloRunSpec {
   seed: number;
   dagJson: string;
   tokenBudget: number;
+  model: string;
 }
 
 export async function listProjects(): Promise<Project[]> {
