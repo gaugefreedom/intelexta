@@ -3,6 +3,8 @@ use std::convert::TryInto;
 use std::sync::Once;
 use uuid::Uuid;
 
+use chrono::{Duration, Utc};
+
 use crate::{
     api, car, keychain, orchestrator, provenance, replay,
     store::{
@@ -16,6 +18,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
+use serde::Serialize;
 
 fn setup_pool() -> Result<DbPool> {
     let manager = SqliteConnectionManager::memory();
@@ -349,6 +352,7 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
     assert_eq!(first_car.run.seed, run_spec.seed);
     assert_eq!(first_car.run.version, expected_version);
     assert!(first_car.run.model.contains(&run_spec.name));
+    assert!(first_car.proof.process.is_none());
 
     let expected_policy_hash = format!(
         "sha256:{}",
@@ -581,6 +585,168 @@ fn replay_concordant_run_detects_semantic_mismatch() -> Result<()> {
     assert_eq!(report.epsilon, Some(epsilon));
     let distance = report.semantic_distance.expect("distance recorded");
     assert!(f64::from(distance) > epsilon);
+
+    let api_report = api::replay_run_with_pool(run_id.clone(), &pool)?;
+    assert_eq!(api_report, report);
+
+    Ok(())
+}
+
+#[test]
+fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Interactive Proof".into(), &pool)?;
+
+    let run_spec = orchestrator::RunSpec {
+        project_id: project.id.clone(),
+        name: "interactive-sequential".into(),
+        seed: 123,
+        dag_json: "{}".into(),
+        token_budget: 10_000,
+        model: "stub-model".into(),
+        proof_mode: orchestrator::RunProofMode::Interactive,
+        epsilon: None,
+    };
+
+    let run_id = Uuid::new_v4().to_string();
+    let created_at = Utc::now();
+    let spec_json = serde_json::to_string(&run_spec)?;
+
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &run_id,
+                &run_spec.project_id,
+                &run_spec.name,
+                &created_at.to_rfc3339(),
+                "interactive",
+                &spec_json
+            ],
+        )?;
+    }
+
+    #[derive(Serialize)]
+    struct TestCheckpointBody<'a> {
+        run_id: &'a str,
+        kind: &'a str,
+        timestamp: String,
+        inputs_sha256: Option<&'a str>,
+        outputs_sha256: Option<&'a str>,
+        incident: Option<&'a serde_json::Value>,
+        usage_tokens: u64,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+    }
+
+    let signing_key = provenance::load_secret_key(&project.id)?;
+    let mut prev_chain = String::new();
+    let mut parent_id: Option<String> = None;
+    let mut inserted_ids = Vec::new();
+    let mut expected_metadata = Vec::new();
+    let mut final_curr_chain = String::new();
+
+    for turn in 0..3_u32 {
+        let timestamp = (created_at + Duration::seconds(i64::from(turn))).to_rfc3339();
+        let checkpoint_id = Uuid::new_v4().to_string();
+        let inputs_sha = provenance::sha256_hex(format!("interactive-input-{turn}").as_bytes());
+        let outputs_sha = provenance::sha256_hex(format!("interactive-output-{turn}").as_bytes());
+        let usage_tokens = 7 + u64::from(turn);
+        let prompt_tokens = u64::from(turn);
+        let completion_tokens = 3;
+
+        let body = TestCheckpointBody {
+            run_id: &run_id,
+            kind: "Step",
+            timestamp: timestamp.clone(),
+            inputs_sha256: Some(inputs_sha.as_str()),
+            outputs_sha256: Some(outputs_sha.as_str()),
+            incident: None,
+            usage_tokens,
+            prompt_tokens,
+            completion_tokens,
+        };
+
+        let canonical = provenance::canonical_json(&body);
+        let curr_chain = provenance::sha256_hex(&[prev_chain.as_bytes(), &canonical].concat());
+        let signature = provenance::sign_bytes(&signing_key, curr_chain.as_bytes());
+
+        {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT INTO checkpoints (id, run_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14)",
+                params![
+                    &checkpoint_id,
+                    &run_id,
+                    parent_id.as_deref(),
+                    i64::from(turn),
+                    "Step",
+                    &timestamp,
+                    Some(inputs_sha.as_str()),
+                    Some(outputs_sha.as_str()),
+                    &prev_chain,
+                    &curr_chain,
+                    &signature,
+                    (usage_tokens as i64),
+                    (prompt_tokens as i64),
+                    (completion_tokens as i64),
+                ],
+            )?;
+        }
+
+        expected_metadata.push((
+            checkpoint_id.clone(),
+            parent_id.clone(),
+            turn,
+            prev_chain.clone(),
+            curr_chain.clone(),
+            signature.clone(),
+        ));
+        inserted_ids.push(checkpoint_id.clone());
+        parent_id = Some(checkpoint_id);
+        prev_chain = curr_chain.clone();
+        final_curr_chain = curr_chain;
+    }
+
+    let car = {
+        let conn = pool.get()?;
+        car::build_car(&conn, &run_id)?
+    };
+
+    assert_eq!(car.proof.match_kind, "process");
+    let process = car.proof.process.as_ref().expect("process proof metadata");
+    assert_eq!(
+        process.sequential_checkpoints.len(),
+        expected_metadata.len()
+    );
+    for (entry, expected) in process
+        .sequential_checkpoints
+        .iter()
+        .zip(expected_metadata.iter())
+    {
+        assert_eq!(entry.id, expected.0);
+        assert_eq!(entry.parent_checkpoint_id, expected.1.clone());
+        assert_eq!(entry.turn_index, Some(expected.2));
+        assert_eq!(entry.prev_chain, expected.3);
+        assert_eq!(entry.curr_chain, expected.4);
+        assert_eq!(entry.signature, expected.5);
+    }
+    assert_eq!(car.checkpoints, inserted_ids);
+
+    let base_dir = std::env::temp_dir().join(format!("intelexta-process-tests-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&base_dir)?;
+    let emitted_path = api::emit_car_to_base_dir(&run_id, &pool, &base_dir)?;
+    assert!(emitted_path.exists());
+    let persisted: car::Car = serde_json::from_str(&std::fs::read_to_string(&emitted_path)?)?;
+    assert_eq!(persisted.proof.match_kind, "process");
+
+    let report = replay::replay_interactive_run(run_id.clone(), &pool)?;
+    assert!(report.match_status);
+    assert!(report.error_message.is_none());
+    assert_eq!(report.original_digest, final_curr_chain);
+    assert_eq!(report.replay_digest, final_curr_chain);
 
     let api_report = api::replay_run_with_pool(run_id.clone(), &pool)?;
     assert_eq!(api_report, report);

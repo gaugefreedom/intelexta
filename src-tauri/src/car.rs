@@ -61,6 +61,25 @@ pub struct Proof {
     pub original_semantic_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay_semantic_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessProof>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ProcessProof {
+    pub sequential_checkpoints: Vec<ProcessCheckpointProof>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ProcessCheckpointProof {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_checkpoint_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_index: Option<u32>,
+    pub prev_chain: String,
+    pub curr_chain: String,
+    pub signature: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -153,6 +172,11 @@ struct CheckpointRow {
     inputs_sha256: Option<String>,
     outputs_sha256: Option<String>,
     usage_tokens: u64,
+    parent_checkpoint_id: Option<String>,
+    turn_index: Option<u32>,
+    prev_chain: String,
+    curr_chain: String,
+    signature: String,
 }
 
 pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
@@ -171,7 +195,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         .map_err(|err| anyhow!("failed to parse stored RunSpec: {err}"))?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, kind, timestamp, inputs_sha256, outputs_sha256, usage_tokens
+        "SELECT id, kind, timestamp, inputs_sha256, outputs_sha256, usage_tokens, parent_checkpoint_id, turn_index, prev_chain, curr_chain, signature
          FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
     )?;
     let rows = stmt.query_map(params![run_id], |row| {
@@ -193,6 +217,13 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
             inputs_sha256: row.get(3)?,
             outputs_sha256: row.get(4)?,
             usage_tokens: usage.max(0) as u64,
+            parent_checkpoint_id: row.get(6)?,
+            turn_index: row
+                .get::<_, Option<i64>>(7)?
+                .map(|value| value.max(0) as u32),
+            prev_chain: row.get(8)?,
+            curr_chain: row.get(9)?,
+            signature: row.get(10)?,
         })
     })?;
 
@@ -254,6 +285,33 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         .max()
         .unwrap_or(created_at);
 
+    let process_proof = if run_kind.eq_ignore_ascii_case("interactive") {
+        let sequential = checkpoints
+            .iter()
+            .map(|ck| ProcessCheckpointProof {
+                id: ck.id.clone(),
+                parent_checkpoint_id: ck.parent_checkpoint_id.clone(),
+                turn_index: ck.turn_index,
+                prev_chain: ck.prev_chain.clone(),
+                curr_chain: ck.curr_chain.clone(),
+                signature: ck.signature.clone(),
+            })
+            .collect();
+        Some(ProcessProof {
+            sequential_checkpoints: sequential,
+        })
+    } else {
+        None
+    };
+
+    let proof_match_kind = match run_kind.as_str() {
+        kind if kind.eq_ignore_ascii_case("interactive") => "process".to_string(),
+        kind if kind.eq_ignore_ascii_case("concordant") => "semantic".to_string(),
+        _ => "exact".to_string(),
+    };
+
+    let checkpoint_ids: Vec<String> = checkpoints.iter().map(|ck| ck.id.clone()).collect();
+
     let mut car = Car {
         id: String::new(),
         run_id: run_id.to_string(),
@@ -266,11 +324,12 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
             sampler: None,
         },
         proof: Proof {
-            match_kind: "exact".to_string(),
+            match_kind: proof_match_kind,
             epsilon: None,
             distance_metric: None,
             original_semantic_digest: None,
             replay_semantic_digest: None,
+            process: process_proof,
         },
         policy_ref: PolicyRef {
             hash: format!("sha256:{policy_hash}"),
@@ -283,7 +342,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
             g_co2e: estimated_g_co2e,
         },
         provenance: provenance_claims,
-        checkpoints: checkpoints.into_iter().map(|ck| ck.id).collect(),
+        checkpoints: checkpoint_ids,
         sgrade: calculate_s_grade(true, had_incident, true),
         signatures: Vec::new(),
     };
