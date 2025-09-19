@@ -4,7 +4,7 @@ use std::sync::Once;
 use uuid::Uuid;
 
 use crate::{
-    api, keychain, orchestrator, provenance, replay,
+    api, car, keychain, orchestrator, provenance, replay,
     store::{
         self,
         policies::{self, Policy},
@@ -13,7 +13,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::{Signature, Verifier};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 
@@ -212,6 +212,140 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     let signing_key = provenance::load_secret_key(&project.id)?;
     let verifying_key = signing_key.verifying_key();
     verifying_key.verify(curr_chain.as_bytes(), &signature)?;
+    Ok(())
+}
+
+#[test]
+fn build_car_is_deterministic_and_signed() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("CAR Builder".into(), &pool)?;
+
+    let custom_policy = Policy {
+        allow_network: true,
+        budget_tokens: 2_048,
+        budget_usd: 12.5,
+        budget_g_co2e: 3.2,
+    };
+
+    {
+        let conn = pool.get()?;
+        policies::upsert(&conn, &project.id, &custom_policy)?;
+    }
+
+    let run_spec = orchestrator::RunSpec {
+        project_id: project.id.clone(),
+        name: "car-builder-run".into(),
+        seed: 31415,
+        dag_json: "{\"nodes\":[]}".into(),
+        token_budget: 5_000,
+    };
+
+    let run_id = orchestrator::start_hello_run(&pool, run_spec.clone())?;
+
+    let first_car = {
+        let conn = pool.get()?;
+        car::build_car(&conn, &run_id)?
+    };
+
+    let second_car = {
+        let conn = pool.get()?;
+        car::build_car(&conn, &run_id)?
+    };
+
+    assert_eq!(first_car.id, second_car.id, "CAR id should be stable");
+    assert_eq!(first_car.signatures, second_car.signatures);
+
+    let mut body_value_first = serde_json::to_value(&first_car)?;
+    if let serde_json::Value::Object(ref mut obj) = body_value_first {
+        obj.remove("id");
+        obj.remove("signatures");
+    }
+    let canonical_first = provenance::canonical_json(&body_value_first);
+    let expected_id = format!("car:{}", provenance::sha256_hex(&canonical_first));
+    assert_eq!(first_car.id, expected_id);
+
+    let mut body_value_second = serde_json::to_value(&second_car)?;
+    if let serde_json::Value::Object(ref mut obj) = body_value_second {
+        obj.remove("id");
+        obj.remove("signatures");
+    }
+    let canonical_second = provenance::canonical_json(&body_value_second);
+    assert_eq!(canonical_first, canonical_second);
+
+    let expected_version = provenance::sha256_hex(run_spec.dag_json.as_bytes());
+    assert_eq!(first_car.run.kind, "exact");
+    assert_eq!(first_car.run.seed, run_spec.seed);
+    assert_eq!(first_car.run.version, expected_version);
+    assert!(first_car.run.model.contains(&run_spec.name));
+
+    let expected_policy_hash = format!(
+        "sha256:{}",
+        provenance::sha256_hex(&provenance::canonical_json(&custom_policy))
+    );
+    assert_eq!(first_car.policy_ref.hash, expected_policy_hash);
+    assert_eq!(first_car.policy_ref.egress, custom_policy.allow_network);
+
+    let conn = pool.get()?;
+    let checkpoint_ids: Vec<String> = {
+        let mut stmt =
+            conn.prepare("SELECT id FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC")?;
+        let rows = stmt.query_map(params![&run_id], |row| row.get(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        ids
+    };
+    assert_eq!(first_car.checkpoints, checkpoint_ids);
+
+    let total_usage: u64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(usage_tokens), 0) FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get::<_, i64>(0),
+        )?
+        .max(0) as u64;
+    assert_eq!(first_car.budgets.tokens, total_usage);
+
+    let expected_input_sha = provenance::sha256_hex(b"hello");
+    assert!(first_car.provenance.iter().any(|claim| {
+        claim.claim_type == "input" && claim.sha256 == format!("sha256:{expected_input_sha}")
+    }));
+
+    let mut expected_output_input = b"hello".to_vec();
+    expected_output_input.extend_from_slice(&run_spec.seed.to_le_bytes());
+    let expected_output_sha = provenance::sha256_hex(&expected_output_input);
+    assert!(first_car.provenance.iter().any(|claim| {
+        claim.claim_type == "output" && claim.sha256 == format!("sha256:{expected_output_sha}")
+    }));
+
+    let spec_hash = format!(
+        "sha256:{}",
+        provenance::sha256_hex(&provenance::canonical_json(&run_spec))
+    );
+    assert!(first_car
+        .provenance
+        .iter()
+        .any(|claim| { claim.claim_type == "config" && claim.sha256 == spec_hash }));
+
+    assert_eq!(first_car.signatures.len(), 1);
+    let signature_entry = &first_car.signatures[0];
+    assert!(signature_entry.starts_with("ed25519:"));
+    let signature_b64 = &signature_entry[8..];
+    let signature_bytes = STANDARD.decode(signature_b64)?;
+    let sig_array: [u8; ed25519_dalek::SIGNATURE_LENGTH] = signature_bytes
+        .try_into()
+        .map_err(|_| anyhow!("signature length mismatch"))?;
+    let signature = Signature::from_bytes(&sig_array);
+
+    let pubkey_bytes = STANDARD.decode(&project.pubkey)?;
+    let pubkey_array: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = pubkey_bytes
+        .try_into()
+        .map_err(|_| anyhow!("pubkey length mismatch"))?;
+    let verifying_key = VerifyingKey::from_bytes(&pubkey_array)?;
+    verifying_key.verify(first_car.id.as_bytes(), &signature)?;
+
     Ok(())
 }
 
