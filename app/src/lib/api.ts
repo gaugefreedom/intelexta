@@ -15,7 +15,7 @@ export interface RunSummary {
   kind: string;
 }
 
-export type RunProofMode = 'exact' | 'concordant';
+export type RunProofMode = 'exact' | 'concordant' | 'interactive';
 
 export interface CheckpointSummary {
   id: string;

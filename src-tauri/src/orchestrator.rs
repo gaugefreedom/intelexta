@@ -56,6 +56,7 @@ struct CheckpointInsert<'a> {
 pub enum RunProofMode {
     Exact,
     Concordant,
+    Interactive,
 }
 
 impl Default for RunProofMode {
@@ -69,11 +70,16 @@ impl RunProofMode {
         match self {
             RunProofMode::Exact => "exact",
             RunProofMode::Concordant => "concordant",
+            RunProofMode::Interactive => "interactive",
         }
     }
 
     pub fn is_concordant(&self) -> bool {
         matches!(self, RunProofMode::Concordant)
+    }
+
+    pub fn is_interactive(&self) -> bool {
+        matches!(self, RunProofMode::Interactive)
     }
 }
 
