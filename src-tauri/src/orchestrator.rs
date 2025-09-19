@@ -6,8 +6,13 @@ use ed25519_dalek::SigningKey;
 use keyring::Error as KeyringError;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::io::ErrorKind;
+use serde_json::Value;
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
 use uuid::Uuid;
+
+const STUB_MODEL_ID: &str = "stub-model";
 
 #[derive(Serialize)]
 struct CheckpointBody<'a> {
@@ -18,6 +23,8 @@ struct CheckpointBody<'a> {
     outputs_sha256: Option<&'a str>,
     incident: Option<&'a serde_json::Value>,
     usage_tokens: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,9 +34,186 @@ pub struct RunSpec {
     pub seed: u64,
     pub dag_json: String,
     pub token_budget: u64,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
+
+impl TokenUsage {
+    pub fn total(&self) -> u64 {
+        self.prompt_tokens + self.completion_tokens
+    }
+}
+
+struct NodeExecution {
+    inputs_sha256: Option<String>,
+    outputs_sha256: Option<String>,
+    usage: TokenUsage,
+}
+
+pub struct LlmGeneration {
+    pub response: String,
+    pub usage: TokenUsage,
+}
+
+pub trait LlmClient {
+    fn stream_generate(&self, model: &str, prompt: &str) -> anyhow::Result<LlmGeneration>;
+}
+
+struct DefaultOllamaClient;
+
+impl DefaultOllamaClient {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl LlmClient for DefaultOllamaClient {
+    fn stream_generate(&self, model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
+        perform_ollama_stream(model, prompt)
+    }
+}
+
+fn perform_ollama_stream(model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
+    let body = serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "stream": true,
+    })
+    .to_string();
+
+    let request = format!(
+        "POST /api/generate HTTP/1.1\r\nHost: 127.0.0.1:11434\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.as_bytes().len(),
+        body
+    );
+
+    let mut stream = TcpStream::connect("127.0.0.1:11434")?;
+    stream.set_read_timeout(Some(Duration::from_secs(120)))?;
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line)?;
+    if !status_line.starts_with("HTTP/1.1 200") {
+        return Err(anyhow!(format!(
+            "unexpected Ollama response: {status_line}"
+        )));
+    }
+
+    let mut transfer_chunked = false;
+    loop {
+        let mut header_line = String::new();
+        reader.read_line(&mut header_line)?;
+        if header_line == "\r\n" || header_line.is_empty() {
+            break;
+        }
+        if header_line
+            .to_ascii_lowercase()
+            .contains("transfer-encoding")
+            && header_line.to_ascii_lowercase().contains("chunked")
+        {
+            transfer_chunked = true;
+        }
+    }
+
+    if !transfer_chunked {
+        return Err(anyhow!("ollama response was not chunked"));
+    }
+
+    let mut response_text = String::new();
+    let mut prompt_tokens = 0_u64;
+    let mut completion_tokens = 0_u64;
+
+    loop {
+        let mut size_line = String::new();
+        reader.read_line(&mut size_line)?;
+        if size_line.trim().is_empty() {
+            continue;
+        }
+        let size = usize::from_str_radix(size_line.trim(), 16)?;
+        if size == 0 {
+            break;
+        }
+
+        let mut chunk_data = vec![0u8; size];
+        reader.read_exact(&mut chunk_data)?;
+
+        // Consume trailing CRLF after chunk
+        let mut crlf = [0u8; 2];
+        reader.read_exact(&mut crlf)?;
+
+        process_stream_chunk(
+            &chunk_data,
+            &mut response_text,
+            &mut prompt_tokens,
+            &mut completion_tokens,
+        )?;
+    }
+
+    Ok(LlmGeneration {
+        response: response_text,
+        usage: TokenUsage {
+            prompt_tokens,
+            completion_tokens,
+        },
+    })
+}
+
+fn process_stream_chunk(
+    bytes: &[u8],
+    response_text: &mut String,
+    prompt_tokens: &mut u64,
+    completion_tokens: &mut u64,
+) -> anyhow::Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+
+    let mut end = bytes.len();
+    while end > 0 && (bytes[end - 1] == b'\n' || bytes[end - 1] == b'\r') {
+        end -= 1;
+    }
+    if end == 0 {
+        return Ok(());
+    }
+
+    let value: Value = serde_json::from_slice(&bytes[..end])?;
+    if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(anyhow!(error.to_string()));
+    }
+
+    if let Some(text) = value.get("response").and_then(|v| v.as_str()) {
+        response_text.push_str(text);
+    }
+
+    if value.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if let Some(count) = value.get("prompt_eval_count").and_then(|v| v.as_u64()) {
+            *prompt_tokens = count;
+        }
+        if let Some(count) = value.get("eval_count").and_then(|v| v.as_u64()) {
+            *completion_tokens = count;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
+    let client = DefaultOllamaClient::new();
+    start_hello_run_with_client(pool, spec, &client)
+}
+
+pub(crate) fn start_hello_run_with_client(
+    pool: &DbPool,
+    spec: RunSpec,
+    llm_client: &dyn LlmClient,
+) -> anyhow::Result<String> {
     let conn = pool.get()?;
 
     let signing_key = ensure_project_signing_key(&conn, &spec.project_id)?;
@@ -37,71 +221,111 @@ pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let now = Utc::now().to_rfc3339();
     let spec_json = serde_json::to_string(&spec)?;
 
-    // Create run row
     conn.execute(
         "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1,?2,?3,?4,?5,?6)",
         params![&run_id, &spec.project_id, &spec.name, &now, "exact", &spec_json],
     )?;
 
-    // Deterministic stub op: sha256("hello" || seed_le)
-    let mut input = b"hello".to_vec();
-    input.extend_from_slice(&spec.seed.to_le_bytes());
-    let outputs_hex = provenance::sha256_hex(&input);
-    let inputs_hex = provenance::sha256_hex(b"hello");
+    let execution = execute_node(&spec, llm_client)?;
+    let total_usage = execution.usage.total();
+    let prompt_tokens = execution.usage.prompt_tokens;
+    let completion_tokens = execution.usage.completion_tokens;
+    let budget_check = governance::enforce_budget(spec.token_budget, total_usage);
 
-    // Budget check: pretend we used 10 tokens
-    let usage_tokens = 10_u64;
-    let budget_ok = governance::enforce_budget(spec.token_budget, usage_tokens);
-
-    // Load secret & compute signed, hash-chained checkpoint
-    let prev_chain = ""; // first checkpoint in run
-    let body_json = match &budget_ok {
-        Ok(_) => serde_json::json!(CheckpointBody {
-            run_id: &run_id,
-            kind: "Step",
-            timestamp: now.clone(),
-            inputs_sha256: Some(&inputs_hex),
-            outputs_sha256: Some(&outputs_hex),
-            incident: None,
-            usage_tokens
-        }),
-        Err(inc) => {
-            let inc_json = serde_json::to_value(inc)?;
-            serde_json::json!(CheckpointBody {
-                run_id: &run_id,
-                kind: "Incident",
-                timestamp: now.clone(),
-                inputs_sha256: None,
-                outputs_sha256: None,
-                incident: Some(&inc_json),
-                usage_tokens
-            })
+    let prev_chain = "";
+    let mut incident_value: Option<serde_json::Value> = None;
+    let (kind, inputs_sha, outputs_sha) = match budget_check {
+        Ok(_) => (
+            "Step",
+            execution.inputs_sha256.as_deref(),
+            execution.outputs_sha256.as_deref(),
+        ),
+        Err(incident) => {
+            incident_value = Some(serde_json::to_value(&incident)?);
+            ("Incident", None, None)
         }
     };
 
+    let checkpoint_body = CheckpointBody {
+        run_id: &run_id,
+        kind,
+        timestamp: now.clone(),
+        inputs_sha256: inputs_sha,
+        outputs_sha256: outputs_sha,
+        incident: incident_value.as_ref(),
+        usage_tokens: total_usage,
+        prompt_tokens,
+        completion_tokens,
+    };
+
+    let body_json = serde_json::to_value(&checkpoint_body)?;
     let canon = provenance::canonical_json(&body_json);
     let curr_chain = provenance::sha256_hex(&[prev_chain.as_bytes(), &canon].concat());
     let signature = provenance::sign_bytes(&signing_key, curr_chain.as_bytes());
 
     let ckpt_id = Uuid::new_v4().to_string();
     let semantic_digest: Option<String> = None;
+    let incident_json_str = incident_value.map(|v| v.to_string());
 
     conn.execute(
-        "INSERT INTO checkpoints (id, run_id, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        "INSERT INTO checkpoints (id, run_id, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         params![
             &ckpt_id,
             &run_id,
-            body_json.get("kind").and_then(|v| v.as_str()).unwrap_or("Step"),
-            body_json.get("incident").and_then(|v| if v.is_null(){None} else {Some(v)}).map(|v| v.to_string()),
+            kind,
+            incident_json_str,
             now,
-            body_json.get("inputs_sha256").and_then(|v| v.as_str()),
-            body_json.get("outputs_sha256").and_then(|v| v.as_str()),
-            prev_chain, curr_chain, signature, (usage_tokens as i64), semantic_digest
-        ]
+            inputs_sha,
+            outputs_sha,
+            prev_chain,
+            curr_chain,
+            signature,
+            (total_usage as i64),
+            semantic_digest,
+            (prompt_tokens as i64),
+            (completion_tokens as i64),
+        ],
     )?;
 
     Ok(run_id)
+}
+
+fn execute_node(spec: &RunSpec, llm_client: &dyn LlmClient) -> anyhow::Result<NodeExecution> {
+    if spec.model == STUB_MODEL_ID {
+        Ok(execute_stub_node(spec))
+    } else {
+        execute_llm_run(spec, llm_client)
+    }
+}
+
+fn execute_stub_node(spec: &RunSpec) -> NodeExecution {
+    let mut input = b"hello".to_vec();
+    input.extend_from_slice(&spec.seed.to_le_bytes());
+    let outputs_hex = provenance::sha256_hex(&input);
+    let inputs_hex = provenance::sha256_hex(b"hello");
+
+    NodeExecution {
+        inputs_sha256: Some(inputs_hex),
+        outputs_sha256: Some(outputs_hex),
+        usage: TokenUsage {
+            prompt_tokens: 0,
+            completion_tokens: 10,
+        },
+    }
+}
+
+fn execute_llm_run(spec: &RunSpec, llm_client: &dyn LlmClient) -> anyhow::Result<NodeExecution> {
+    let prompt = spec.dag_json.clone();
+    let generation = llm_client.stream_generate(&spec.model, &prompt)?;
+    let inputs_hex = provenance::sha256_hex(prompt.as_bytes());
+    let outputs_hex = provenance::sha256_hex(generation.response.as_bytes());
+
+    Ok(NodeExecution {
+        inputs_sha256: Some(inputs_hex),
+        outputs_sha256: Some(outputs_hex),
+        usage: generation.usage,
+    })
 }
 
 fn ensure_project_signing_key(conn: &Connection, project_id: &str) -> anyhow::Result<SigningKey> {
@@ -167,7 +391,7 @@ mod tests {
     use rusqlite::params;
     use std::convert::{TryFrom, TryInto};
     use std::path::PathBuf;
-    use std::sync::Once;
+    use std::sync::{Mutex, Once};
 
     fn init_keychain_backend() {
         static INIT: Once = Once::new();
@@ -220,6 +444,7 @@ mod tests {
             seed: 42,
             dag_json: "{\"nodes\":[]}".to_string(),
             token_budget: 1_000,
+            model: STUB_MODEL_ID.to_string(),
         };
         let spec_clone = spec.clone();
         let run_id = start_hello_run(&pool, spec)?;
@@ -262,6 +487,8 @@ mod tests {
             curr_chain,
             signature,
             usage_tokens_db,
+            prompt_tokens_db,
+            completion_tokens_db,
             incident_json,
             semantic_digest,
         ): (
@@ -273,11 +500,13 @@ mod tests {
             String,
             String,
             i64,
+            i64,
+            i64,
             Option<String>,
             Option<String>,
         ) = conn
             .query_row(
-                "SELECT kind, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, incident_json, semantic_digest FROM checkpoints WHERE run_id = ?1",
+                "SELECT kind, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, prompt_tokens, completion_tokens, incident_json, semantic_digest FROM checkpoints WHERE run_id = ?1",
                 params![&run_id],
                 |row| {
                     Ok((
@@ -291,6 +520,8 @@ mod tests {
                         row.get(7)?,
                         row.get(8)?,
                         row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
                     ))
                 },
             )?;
@@ -309,7 +540,11 @@ mod tests {
         assert_eq!(outputs_sha.as_deref(), Some(expected_outputs.as_str()));
 
         let usage_tokens = u64::try_from(usage_tokens_db)?;
+        let prompt_tokens = u64::try_from(prompt_tokens_db)?;
+        let completion_tokens = u64::try_from(completion_tokens_db)?;
         assert_eq!(usage_tokens, 10);
+        assert_eq!(prompt_tokens, 0);
+        assert_eq!(completion_tokens, 10);
 
         let checkpoint_body = CheckpointBody {
             run_id: &run_id,
@@ -319,6 +554,8 @@ mod tests {
             outputs_sha256: outputs_sha.as_deref(),
             incident: None,
             usage_tokens,
+            prompt_tokens,
+            completion_tokens,
         };
         let body_value = serde_json::to_value(&checkpoint_body)?;
         let canonical = provenance::canonical_json(&body_value);
@@ -365,6 +602,7 @@ mod tests {
             seed: 99,
             dag_json: "{}".to_string(),
             token_budget: 25,
+            model: STUB_MODEL_ID.to_string(),
         };
 
         let run_id = start_hello_run(&pool, spec)?;
@@ -390,6 +628,157 @@ mod tests {
             fallback_path.exists(),
             "regenerated key should be persisted to fallback store"
         );
+
+        Ok(())
+    }
+
+    struct RecordingLlmClient {
+        expected_model: String,
+        expected_prompt: String,
+        response: String,
+        usage: TokenUsage,
+        calls: Mutex<usize>,
+    }
+
+    impl RecordingLlmClient {
+        fn new(model: String, prompt: String, response: String, usage: TokenUsage) -> Self {
+            Self {
+                expected_model: model,
+                expected_prompt: prompt,
+                response,
+                usage,
+                calls: Mutex::new(0),
+            }
+        }
+    }
+
+    impl LlmClient for RecordingLlmClient {
+        fn stream_generate(&self, model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
+            assert_eq!(model, self.expected_model);
+            assert_eq!(prompt, self.expected_prompt);
+            let mut calls = self.calls.lock().expect("lock call count");
+            *calls += 1;
+            Ok(LlmGeneration {
+                response: self.response.clone(),
+                usage: self.usage,
+            })
+        }
+    }
+
+    #[test]
+    fn start_hello_run_records_llm_usage() -> Result<()> {
+        init_keychain_backend();
+
+        let manager = SqliteConnectionManager::memory();
+        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
+        {
+            let mut conn = pool.get()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            store::migrate_db(&mut conn)?;
+        }
+
+        let project_id = "proj-llm";
+        let keypair = provenance::generate_keypair();
+        let secret_bytes = STANDARD.decode(&keypair.secret_key_b64)?;
+        let secret_array: [u8; 32] = secret_bytes
+            .try_into()
+            .map_err(|_| anyhow!("unexpected secret length"))?;
+        let signing_key = SigningKey::from_bytes(&secret_array);
+        let pubkey = provenance::public_key_from_secret(&signing_key);
+
+        {
+            let conn = pool.get()?;
+            let created_at = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO projects (id, name, created_at, pubkey) VALUES (?1, ?2, ?3, ?4)",
+                params![project_id, "LLM Project", created_at, pubkey],
+            )?;
+        }
+
+        provenance::store_secret_key(project_id, &keypair.secret_key_b64)?;
+
+        let prompt_json = "{\"prompt\":\"Say hello\"}".to_string();
+        let spec = RunSpec {
+            project_id: project_id.to_string(),
+            name: "llm-run".to_string(),
+            seed: 5,
+            dag_json: prompt_json.clone(),
+            token_budget: 10_000,
+            model: "llama3".to_string(),
+        };
+
+        let mock_client = RecordingLlmClient::new(
+            spec.model.clone(),
+            prompt_json.clone(),
+            "Hello from mock".to_string(),
+            TokenUsage {
+                prompt_tokens: 12,
+                completion_tokens: 8,
+            },
+        );
+
+        let run_id = start_hello_run_with_client(&pool, spec.clone(), &mock_client)?;
+
+        assert_eq!(*mock_client.calls.lock().unwrap(), 1);
+
+        let conn = pool.get()?;
+        let stored_spec: RunSpec = conn.query_row(
+            "SELECT spec_json FROM runs WHERE id = ?1",
+            params![&run_id],
+            |row| {
+                let payload: String = row.get(0)?;
+                Ok(serde_json::from_str(&payload)?)
+            },
+        )?;
+        assert_eq!(stored_spec.model, "llama3");
+
+        let (
+            inputs_sha,
+            outputs_sha,
+            usage_tokens_db,
+            prompt_tokens_db,
+            completion_tokens_db,
+        ): (Option<String>, Option<String>, i64, i64, i64) = conn.query_row(
+            "SELECT inputs_sha256, outputs_sha256, usage_tokens, prompt_tokens, completion_tokens FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?;
+
+        let expected_input_sha = provenance::sha256_hex(prompt_json.as_bytes());
+        assert_eq!(inputs_sha.as_deref(), Some(expected_input_sha.as_str()));
+        let expected_output_sha = provenance::sha256_hex(b"Hello from mock");
+        assert_eq!(outputs_sha.as_deref(), Some(expected_output_sha.as_str()));
+
+        assert_eq!(usage_tokens_db, 20);
+        assert_eq!(prompt_tokens_db, 12);
+        assert_eq!(completion_tokens_db, 8);
+
+        let signature: String = conn.query_row(
+            "SELECT signature FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        let curr_chain: String = conn.query_row(
+            "SELECT curr_chain FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        let sig_bytes = STANDARD.decode(signature)?;
+        let sig_array: [u8; ed25519_dalek::SIGNATURE_LENGTH] = sig_bytes
+            .try_into()
+            .map_err(|_| anyhow!("signature length mismatch"))?;
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
+        signing_key
+            .verifying_key()
+            .verify(curr_chain.as_bytes(), &signature)?;
 
         Ok(())
     }

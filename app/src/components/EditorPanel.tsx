@@ -21,6 +21,7 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
   const [seed, setSeed] = React.useState(() => String(generateRandomSeed()));
   const [dagJson, setDagJson] = React.useState("");
   const [tokenBudget, setTokenBudget] = React.useState("");
+  const [model, setModel] = React.useState("stub-model");
   const [formError, setFormError] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -65,6 +66,12 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
       return;
     }
 
+    const modelInput = model.trim();
+    if (!modelInput) {
+      setFormError("Model identifier is required.");
+      return;
+    }
+
     const tokenBudgetInput = tokenBudget.trim();
     if (!tokenBudgetInput) {
       setFormError("Token budget is required.");
@@ -89,6 +96,7 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
         seed: parsedSeed,
         dagJson: dagJsonInput,
         tokenBudget: parsedTokenBudget,
+        model: modelInput,
       });
       setSuccessMessage(`Run started successfully. ID: ${runId}`);
       onRunStarted?.(runId);
@@ -135,6 +143,16 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
             onChange={(event) => setSeed(event.target.value)}
             placeholder="0"
             min={0}
+          />
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          Model
+          <input
+            type="text"
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+            placeholder="e.g. stub-model or llama3"
           />
         </label>
 

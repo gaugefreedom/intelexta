@@ -69,6 +69,7 @@ fn orchestrator_writes_incident_checkpoint_when_budget_fails() -> Result<()> {
             seed: 1,
             dag_json: "{}".into(),
             token_budget: 5,
+            model: "stub-model".into(),
         },
     )?;
 
@@ -101,6 +102,7 @@ fn list_checkpoints_includes_incident_payload() -> Result<()> {
             seed: 7,
             dag_json: "{}".into(),
             token_budget: 5,
+            model: "stub-model".into(),
         },
     )?;
 
@@ -131,6 +133,7 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
             seed,
             dag_json: "{\"hello\":true}".into(),
             token_budget: 50,
+            model: "stub-model".into(),
         },
     )?;
 
@@ -239,6 +242,7 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
         seed: 31415,
         dag_json: "{\"nodes\":[]}".into(),
         token_budget: 5_000,
+        model: "stub-model".into(),
     };
 
     let run_id = orchestrator::start_hello_run(&pool, run_spec.clone())?;
@@ -364,6 +368,7 @@ fn replay_exact_run_successfully_matches_digest() -> Result<()> {
             seed,
             dag_json: "{}".into(),
             token_budget: 50,
+            model: "stub-model".into(),
         },
     )?;
 
@@ -396,6 +401,7 @@ fn replay_exact_run_reports_mismatched_digest() -> Result<()> {
             seed: 7,
             dag_json: "{}".into(),
             token_budget: 50,
+            model: "stub-model".into(),
         },
     )?;
 
@@ -434,6 +440,7 @@ fn emit_car_command_writes_receipt_and_file() -> Result<()> {
             seed: 7,
             dag_json: "{}".into(),
             token_budget: 100,
+            model: "stub-model".into(),
         },
     )?;
 
