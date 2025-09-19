@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context};
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use keyring::Error as KeyringError;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
@@ -49,6 +49,11 @@ struct CheckpointInsert<'a> {
     completion_tokens: u64,
     semantic_digest: Option<&'a str>,
     message: Option<CheckpointMessageInput<'a>>,
+}
+
+struct PersistedCheckpoint {
+    id: String,
+    curr_chain: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -118,6 +123,13 @@ struct NodeExecution {
 
 pub struct LlmGeneration {
     pub response: String,
+    pub usage: TokenUsage,
+}
+
+pub struct SubmitTurnOutcome {
+    pub human_checkpoint_id: String,
+    pub ai_checkpoint_id: String,
+    pub ai_response: String,
     pub usage: TokenUsage,
 }
 
@@ -375,7 +387,7 @@ fn persist_checkpoint(
     conn: &Connection,
     signing_key: &SigningKey,
     params: &CheckpointInsert<'_>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<PersistedCheckpoint> {
     let checkpoint_body = CheckpointBody {
         run_id: params.run_id,
         kind: params.kind,
@@ -429,7 +441,194 @@ fn persist_checkpoint(
         )?;
     }
 
-    Ok(checkpoint_id)
+    Ok(PersistedCheckpoint {
+        id: checkpoint_id,
+        curr_chain,
+    })
+}
+
+fn sum_checkpoint_token_usage(conn: &Connection, run_id: &str) -> anyhow::Result<(u64, u64)> {
+    let (prompt_total, completion_total): (i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1",
+        params![run_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    let prompt = prompt_total.max(0) as u64;
+    let completion = completion_total.max(0) as u64;
+    Ok((prompt, completion))
+}
+
+struct LastCheckpointInfo {
+    id: String,
+    curr_chain: String,
+    turn_index: Option<u32>,
+}
+
+fn load_last_checkpoint(
+    conn: &Connection,
+    run_id: &str,
+) -> anyhow::Result<Option<LastCheckpointInfo>> {
+    let row = conn
+        .query_row(
+            "SELECT id, curr_chain, turn_index FROM checkpoints WHERE run_id = ?1 ORDER BY COALESCE(turn_index, -1) DESC, timestamp DESC LIMIT 1",
+            params![run_id],
+            |row| {
+                let turn_index = row
+                    .get::<_, Option<i64>>(2)?
+                    .map(|value| value.max(0) as u32);
+                Ok(LastCheckpointInfo {
+                    id: row.get(0)?,
+                    curr_chain: row.get(1)?,
+                    turn_index,
+                })
+            },
+        )
+        .optional()?;
+
+    Ok(row)
+}
+
+pub fn submit_turn(
+    pool: &DbPool,
+    run_id: &str,
+    prompt_text: &str,
+) -> anyhow::Result<SubmitTurnOutcome> {
+    let client = DefaultOllamaClient::new();
+    submit_turn_with_client(pool, run_id, prompt_text, &client)
+}
+
+pub(crate) fn submit_turn_with_client(
+    pool: &DbPool,
+    run_id: &str,
+    prompt_text: &str,
+    llm_client: &dyn LlmClient,
+) -> anyhow::Result<SubmitTurnOutcome> {
+    let conn = pool.get()?;
+
+    let run_row: Option<(String, String, String)> = conn
+        .query_row(
+            "SELECT project_id, kind, spec_json FROM runs WHERE id = ?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+
+    let (project_id, run_kind, spec_json) =
+        run_row.ok_or_else(|| anyhow!(format!("run {run_id} not found")))?;
+    if run_kind != "interactive" {
+        return Err(anyhow!(
+            "submit_turn is only supported for interactive runs"
+        ));
+    }
+
+    let run_spec: RunSpec = serde_json::from_str(&spec_json)?;
+    let signing_key = ensure_project_signing_key(&conn, &project_id)?;
+
+    let LlmGeneration { response, usage } =
+        llm_client.stream_generate(&run_spec.model, prompt_text)?;
+
+    let mut tx = conn.transaction()?;
+
+    let (prior_prompt, prior_completion) = sum_checkpoint_token_usage(&tx, run_id)?;
+    let projected_prompt_total = prior_prompt
+        .checked_add(usage.prompt_tokens)
+        .ok_or_else(|| anyhow!("prompt token total overflow"))?;
+    let projected_completion_total = prior_completion
+        .checked_add(usage.completion_tokens)
+        .ok_or_else(|| anyhow!("completion token total overflow"))?;
+    let projected_usage_total = projected_prompt_total
+        .checked_add(projected_completion_total)
+        .ok_or_else(|| anyhow!("usage token total overflow"))?;
+
+    if let Err(incident) = governance::enforce_budget(run_spec.token_budget, projected_usage_total)
+    {
+        let incident_json = serde_json::to_string(&incident)?;
+        return Err(anyhow!(format!(
+            "turn would exceed token budget: {incident_json}"
+        )));
+    }
+
+    let last_checkpoint = load_last_checkpoint(&tx, run_id)?;
+    let parent_checkpoint_id_owned = last_checkpoint.as_ref().map(|info| info.id.clone());
+    let prev_chain_owned = last_checkpoint.as_ref().map(|info| info.curr_chain.clone());
+    let parent_checkpoint_ref = parent_checkpoint_id_owned
+        .as_ref()
+        .map(|value| value.as_str());
+    let prev_chain_ref = prev_chain_owned.as_deref().unwrap_or("");
+
+    let last_turn_index = last_checkpoint.as_ref().and_then(|info| info.turn_index);
+    let human_turn_index = match last_turn_index {
+        Some(value) => value
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("turn index overflow"))?,
+        None => 0,
+    };
+
+    let human_timestamp = Utc::now().to_rfc3339();
+    let human_insert = CheckpointInsert {
+        run_id,
+        parent_checkpoint_id: parent_checkpoint_ref,
+        turn_index: Some(human_turn_index),
+        kind: "Step",
+        timestamp: &human_timestamp,
+        incident: None,
+        inputs_sha256: None,
+        outputs_sha256: None,
+        prev_chain: prev_chain_ref,
+        usage_tokens: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        semantic_digest: None,
+        message: Some(CheckpointMessageInput {
+            role: "human",
+            body: prompt_text,
+        }),
+    };
+    let human_persisted = persist_checkpoint(&tx, &signing_key, &human_insert)?;
+
+    let human_checkpoint_id = human_persisted.id.clone();
+    let human_curr_chain = human_persisted.curr_chain.clone();
+
+    let ai_turn_index = human_turn_index
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("turn index overflow"))?;
+    let ai_timestamp = Utc::now().to_rfc3339();
+    let prompt_sha = provenance::sha256_hex(prompt_text.as_bytes());
+    let response_sha = provenance::sha256_hex(response.as_bytes());
+    let usage_tokens = usage
+        .prompt_tokens
+        .checked_add(usage.completion_tokens)
+        .ok_or_else(|| anyhow!("usage token overflow"))?;
+    let ai_insert = CheckpointInsert {
+        run_id,
+        parent_checkpoint_id: Some(human_checkpoint_id.as_str()),
+        turn_index: Some(ai_turn_index),
+        kind: "Step",
+        timestamp: &ai_timestamp,
+        incident: None,
+        inputs_sha256: Some(prompt_sha.as_str()),
+        outputs_sha256: Some(response_sha.as_str()),
+        prev_chain: human_curr_chain.as_str(),
+        usage_tokens,
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        semantic_digest: None,
+        message: Some(CheckpointMessageInput {
+            role: "ai",
+            body: &response,
+        }),
+    };
+    let ai_persisted = persist_checkpoint(&tx, &signing_key, &ai_insert)?;
+
+    tx.commit()?;
+
+    Ok(SubmitTurnOutcome {
+        human_checkpoint_id,
+        ai_checkpoint_id: ai_persisted.id,
+        ai_response: response,
+        usage,
+    })
 }
 
 pub(crate) fn start_hello_run_with_client(
@@ -506,7 +705,7 @@ pub(crate) fn start_hello_run_with_client(
         message: None,
     };
 
-    persist_checkpoint(&conn, &signing_key, &checkpoint_insert)?;
+    let _ = persist_checkpoint(&conn, &signing_key, &checkpoint_insert)?;
 
     Ok(run_id)
 }
@@ -612,7 +811,7 @@ fn regenerate_project_signing_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{keychain, provenance, store};
+    use crate::{api, keychain, provenance, store};
     use anyhow::{anyhow, Result};
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
@@ -1015,6 +1214,242 @@ mod tests {
         signing_key
             .verifying_key()
             .verify(curr_chain.as_bytes(), &signature)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn submit_turn_records_usage_and_messages() -> Result<()> {
+        init_keychain_backend();
+
+        let manager = SqliteConnectionManager::memory();
+        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
+        {
+            let mut conn = pool.get()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            store::migrate_db(&mut conn)?;
+        }
+
+        let project = api::create_project_with_pool("Interactive Submit".into(), &pool)?;
+        let run_spec = RunSpec {
+            project_id: project.id.clone(),
+            name: "interactive-run".into(),
+            seed: 0,
+            dag_json: "{}".into(),
+            token_budget: 10_000,
+            model: STUB_MODEL_ID.into(),
+            proof_mode: RunProofMode::Interactive,
+            epsilon: None,
+        };
+        let run_id = Uuid::new_v4().to_string();
+        let created_at = Utc::now().to_rfc3339();
+        let spec_json = serde_json::to_string(&run_spec)?;
+
+        {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    &run_id,
+                    &run_spec.project_id,
+                    &run_spec.name,
+                    &created_at,
+                    "interactive",
+                    &spec_json
+                ],
+            )?;
+        }
+
+        let prompt_text = "Hello partner";
+        let client = RecordingLlmClient::new(
+            run_spec.model.clone(),
+            prompt_text.to_string(),
+            "Greetings from AI".to_string(),
+            TokenUsage {
+                prompt_tokens: 7,
+                completion_tokens: 11,
+            },
+        );
+
+        let outcome = submit_turn_with_client(&pool, &run_id, prompt_text, &client)?;
+        assert_eq!(*client.calls.lock().unwrap(), 1);
+        assert_eq!(outcome.ai_response, "Greetings from AI");
+        assert_eq!(outcome.usage.prompt_tokens, 7);
+        assert_eq!(outcome.usage.completion_tokens, 11);
+
+        let conn = pool.get()?;
+        struct SimpleCheckpoint {
+            id: String,
+            parent: Option<String>,
+            turn_index: Option<u32>,
+            usage_tokens: u64,
+            prompt_tokens: u64,
+            completion_tokens: u64,
+            kind: String,
+        }
+        let mut stmt = conn.prepare(
+            "SELECT id, parent_checkpoint_id, turn_index, usage_tokens, prompt_tokens, completion_tokens, kind \
+             FROM checkpoints WHERE run_id = ?1 ORDER BY turn_index ASC",
+        )?;
+        let rows = stmt.query_map(params![&run_id], |row| {
+            let turn_index = row
+                .get::<_, Option<i64>>(2)?
+                .map(|value| value.max(0) as u32);
+            let usage_tokens: i64 = row.get(3)?;
+            let prompt_tokens: i64 = row.get(4)?;
+            let completion_tokens: i64 = row.get(5)?;
+            Ok(SimpleCheckpoint {
+                id: row.get(0)?,
+                parent: row.get(1)?,
+                turn_index,
+                usage_tokens: usage_tokens.max(0) as u64,
+                prompt_tokens: prompt_tokens.max(0) as u64,
+                completion_tokens: completion_tokens.max(0) as u64,
+                kind: row.get(6)?,
+            })
+        })?;
+        let mut checkpoints = Vec::new();
+        for row in rows {
+            checkpoints.push(row?);
+        }
+        assert_eq!(checkpoints.len(), 2);
+        let human = &checkpoints[0];
+        let ai = &checkpoints[1];
+
+        assert_eq!(human.kind, "Step");
+        assert_eq!(human.parent, None);
+        assert_eq!(human.turn_index, Some(0));
+        assert_eq!(human.usage_tokens, 0);
+        assert_eq!(human.prompt_tokens, 0);
+        assert_eq!(human.completion_tokens, 0);
+
+        assert_eq!(ai.kind, "Step");
+        assert_eq!(ai.parent.as_deref(), Some(human.id.as_str()));
+        assert_eq!(ai.turn_index, Some(1));
+        assert_eq!(ai.usage_tokens, 18);
+        assert_eq!(ai.prompt_tokens, 7);
+        assert_eq!(ai.completion_tokens, 11);
+
+        let (human_role, human_body): (String, String) = conn.query_row(
+            "SELECT role, body FROM checkpoint_messages WHERE checkpoint_id = ?1",
+            params![&human.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(human_role, "human");
+        assert_eq!(human_body, prompt_text);
+
+        let (ai_role, ai_body): (String, String) = conn.query_row(
+            "SELECT role, body FROM checkpoint_messages WHERE checkpoint_id = ?1",
+            params![&ai.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(ai_role, "ai");
+        assert_eq!(ai_body, "Greetings from AI");
+
+        let totals: (i64, i64) = conn.query_row(
+            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(totals.0, 7);
+        assert_eq!(totals.1, 11);
+
+        Ok(())
+    }
+
+    #[test]
+    fn submit_turn_rejects_when_budget_exceeded() -> Result<()> {
+        init_keychain_backend();
+
+        let manager = SqliteConnectionManager::memory();
+        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
+        {
+            let mut conn = pool.get()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            store::migrate_db(&mut conn)?;
+        }
+
+        let project = api::create_project_with_pool("Interactive Budget Gate".into(), &pool)?;
+        let run_spec = RunSpec {
+            project_id: project.id.clone(),
+            name: "interactive-budget".into(),
+            seed: 0,
+            dag_json: "{}".into(),
+            token_budget: 10,
+            model: STUB_MODEL_ID.into(),
+            proof_mode: RunProofMode::Interactive,
+            epsilon: None,
+        };
+        let run_id = Uuid::new_v4().to_string();
+        let created_at = Utc::now().to_rfc3339();
+        let spec_json = serde_json::to_string(&run_spec)?;
+
+        {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    &run_id,
+                    &run_spec.project_id,
+                    &run_spec.name,
+                    &created_at,
+                    "interactive",
+                    &spec_json
+                ],
+            )?;
+        }
+
+        let signing_key = {
+            let conn = pool.get()?;
+            ensure_project_signing_key(&conn, &project.id)?
+        };
+
+        {
+            let conn = pool.get()?;
+            let timestamp = Utc::now().to_rfc3339();
+            let existing = CheckpointInsert {
+                run_id: &run_id,
+                parent_checkpoint_id: None,
+                turn_index: Some(0),
+                kind: "Step",
+                timestamp: &timestamp,
+                incident: None,
+                inputs_sha256: None,
+                outputs_sha256: None,
+                prev_chain: "",
+                usage_tokens: 9,
+                prompt_tokens: 8,
+                completion_tokens: 1,
+                semantic_digest: None,
+                message: None,
+            };
+            let _ = persist_checkpoint(&conn, &signing_key, &existing)?;
+        }
+
+        let prompt_text = "Need more budget";
+        let client = RecordingLlmClient::new(
+            run_spec.model.clone(),
+            prompt_text.to_string(),
+            "Denied".to_string(),
+            TokenUsage {
+                prompt_tokens: 5,
+                completion_tokens: 0,
+            },
+        );
+
+        let result = submit_turn_with_client(&pool, &run_id, prompt_text, &client);
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.to_string().contains("token budget"));
+        assert_eq!(*client.calls.lock().unwrap(), 1);
+
+        let conn = pool.get()?;
+        let checkpoint_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(checkpoint_count, 1);
 
         Ok(())
     }
