@@ -1,165 +1,158 @@
-// In src-tauri/src/keychain.rs
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex, Once,
-};
+use anyhow::{anyhow, Context};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Once;
 
-use keyring::credential::{CredentialApi, CredentialBuilderApi, CredentialPersistence};
-use keyring::Error as KeyringError;
+const KEYCHAIN_SERVICE_NAME: &str = "intelexta";
 
-/// Shared service name used for all keychain entries written by the app.
-pub const KEYCHAIN_SERVICE_NAME: &str = "intelexta";
+static USING_FALLBACK: AtomicBool = AtomicBool::new(false);
+static INIT: Once = Once::new();
 
-static KEYCHAIN_INITIALIZED: Once = Once::new();
-static FALLBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct EntryKey {
-    target: Option<String>,
-    service: String,
-    user: String,
-}
-
-#[derive(Clone, Debug, Default)]
-struct InMemoryCredentialBuilder {
-    store: Arc<Mutex<HashMap<EntryKey, Vec<u8>>>>,
-}
-
-#[derive(Clone, Debug)]
-struct InMemoryCredential {
-    key: EntryKey,
-    store: Arc<Mutex<HashMap<EntryKey, Vec<u8>>>>,
-}
-
-/// Ensure that the keyring backend is usable.
-pub fn ensure_available() {
-    if using_in_memory_fallback() {
+/// Initialize the keychain backend. This probes the system keyring and records whether
+/// the application should fall back to the filesystem-based store.
+pub fn initialize_backend() {
+    // If the fallback has already been forced (e.g. by tests), avoid resetting it.
+    if USING_FALLBACK.load(Ordering::SeqCst) {
         return;
     }
 
-    if should_force_in_memory() {
-        install_in_memory_keyring();
-        return;
-    }
-
-    KEYCHAIN_INITIALIZED.call_once(|| {
-        if let Err(err) = probe_system_keyring() {
-            eprintln!(
-                "[intelexta] Falling back to in-memory keyring because the system keychain is unavailable: {}",
-                err
-            );
-            install_in_memory_keyring();
+    INIT.call_once(|| {
+        match probe_system_keyring() {
+            Ok(()) => {
+                println!("[intelexta] System keychain is available and working correctly.");
+                USING_FALLBACK.store(false, Ordering::SeqCst);
+            }
+            Err(err) => {
+                eprintln!(
+                    "[intelexta] WARNING: System keychain failed probe ({}). Falling back to filesystem.",
+                    err
+                );
+                USING_FALLBACK.store(true, Ordering::SeqCst);
+            }
         }
     });
 }
 
-/// Force the use of the in-memory keyring. This is primarily used by tests.
-pub fn force_in_memory_keyring() {
-    install_in_memory_keyring();
+/// Store a secret for the provided project identifier.
+pub fn store_secret(project_id: &str, secret_b64: &str) -> anyhow::Result<()> {
+    initialize_backend();
+
+    if !USING_FALLBACK.load(Ordering::SeqCst) {
+        let entry =
+            keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id).map_err(|err| anyhow!(err))?;
+        match entry.set_password(secret_b64) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                eprintln!(
+                    "[intelexta] WARNING: Failed to store secret in system keychain ({}). Falling back to filesystem.",
+                    err
+                );
+                USING_FALLBACK.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    let path = get_fallback_path(project_id)?;
+    fs::write(&path, secret_b64).with_context(|| fallback_write_error(&path))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&path, permissions)
+            .with_context(|| fallback_permissions_error(&path))?;
+    }
+
+    Ok(())
 }
 
-/// Returns true when the process-wide in-memory keyring is being used.
-pub fn using_in_memory_fallback() -> bool {
-    FALLBACK_ACTIVE.load(Ordering::SeqCst)
-}
+/// Load the stored secret for the provided project identifier.
+pub fn load_secret(project_id: &str) -> anyhow::Result<String> {
+    initialize_backend();
 
-fn should_force_in_memory() -> bool {
-    std::env::var("INTELEXTA_USE_IN_MEMORY_KEYCHAIN")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "True"))
-        .unwrap_or(false)
+    if !USING_FALLBACK.load(Ordering::SeqCst) {
+        let entry =
+            keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id).map_err(|err| anyhow!(err))?;
+        match entry.get_password() {
+            Ok(secret) => return Ok(secret),
+            Err(keyring::Error::NoEntry) => return Err(anyhow!(keyring::Error::NoEntry)),
+            Err(err) => {
+                eprintln!(
+                    "[intelexta] WARNING: Failed to read secret from system keychain ({}). Falling back to filesystem.",
+                    err
+                );
+                USING_FALLBACK.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    let path = get_fallback_path(project_id)?;
+    let secret = fs::read_to_string(&path).with_context(|| fallback_read_error(&path))?;
+    Ok(secret)
 }
 
 fn probe_system_keyring() -> keyring::Result<()> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, "__intelexta_keychain_probe__")?;
-    let test_secret = "__probe_secret__";
-    entry.set_password(test_secret)?;
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, "__intelexta_probe__")?;
+    let secret = "test_secret";
+    entry.set_password(secret)?;
     let retrieved = entry.get_password()?;
-
-    if retrieved != test_secret {
-        return Err(KeyringError::BadEncoding(retrieved.into_bytes()));
+    if retrieved != secret {
+        let _ = entry.delete_password();
+        return Err(keyring::Error::NoEntry);
     }
-
-    match entry.delete_credential() {
-        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+    match entry.delete_password() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(err) => Err(err),
     }
 }
 
-fn install_in_memory_keyring() {
-    let was_active = FALLBACK_ACTIVE.swap(true, Ordering::SeqCst);
-    keyring::set_default_credential_builder(Box::new(InMemoryCredentialBuilder::default()));
-
-    if !was_active {
-        eprintln!(
-            "[intelexta] Using in-memory keyring backend. Secrets will not persist between app runs."
-        );
+fn fallback_base_dir() -> anyhow::Result<PathBuf> {
+    if let Ok(dir) = std::env::var("INTELEXTA_KEYCHAIN_DIR") {
+        return Ok(PathBuf::from(dir));
     }
+
+    dirs::data_local_dir()
+        .ok_or_else(|| anyhow!("cannot find user local data directory"))
+        .map(|path| path.join("com.intelexta.dev").join("keys"))
 }
 
-impl CredentialBuilderApi for InMemoryCredentialBuilder {
-    fn build(
-        &self,
-        target: Option<&str>,
-        service: &str,
-        user: &str,
-    // --- FIX IS HERE ---
-    // The trait requires the returned object to be thread-safe (`Send + Sync`).
-    ) -> keyring::Result<Box<dyn CredentialApi + Send + Sync>> {
-        let key = EntryKey {
-            target: target.map(|value| value.to_string()),
-            service: service.to_string(),
-            user: user.to_string(),
-        };
-
-        Ok(Box::new(InMemoryCredential {
-            key,
-            store: Arc::clone(&self.store),
-        }))
+fn get_fallback_path(project_id: &str) -> anyhow::Result<PathBuf> {
+    let base = fallback_base_dir()?;
+    fs::create_dir_all(&base).with_context(|| fallback_dir_error(&base))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let dir_permissions = fs::Permissions::from_mode(0o700);
+        fs::set_permissions(&base, dir_permissions)
+            .with_context(|| fallback_permissions_error(&base))?;
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn persistence(&self) -> CredentialPersistence {
-        CredentialPersistence::ProcessOnly
-    }
+    Ok(base.join(format!("{}.key", project_id)))
 }
 
-impl CredentialApi for InMemoryCredential {
-    fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
-        let mut store = self
-            .store
-            .lock()
-            .expect("in-memory keyring store poisoned during set");
-        store.insert(self.key.clone(), secret.to_vec());
-        Ok(())
-    }
+fn fallback_dir_error(path: &Path) -> String {
+    format!(
+        "unable to create key fallback directory at {}",
+        path.display()
+    )
+}
 
-    fn get_secret(&self) -> keyring::Result<Vec<u8>> {
-        let store = self
-            .store
-            .lock()
-            .expect("in-memory keyring store poisoned during get");
-        store.get(&self.key).cloned().ok_or(KeyringError::NoEntry)
-    }
+fn fallback_write_error(path: &Path) -> String {
+    format!("unable to write fallback key file at {}", path.display())
+}
 
-    fn delete_credential(&self) -> keyring::Result<()> {
-        let mut store = self
-            .store
-            .lock()
-            .expect("in-memory keyring store poisoned during delete");
+fn fallback_permissions_error(path: &Path) -> String {
+    format!(
+        "unable to update permissions on fallback key path at {}",
+        path.display()
+    )
+}
 
-        if store.remove(&self.key).is_some() {
-            Ok(())
-        } else {
-            Err(KeyringError::NoEntry)
-        }
-    }
+fn fallback_read_error(path: &Path) -> String {
+    format!("unable to read fallback key file at {}", path.display())
+}
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
+#[cfg(test)]
+pub(crate) fn force_fallback_for_tests() {
+    USING_FALLBACK.store(true, Ordering::SeqCst);
 }
