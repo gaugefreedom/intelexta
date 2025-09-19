@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayReport {
     pub run_id: String,
@@ -44,6 +44,10 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
                 original_digest: String::new(),
                 replay_digest: String::new(),
                 error_message: Some("run not found".to_string()),
+                semantic_original_digest: None,
+                semantic_replay_digest: None,
+                semantic_distance: None,
+                epsilon: None,
             });
         }
     };
