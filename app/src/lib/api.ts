@@ -33,6 +33,14 @@ export interface IncidentSummary {
   relatedCheckpointId?: string | null;
 }
 
+export interface ReplayReport {
+  runId: string;
+  matchStatus: boolean;
+  originalDigest: string;
+  replayDigest: string;
+  errorMessage?: string | null;
+}
+
 export interface Policy {
   allowNetwork: boolean;
   budgetTokens: number;
@@ -78,4 +86,8 @@ export async function startHelloRun(spec: HelloRunSpec): Promise<string> {
 
 export async function emitCar(runId: string): Promise<string> {
   return await invoke<string>('emit_car', { runId });
+}
+
+export async function replayRun(runId: string): Promise<ReplayReport> {
+  return await invoke<ReplayReport>('replay_run', { runId });
 }
