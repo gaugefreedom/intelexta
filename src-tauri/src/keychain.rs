@@ -39,13 +39,19 @@ pub fn store_secret(project_id: &str, secret_b64: &str) -> anyhow::Result<()> {
     initialize_backend();
 
     if !USING_FALLBACK.load(Ordering::SeqCst) {
-        let entry =
-            keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id).map_err(|err| anyhow!(err))?;
-        match entry.set_password(secret_b64) {
-            Ok(()) => return Ok(()),
+        match keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id) {
+            Ok(entry) => {
+                if let Err(err) = entry.set_password(secret_b64) {
+                    eprintln!(
+                        "[intelexta] WARNING: Failed to store secret in system keychain ({}). Falling back to filesystem.",
+                        err
+                    );
+                    USING_FALLBACK.store(true, Ordering::SeqCst);
+                }
+            }
             Err(err) => {
                 eprintln!(
-                    "[intelexta] WARNING: Failed to store secret in system keychain ({}). Falling back to filesystem.",
+                    "[intelexta] WARNING: Could not access system keychain entry ({}). Falling back to filesystem.",
                     err
                 );
                 USING_FALLBACK.store(true, Ordering::SeqCst);
@@ -53,6 +59,47 @@ pub fn store_secret(project_id: &str, secret_b64: &str) -> anyhow::Result<()> {
         }
     }
 
+    persist_secret_to_fallback(project_id, secret_b64)
+}
+
+/// Load the stored secret for the provided project identifier.
+pub fn load_secret(project_id: &str) -> anyhow::Result<String> {
+    initialize_backend();
+
+    if !USING_FALLBACK.load(Ordering::SeqCst) {
+        match keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id) {
+            Ok(entry) => match entry.get_password() {
+                Ok(secret) => return Ok(secret),
+                Err(keyring::Error::NoEntry) => {
+                    eprintln!(
+                        "[intelexta] WARNING: No matching entry found in system keychain. Falling back to filesystem."
+                    );
+                    USING_FALLBACK.store(true, Ordering::SeqCst);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[intelexta] WARNING: Failed to read secret from system keychain ({}). Falling back to filesystem.",
+                        err
+                    );
+                    USING_FALLBACK.store(true, Ordering::SeqCst);
+                }
+            },
+            Err(err) => {
+                eprintln!(
+                    "[intelexta] WARNING: Could not access system keychain entry ({}). Falling back to filesystem.",
+                    err
+                );
+                USING_FALLBACK.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    let path = get_fallback_path(project_id)?;
+    let secret = fs::read_to_string(&path).with_context(|| fallback_read_error(&path))?;
+    Ok(secret)
+}
+
+fn persist_secret_to_fallback(project_id: &str, secret_b64: &str) -> anyhow::Result<()> {
     let path = get_fallback_path(project_id)?;
     fs::write(&path, secret_b64).with_context(|| fallback_write_error(&path))?;
 
@@ -65,31 +112,6 @@ pub fn store_secret(project_id: &str, secret_b64: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// Load the stored secret for the provided project identifier.
-pub fn load_secret(project_id: &str) -> anyhow::Result<String> {
-    initialize_backend();
-
-    if !USING_FALLBACK.load(Ordering::SeqCst) {
-        let entry =
-            keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id).map_err(|err| anyhow!(err))?;
-        match entry.get_password() {
-            Ok(secret) => return Ok(secret),
-            Err(keyring::Error::NoEntry) => return Err(anyhow!(keyring::Error::NoEntry)),
-            Err(err) => {
-                eprintln!(
-                    "[intelexta] WARNING: Failed to read secret from system keychain ({}). Falling back to filesystem.",
-                    err
-                );
-                USING_FALLBACK.store(true, Ordering::SeqCst);
-            }
-        }
-    }
-
-    let path = get_fallback_path(project_id)?;
-    let secret = fs::read_to_string(&path).with_context(|| fallback_read_error(&path))?;
-    Ok(secret)
 }
 
 fn probe_system_keyring() -> keyring::Result<()> {
