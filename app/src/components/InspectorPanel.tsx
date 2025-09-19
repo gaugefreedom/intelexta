@@ -169,7 +169,7 @@ export default function InspectorPanel({
             </option>
             {runs.map((run) => (
               <option key={run.id} value={run.id}>
-                {run.name} · {new Date(run.created_at).toLocaleString()}
+                {run.name} · {new Date(run.createdAt).toLocaleString()}
               </option>
             ))}
           </select>
@@ -248,13 +248,13 @@ export default function InspectorPanel({
                         )}
                       </td>
                       <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>
-                        {ckpt.inputs_sha256 ?? "—"}
+                        {ckpt.inputsSha256 ?? "—"}
                       </td>
                       <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>
-                        {ckpt.outputs_sha256 ?? "—"}
+                        {ckpt.outputsSha256 ?? "—"}
                       </td>
                       <td style={{ padding: "4px", textAlign: "right", verticalAlign: "top" }}>
-                        {ckpt.usage_tokens}
+                        {ckpt.usageTokens}
                       </td>
                     </tr>
                   );
