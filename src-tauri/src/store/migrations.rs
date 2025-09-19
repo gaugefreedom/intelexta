@@ -5,6 +5,7 @@ const MIGRATION_SCRIPTS: &[&str] = &[
     include_str!("migrations/V1__initial_schema.sql"),
     include_str!("migrations/V2__add_semantic_digest_to_checkpoints.sql"),
     include_str!("migrations/V3__add_token_breakdown_to_checkpoints.sql"),
+    include_str!("migrations/V4__create_checkpoint_messages.sql"),
 ];
 
 pub fn runner() -> Migrations<'static> {
