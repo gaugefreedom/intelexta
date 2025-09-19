@@ -67,6 +67,10 @@ export interface HelloRunSpec {
   epsilon?: number | null;
 }
 
+export async function listLocalModels(): Promise<string[]> {
+  return await invoke<string[]>("list_local_models");
+}
+
 export async function listProjects(): Promise<Project[]> {
   return await invoke<Project[]>('list_projects');
 }

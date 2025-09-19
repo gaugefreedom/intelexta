@@ -18,6 +18,11 @@ pub fn list_projects(pool: State<DbPool>) -> Result<Vec<Project>, Error> {
 }
 
 #[tauri::command]
+pub fn list_local_models() -> Result<Vec<String>, Error> {
+    orchestrator::list_local_models().map_err(|err| Error::Api(err.to_string()))
+}
+
+#[tauri::command]
 pub fn create_project(name: String, pool: State<DbPool>) -> Result<Project, Error> {
     create_project_with_pool(name, pool.inner())
 }

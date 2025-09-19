@@ -16,7 +16,7 @@ export default function App() {
   return (
     <main style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif', background: '#1e1e1e', color: '#d4d4d4' }}>
       <div style={{ width: '250px', borderRight: '1px solid #333', padding: '8px' }}>
-        <ProjectTree onSelectProject={setSelectedProject} />
+        <ProjectTree onSelectProject={setSelectedProject} refreshToken={runsRefreshToken} />
       </div>
       <div style={{ flex: 1, display: 'flex' }}>
         <div style={{ width: '300px', borderRight: '1px solid #333', padding: '8px' }}>
