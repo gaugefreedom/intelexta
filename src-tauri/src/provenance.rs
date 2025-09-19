@@ -4,6 +4,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::Serialize;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 pub struct KeypairOut {
     pub public_key_b64: String,
@@ -49,6 +51,67 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
 }
 
+pub fn semantic_digest(text: &str) -> String {
+    const BITS: usize = 64;
+
+    if text.trim().is_empty() {
+        return format!("{:016x}", 0_u64);
+    }
+
+    let normalized = text.to_lowercase();
+    let mut features: Vec<String> = Vec::new();
+
+    let chars: Vec<char> = normalized.chars().collect();
+    if chars.len() >= 3 {
+        for window in chars.windows(3) {
+            let gram: String = window.iter().collect();
+            features.push(gram);
+        }
+    }
+
+    if features.is_empty() {
+        for token in normalized.split_whitespace() {
+            if !token.is_empty() {
+                features.push(token.to_string());
+            }
+        }
+    }
+
+    if features.is_empty() {
+        features.push(normalized);
+    }
+
+    let mut weights = [0_i64; BITS];
+
+    for feature in features {
+        let mut hasher = DefaultHasher::new();
+        feature.hash(&mut hasher);
+        let hash = hasher.finish();
+        for bit in 0..BITS {
+            if (hash >> bit) & 1 == 1 {
+                weights[bit] += 1;
+            } else {
+                weights[bit] -= 1;
+            }
+        }
+    }
+
+    let mut digest: u64 = 0;
+    for bit in 0..BITS {
+        if weights[bit] >= 0 {
+            digest |= 1 << bit;
+        }
+    }
+
+    format!("{:016x}", digest)
+}
+
+pub fn semantic_distance(a: &str, b: &str) -> Option<u32> {
+    let left = u64::from_str_radix(a, 16).ok()?;
+    let right = u64::from_str_radix(b, 16).ok()?;
+    Some((left ^ right).count_ones())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +128,26 @@ mod tests {
         let c1 = canonical_json(&s1);
         let c2 = canonical_json(&s2);
         assert_eq!(c1, c2, "JCS must produce identical bytes");
+    }
+
+    #[test]
+    fn semantic_digest_close_texts_have_small_distance() {
+        let original = "Hello world from intelexta";
+        let variant = "hello world from Intelexta!";
+        let digest_a = semantic_digest(original);
+        let digest_b = semantic_digest(variant);
+        let distance = semantic_distance(&digest_a, &digest_b).expect("valid digests");
+        assert!(
+            distance <= 8,
+            "expected small hamming distance, got {distance}"
+        );
+    }
+
+    #[test]
+    fn semantic_digest_detects_large_difference() {
+        let digest_a = semantic_digest("aaaaaaaaaa");
+        let digest_b = semantic_digest("zzzzzzzzzz");
+        let distance = semantic_distance(&digest_a, &digest_b).expect("valid digests");
+        assert!(distance > 0);
     }
 }

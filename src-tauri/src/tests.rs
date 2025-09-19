@@ -70,6 +70,8 @@ fn orchestrator_writes_incident_checkpoint_when_budget_fails() -> Result<()> {
             dag_json: "{}".into(),
             token_budget: 5,
             model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
         },
     )?;
 
@@ -103,6 +105,8 @@ fn list_checkpoints_includes_incident_payload() -> Result<()> {
             dag_json: "{}".into(),
             token_budget: 5,
             model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
         },
     )?;
 
@@ -134,6 +138,8 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
             dag_json: "{\"hello\":true}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
         },
     )?;
 
@@ -243,6 +249,8 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
         dag_json: "{\"nodes\":[]}".into(),
         token_budget: 5_000,
         model: "stub-model".into(),
+        proof_mode: orchestrator::RunProofMode::Exact,
+        epsilon: None,
     };
 
     let run_id = orchestrator::start_hello_run(&pool, run_spec.clone())?;
@@ -369,6 +377,8 @@ fn replay_exact_run_successfully_matches_digest() -> Result<()> {
             dag_json: "{}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
         },
     )?;
 
@@ -378,6 +388,10 @@ fn replay_exact_run_successfully_matches_digest() -> Result<()> {
     assert!(report.error_message.is_none());
     assert!(!report.original_digest.is_empty());
     assert_eq!(report.original_digest, report.replay_digest);
+    assert!(report.semantic_original_digest.is_none());
+    assert!(report.semantic_replay_digest.is_none());
+    assert!(report.semantic_distance.is_none());
+    assert!(report.epsilon.is_none());
 
     let mut expected_input = b"hello".to_vec();
     expected_input.extend_from_slice(&seed.to_le_bytes());
@@ -402,6 +416,8 @@ fn replay_exact_run_reports_mismatched_digest() -> Result<()> {
             dag_json: "{}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
         },
     )?;
 
@@ -422,6 +438,93 @@ fn replay_exact_run_reports_mismatched_digest() -> Result<()> {
     );
     assert_eq!(report.original_digest, "bad-digest");
     assert_ne!(report.original_digest, report.replay_digest);
+    assert!(report.semantic_original_digest.is_none());
+    assert!(report.semantic_replay_digest.is_none());
+    assert!(report.semantic_distance.is_none());
+    assert!(report.epsilon.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn replay_concordant_run_successfully_matches_semantics() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Replay Concordant".into(), &pool)?;
+    let epsilon = 5.0;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "replay-concordant".into(),
+            seed: 11,
+            dag_json: "{}".into(),
+            token_budget: 50,
+            model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Concordant,
+            epsilon: Some(epsilon),
+        },
+    )?;
+
+    let report = replay::replay_concordant_run(run_id.clone(), &pool)?;
+    assert!(report.match_status);
+    assert!(report.error_message.is_none());
+    assert_eq!(report.epsilon, Some(epsilon));
+    assert_eq!(report.semantic_distance, Some(0));
+    assert_eq!(
+        report.semantic_original_digest,
+        report.semantic_replay_digest
+    );
+
+    let api_report = api::replay_run_with_pool(run_id.clone(), &pool)?;
+    assert_eq!(api_report, report);
+
+    Ok(())
+}
+
+#[test]
+fn replay_concordant_run_detects_semantic_mismatch() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Replay Concordant Fail".into(), &pool)?;
+    let epsilon = 1.0;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "replay-concordant-fail".into(),
+            seed: 12,
+            dag_json: "{}".into(),
+            token_budget: 50,
+            model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Concordant,
+            epsilon: Some(epsilon),
+        },
+    )?;
+
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "UPDATE checkpoints SET semantic_digest = ?1 WHERE run_id = ?2",
+            params!["ffffffffffffffff", &run_id],
+        )?;
+    }
+
+    let report = replay::replay_concordant_run(run_id.clone(), &pool)?;
+    assert!(!report.match_status);
+    assert!(report
+        .error_message
+        .as_deref()
+        .unwrap_or_default()
+        .contains("semantic distance"));
+    assert_eq!(report.epsilon, Some(epsilon));
+    let distance = report.semantic_distance.expect("distance recorded");
+    assert!(f64::from(distance) > epsilon);
+
+    let api_report = api::replay_run_with_pool(run_id.clone(), &pool)?;
+    assert_eq!(api_report, report);
 
     Ok(())
 }
@@ -441,6 +544,8 @@ fn emit_car_command_writes_receipt_and_file() -> Result<()> {
             dag_json: "{}".into(),
             token_budget: 100,
             model: "stub-model".into(),
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
         },
     )?;
 

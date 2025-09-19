@@ -27,6 +27,32 @@ struct CheckpointBody<'a> {
     completion_tokens: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunProofMode {
+    Exact,
+    Concordant,
+}
+
+impl Default for RunProofMode {
+    fn default() -> Self {
+        RunProofMode::Exact
+    }
+}
+
+impl RunProofMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RunProofMode::Exact => "exact",
+            RunProofMode::Concordant => "concordant",
+        }
+    }
+
+    pub fn is_concordant(&self) -> bool {
+        matches!(self, RunProofMode::Concordant)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunSpec {
     pub project_id: String,
@@ -35,6 +61,10 @@ pub struct RunSpec {
     pub dag_json: String,
     pub token_budget: u64,
     pub model: String,
+    #[serde(default)]
+    pub proof_mode: RunProofMode,
+    #[serde(default)]
+    pub epsilon: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -52,6 +82,7 @@ impl TokenUsage {
 struct NodeExecution {
     inputs_sha256: Option<String>,
     outputs_sha256: Option<String>,
+    semantic_digest: Option<String>,
     usage: TokenUsage,
 }
 
@@ -220,10 +251,20 @@ pub(crate) fn start_hello_run_with_client(
     let run_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let spec_json = serde_json::to_string(&spec)?;
+    let run_kind = spec.proof_mode.as_str();
+
+    if spec.proof_mode.is_concordant() {
+        let epsilon = spec
+            .epsilon
+            .ok_or_else(|| anyhow!("concordant runs require an epsilon"))?;
+        if !epsilon.is_finite() || epsilon < 0.0 {
+            return Err(anyhow!("epsilon must be a finite, non-negative value"));
+        }
+    }
 
     conn.execute(
         "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1,?2,?3,?4,?5,?6)",
-        params![&run_id, &spec.project_id, &spec.name, &now, "exact", &spec_json],
+        params![&run_id, &spec.project_id, &spec.name, &now, run_kind, &spec_json],
     )?;
 
     let execution = execute_node(&spec, llm_client)?;
@@ -264,7 +305,16 @@ pub(crate) fn start_hello_run_with_client(
     let signature = provenance::sign_bytes(&signing_key, curr_chain.as_bytes());
 
     let ckpt_id = Uuid::new_v4().to_string();
-    let semantic_digest: Option<String> = None;
+    let semantic_digest = if spec.proof_mode.is_concordant() {
+        Some(
+            execution
+                .semantic_digest
+                .clone()
+                .ok_or_else(|| anyhow!("semantic digest missing for concordant run"))?,
+        )
+    } else {
+        None
+    };
     let incident_json_str = incident_value.map(|v| v.to_string());
 
     conn.execute(
@@ -299,15 +349,23 @@ fn execute_node(spec: &RunSpec, llm_client: &dyn LlmClient) -> anyhow::Result<No
     }
 }
 
+fn stub_output_bytes(seed: u64) -> Vec<u8> {
+    let mut output = b"hello".to_vec();
+    output.extend_from_slice(&seed.to_le_bytes());
+    output
+}
+
 fn execute_stub_node(spec: &RunSpec) -> NodeExecution {
-    let mut input = b"hello".to_vec();
-    input.extend_from_slice(&spec.seed.to_le_bytes());
-    let outputs_hex = provenance::sha256_hex(&input);
+    let output_bytes = stub_output_bytes(spec.seed);
+    let outputs_hex = provenance::sha256_hex(&output_bytes);
     let inputs_hex = provenance::sha256_hex(b"hello");
+    let semantic_source = hex::encode(&output_bytes);
+    let semantic_digest = provenance::semantic_digest(&semantic_source);
 
     NodeExecution {
         inputs_sha256: Some(inputs_hex),
         outputs_sha256: Some(outputs_hex),
+        semantic_digest: Some(semantic_digest),
         usage: TokenUsage {
             prompt_tokens: 0,
             completion_tokens: 10,
@@ -320,10 +378,12 @@ fn execute_llm_run(spec: &RunSpec, llm_client: &dyn LlmClient) -> anyhow::Result
     let generation = llm_client.stream_generate(&spec.model, &prompt)?;
     let inputs_hex = provenance::sha256_hex(prompt.as_bytes());
     let outputs_hex = provenance::sha256_hex(generation.response.as_bytes());
+    let semantic_digest = provenance::semantic_digest(&generation.response);
 
     Ok(NodeExecution {
         inputs_sha256: Some(inputs_hex),
         outputs_sha256: Some(outputs_hex),
+        semantic_digest: Some(semantic_digest),
         usage: generation.usage,
     })
 }
@@ -445,6 +505,8 @@ mod tests {
             dag_json: "{\"nodes\":[]}".to_string(),
             token_budget: 1_000,
             model: STUB_MODEL_ID.to_string(),
+            proof_mode: RunProofMode::Exact,
+            epsilon: None,
         };
         let spec_clone = spec.clone();
         let run_id = start_hello_run(&pool, spec)?;
@@ -603,6 +665,8 @@ mod tests {
             dag_json: "{}".to_string(),
             token_budget: 25,
             model: STUB_MODEL_ID.to_string(),
+            proof_mode: RunProofMode::Exact,
+            epsilon: None,
         };
 
         let run_id = start_hello_run(&pool, spec)?;
@@ -705,6 +769,8 @@ mod tests {
             dag_json: prompt_json.clone(),
             token_budget: 10_000,
             model: "llama3".to_string(),
+            proof_mode: RunProofMode::Exact,
+            epsilon: None,
         };
 
         let mock_client = RecordingLlmClient::new(
