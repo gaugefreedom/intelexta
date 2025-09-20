@@ -96,6 +96,145 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
     Ok(report)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{api, keychain, orchestrator, store};
+    use anyhow::Result;
+    use r2d2::Pool;
+    use r2d2_sqlite::SqliteConnectionManager;
+    use rusqlite::params;
+    use std::sync::{Mutex, Once};
+
+    struct PanicLlmClient;
+
+    impl orchestrator::LlmClient for PanicLlmClient {
+        fn stream_generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+        ) -> anyhow::Result<orchestrator::LlmGeneration> {
+            panic!("interactive start should not call LLM");
+        }
+    }
+
+    struct FixedLlmClient {
+        expected_model: String,
+        expected_prompt: String,
+        response: String,
+        usage: orchestrator::TokenUsage,
+        calls: Mutex<usize>,
+    }
+
+    impl FixedLlmClient {
+        fn new(
+            expected_model: String,
+            expected_prompt: String,
+            response: String,
+            usage: orchestrator::TokenUsage,
+        ) -> Self {
+            Self {
+                expected_model,
+                expected_prompt,
+                response,
+                usage,
+                calls: Mutex::new(0),
+            }
+        }
+    }
+
+    impl orchestrator::LlmClient for FixedLlmClient {
+        fn stream_generate(
+            &self,
+            model: &str,
+            prompt: &str,
+        ) -> anyhow::Result<orchestrator::LlmGeneration> {
+            assert_eq!(model, self.expected_model);
+            assert_eq!(prompt, self.expected_prompt);
+            let mut calls = self.calls.lock().expect("lock call count");
+            *calls += 1;
+            Ok(orchestrator::LlmGeneration {
+                response: self.response.clone(),
+                usage: self.usage,
+            })
+        }
+    }
+
+    fn init_keychain_backend() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let base_dir =
+                std::env::temp_dir().join(format!("intelexta-replay-tests-{}", std::process::id()));
+            std::fs::create_dir_all(&base_dir).expect("create replay keychain dir");
+            std::env::set_var("INTELEXTA_KEYCHAIN_DIR", &base_dir);
+        });
+        keychain::force_fallback_for_tests();
+    }
+
+    #[test]
+    fn replay_interactive_run_succeeds_after_first_turn() -> Result<()> {
+        init_keychain_backend();
+
+        let manager = SqliteConnectionManager::memory();
+        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
+        {
+            let mut conn = pool.get()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            store::migrate_db(&mut conn)?;
+        }
+
+        let project = api::create_project_with_pool("Replay Interactive".into(), &pool)?;
+        let spec = RunSpec {
+            project_id: project.id.clone(),
+            name: "interactive-replay".into(),
+            seed: 0,
+            dag_json: "{}".into(),
+            token_budget: 10_000,
+            model: "stub-model".into(),
+            proof_mode: RunProofMode::Interactive,
+            epsilon: None,
+        };
+
+        let panic_client = PanicLlmClient;
+        let run_id = orchestrator::start_hello_run_with_client(&pool, spec.clone(), &panic_client)?;
+
+        {
+            let conn = pool.get()?;
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+                params![&run_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 0);
+        }
+
+        let prompt_text = "Hello interactive".to_string();
+        let response_text = "Hi human".to_string();
+        let usage = orchestrator::TokenUsage {
+            prompt_tokens: 3,
+            completion_tokens: 5,
+        };
+        let turn_client = FixedLlmClient::new(
+            spec.model.clone(),
+            prompt_text.clone(),
+            response_text.clone(),
+            usage,
+        );
+        let outcome =
+            orchestrator::submit_turn_with_client(&pool, &run_id, &prompt_text, &turn_client)?;
+        assert_eq!(outcome.ai_response, response_text);
+        assert_eq!(*turn_client.calls.lock().unwrap(), 1);
+
+        let report = replay_interactive_run(run_id.clone(), &pool)?;
+        assert!(report.match_status);
+        assert!(report.error_message.is_none());
+        assert_eq!(report.original_digest, report.replay_digest);
+        assert!(!report.original_digest.is_empty());
+
+        Ok(())
+    }
+}
+
 pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
     let conn = pool.get()?;
 

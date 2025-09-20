@@ -658,6 +658,10 @@ pub(crate) fn start_hello_run_with_client(
         params![&run_id, &spec.project_id, &spec.name, &now, run_kind, &spec_json],
     )?;
 
+    if spec.proof_mode.is_interactive() {
+        return Ok(run_id);
+    }
+
     let execution = execute_node(&spec, llm_client)?;
     let total_usage = execution.usage.total();
     let prompt_tokens = execution.usage.prompt_tokens;
@@ -1219,6 +1223,58 @@ mod tests {
     }
 
     #[test]
+    fn start_hello_run_interactive_skips_initial_checkpoint() -> Result<()> {
+        init_keychain_backend();
+
+        let manager = SqliteConnectionManager::memory();
+        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
+        {
+            let mut conn = pool.get()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            store::migrate_db(&mut conn)?;
+        }
+
+        let project = api::create_project_with_pool("Interactive Start".into(), &pool)?;
+        let spec = RunSpec {
+            project_id: project.id.clone(),
+            name: "interactive-start".to_string(),
+            seed: 99,
+            dag_json: "{}".to_string(),
+            token_budget: 5_000,
+            model: STUB_MODEL_ID.to_string(),
+            proof_mode: RunProofMode::Interactive,
+            epsilon: None,
+        };
+        let spec_clone = spec.clone();
+
+        let start_client = RecordingLlmClient::new(
+            spec.model.clone(),
+            spec.dag_json.clone(),
+            "unused".to_string(),
+            TokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+            },
+        );
+
+        let run_id = start_hello_run_with_client(&pool, spec, &start_client)?;
+        assert_eq!(*start_client.calls.lock().unwrap(), 0);
+
+        let conn = pool.get()?;
+        let (kind, stored_spec_json, checkpoint_count): (String, String, i64) = conn.query_row(
+            "SELECT kind, spec_json, (SELECT COUNT(*) FROM checkpoints WHERE run_id = runs.id) FROM runs WHERE id = ?1",
+            params![&run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(kind, "interactive");
+        let stored_spec: RunSpec = serde_json::from_str(&stored_spec_json)?;
+        assert_eq!(stored_spec, spec_clone);
+        assert_eq!(checkpoint_count, 0);
+
+        Ok(())
+    }
+
+    #[test]
     fn submit_turn_records_usage_and_messages() -> Result<()> {
         init_keychain_backend();
 
@@ -1241,23 +1297,28 @@ mod tests {
             proof_mode: RunProofMode::Interactive,
             epsilon: None,
         };
-        let run_id = Uuid::new_v4().to_string();
-        let created_at = Utc::now().to_rfc3339();
-        let spec_json = serde_json::to_string(&run_spec)?;
+
+        let start_client = RecordingLlmClient::new(
+            run_spec.model.clone(),
+            run_spec.dag_json.clone(),
+            "unused".to_string(),
+            TokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+            },
+        );
+
+        let run_id = start_hello_run_with_client(&pool, run_spec.clone(), &start_client)?;
+        assert_eq!(*start_client.calls.lock().unwrap(), 0);
 
         {
             let conn = pool.get()?;
-            conn.execute(
-                "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    &run_id,
-                    &run_spec.project_id,
-                    &run_spec.name,
-                    &created_at,
-                    "interactive",
-                    &spec_json
-                ],
+            let checkpoint_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+                params![&run_id],
+                |row| row.get(0),
             )?;
+            assert_eq!(checkpoint_count, 0);
         }
 
         let prompt_text = "Hello partner";
