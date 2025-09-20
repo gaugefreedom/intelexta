@@ -504,7 +504,7 @@ pub(crate) fn submit_turn_with_client(
     prompt_text: &str,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<SubmitTurnOutcome> {
-    let conn = pool.get()?;
+    let mut conn = pool.get()?;
 
     let run_row: Option<(String, String, String)> = conn
         .query_row(
