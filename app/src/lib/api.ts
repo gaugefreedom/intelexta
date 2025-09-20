@@ -47,6 +47,18 @@ export interface CheckpointMessage {
   updatedAt?: string | null;
 }
 
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export interface SubmitTurnResult {
+  humanCheckpointId: string;
+  aiCheckpointId: string;
+  aiResponse: string;
+  usage: TokenUsage;
+}
+
 export interface ReplayReport {
   runId: string;
   matchStatus: boolean;
@@ -95,6 +107,13 @@ export async function listRuns(projectId: string): Promise<RunSummary[]> {
 
 export async function listCheckpoints(runId: string): Promise<CheckpointSummary[]> {
   return await invoke<CheckpointSummary[]>('list_checkpoints', { runId });
+}
+
+export async function submitTurn(
+  runId: string,
+  promptText: string,
+): Promise<SubmitTurnResult> {
+  return await invoke<SubmitTurnResult>('submit_turn', { runId, promptText });
 }
 
 export async function getPolicy(projectId: string): Promise<Policy> {
