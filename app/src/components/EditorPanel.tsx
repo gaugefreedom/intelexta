@@ -33,12 +33,6 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   React.useEffect(() => {
-    if (model !== "stub-model" && proofMode !== "concordant") {
-      setProofMode("concordant");
-    }
-  }, [model, proofMode]);
-
-  React.useEffect(() => {
     setUiState(proofMode === "interactive" ? "conversation" : "configure");
   }, [proofMode]);
 
@@ -170,7 +164,6 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
     }
   };
 
-  const stubOnlyModeDisabled = model !== "stub-model";
   const isConversationalUiActive = uiState === "conversation";
 
   return (
@@ -248,7 +241,6 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
               value="exact"
               checked={proofMode === "exact"}
               onChange={() => setProofMode("exact")}
-              disabled={stubOnlyModeDisabled}
             />
             Exact
           </label>
@@ -269,7 +261,6 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
               value="interactive"
               checked={proofMode === "interactive"}
               onChange={() => setProofMode("interactive")}
-              disabled={stubOnlyModeDisabled}
             />
             Interactive
           </label>
