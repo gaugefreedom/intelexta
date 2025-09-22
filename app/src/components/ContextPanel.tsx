@@ -1,10 +1,16 @@
 import React from "react";
+import { open } from "@tauri-apps/api/dialog";
 import {
   getPolicy,
   updatePolicy,
   Policy,
   estimateRunCost,
   type RunCostEstimates,
+  exportProject,
+  importProject,
+  importCar,
+  type ProjectImportSummary,
+  type ReplayReport,
 } from "../lib/api";
 
 interface ContextPanelProps {
@@ -28,6 +34,18 @@ export default function ContextPanel({
   const [costLoading, setCostLoading] = React.useState<boolean>(false);
   const [costError, setCostError] = React.useState<string | null>(null);
   const [costRefreshToken, setCostRefreshToken] = React.useState(0);
+
+  const [exportingProject, setExportingProject] = React.useState<boolean>(false);
+  const [exportStatus, setExportStatus] = React.useState<string | null>(null);
+  const [exportError, setExportError] = React.useState<string | null>(null);
+  const [importingProjectArchive, setImportingProjectArchive] = React.useState<boolean>(false);
+  const [projectImportStatus, setProjectImportStatus] = React.useState<string | null>(null);
+  const [projectImportError, setProjectImportError] = React.useState<string | null>(null);
+  const [lastImportSummary, setLastImportSummary] = React.useState<ProjectImportSummary | null>(null);
+  const [importingCarReceipt, setImportingCarReceipt] = React.useState<boolean>(false);
+  const [carImportError, setCarImportError] = React.useState<string | null>(null);
+  const [carReplayReport, setCarReplayReport] = React.useState<ReplayReport | null>(null);
+  const [carImportStatus, setCarImportStatus] = React.useState<string | null>(null);
 
   const costOverrunMessages = React.useMemo(() => {
     if (!costEstimates) {
@@ -78,6 +96,17 @@ export default function ContextPanel({
     return () => {
       cancelled = true;
     };
+  }, [projectId]);
+
+  React.useEffect(() => {
+    setExportStatus(null);
+    setExportError(null);
+    setProjectImportStatus(null);
+    setProjectImportError(null);
+    setLastImportSummary(null);
+    setCarImportError(null);
+    setCarReplayReport(null);
+    setCarImportStatus(null);
   }, [projectId]);
 
   React.useEffect(() => {
@@ -159,6 +188,143 @@ export default function ContextPanel({
       setSaving(false);
     }
   };
+
+  const handleExportProject = React.useCallback(async () => {
+    setExportError(null);
+    setExportStatus(null);
+    setExportingProject(true);
+    try {
+      const path = await exportProject(projectId);
+      setExportStatus(`Export saved to ${path}`);
+    } catch (err) {
+      console.error("Failed to export project", err);
+      setExportError(
+        `Failed to export project: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setExportingProject(false);
+    }
+  }, [projectId]);
+
+  const handleImportProjectArchive = React.useCallback(async () => {
+    setProjectImportError(null);
+    setProjectImportStatus(null);
+    setLastImportSummary(null);
+
+    let filePath: string | null = null;
+    try {
+      const selection = await open({
+        multiple: false,
+        filters: [{ name: "Intelexta Export", extensions: ["ixp"] }],
+      });
+      filePath = Array.isArray(selection) ? selection[0] ?? null : selection;
+    } catch (err) {
+      console.error("Failed to open project archive picker", err);
+      setProjectImportError(
+        `Could not open file picker: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+
+    if (!filePath) {
+      return;
+    }
+
+    setImportingProjectArchive(true);
+    try {
+      const summary = await importProject(filePath);
+      setLastImportSummary(summary);
+      setProjectImportStatus(
+        `Imported project ${summary.project.name} (${summary.project.id}).`,
+      );
+      onPolicyUpdated?.();
+    } catch (err) {
+      console.error("Failed to import project", err);
+      setProjectImportError(
+        `Failed to import project archive: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setImportingProjectArchive(false);
+    }
+  }, [onPolicyUpdated]);
+
+  const handleImportCarReceipt = React.useCallback(async () => {
+    setCarImportError(null);
+    setCarReplayReport(null);
+    setCarImportStatus(null);
+
+    let filePath: string | null = null;
+    try {
+      const selection = await open({
+        multiple: false,
+        filters: [{ name: "CAR Receipt", extensions: ["car.json", "json"] }],
+      });
+      filePath = Array.isArray(selection) ? selection[0] ?? null : selection;
+    } catch (err) {
+      console.error("Failed to open CAR picker", err);
+      setCarImportError(
+        `Could not open file picker: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+
+    if (!filePath) {
+      return;
+    }
+
+    setImportingCarReceipt(true);
+    try {
+      const report = await importCar(filePath);
+      setCarReplayReport(report);
+      setCarImportStatus(`Imported CAR for run ${report.runId}.`);
+      onPolicyUpdated?.();
+    } catch (err) {
+      console.error("Failed to import CAR", err);
+      setCarImportError(
+        `Failed to import CAR: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setImportingCarReceipt(false);
+    }
+  }, [onPolicyUpdated]);
+
+  const carReplayFeedback = React.useMemo(() => {
+    if (!carReplayReport) {
+      return null;
+    }
+
+    if (
+      typeof carReplayReport.epsilon === "number" &&
+      typeof carReplayReport.semanticDistance === "number"
+    ) {
+      const normalized = carReplayReport.semanticDistance / 64;
+      const comparison = normalized <= carReplayReport.epsilon ? "<=" : ">";
+      const suffix = carReplayReport.errorMessage
+        ? ` — ${carReplayReport.errorMessage}`
+        : "";
+      return {
+        tone: carReplayReport.matchStatus ? "success" : "error",
+        message: `Concordant proof ${
+          carReplayReport.matchStatus ? "PASS" : "FAIL"
+        } (distance ${normalized.toFixed(2)} ${comparison} ε=${carReplayReport.epsilon.toFixed(2)})${suffix}`,
+      };
+    }
+
+    if (carReplayReport.matchStatus) {
+      return {
+        tone: "success" as const,
+        message: `Exact proof PASS (digest ${carReplayReport.replayDigest || "∅"})`,
+      };
+    }
+
+    const details = carReplayReport.errorMessage ?? "digests differ";
+    return {
+      tone: "error" as const,
+      message: `Exact proof FAIL — ${details} (expected ${
+        carReplayReport.originalDigest || "∅"
+      }, replayed ${carReplayReport.replayDigest || "∅"})`,
+    };
+  }, [carReplayReport]);
 
   return (
     <div>
@@ -260,6 +426,76 @@ export default function ContextPanel({
       ) : (
         <p>No policy found for this project.</p>
       )}
+
+      <div
+        style={{
+          marginTop: "1.5rem",
+          paddingTop: "1rem",
+          borderTop: "1px solid #333",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Portability</h3>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <button type="button" onClick={handleExportProject} disabled={exportingProject}>
+            {exportingProject ? "Exporting…" : "Export Project"}
+          </button>
+          <button
+            type="button"
+            onClick={handleImportProjectArchive}
+            disabled={importingProjectArchive}
+          >
+            {importingProjectArchive ? "Importing…" : "Import .ixp"}
+          </button>
+          <button type="button" onClick={handleImportCarReceipt} disabled={importingCarReceipt}>
+            {importingCarReceipt ? "Verifying…" : "Import CAR"}
+          </button>
+        </div>
+
+        {exportStatus && (
+          <span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{exportStatus}</span>
+        )}
+        {exportError && (
+          <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{exportError}</span>
+        )}
+        {projectImportStatus && (
+          <span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{projectImportStatus}</span>
+        )}
+        {projectImportError && (
+          <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{projectImportError}</span>
+        )}
+        {lastImportSummary && (
+          <ul style={{ margin: 0, paddingLeft: "18px", fontSize: "0.8rem", color: "#cbd5f5" }}>
+            <li>Runs imported: {lastImportSummary.runsImported}</li>
+            <li>Checkpoints imported: {lastImportSummary.checkpointsImported}</li>
+            <li>Receipts imported: {lastImportSummary.receiptsImported}</li>
+            <li>Incidents generated: {lastImportSummary.incidentsGenerated}</li>
+          </ul>
+        )}
+        {carImportStatus && (
+          <span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{carImportStatus}</span>
+        )}
+        {carReplayFeedback && (
+          <span
+            style={{
+              color: carReplayFeedback.tone === "success" ? "#a5d6a7" : "#f48771",
+              fontSize: "0.85rem",
+            }}
+          >
+            {carReplayFeedback.message}
+          </span>
+        )}
+        {carImportError && (
+          <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{carImportError}</span>
+        )}
+        {carReplayReport && !carReplayFeedback && (
+          <span style={{ fontSize: "0.85rem", color: "#cbd5f5" }}>
+            Imported CAR for run {carReplayReport.runId}.
+          </span>
+        )}
+      </div>
     </div>
   );
 }

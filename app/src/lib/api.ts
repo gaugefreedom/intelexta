@@ -93,6 +93,14 @@ export interface ReplayReport {
   epsilon?: number | null;
 }
 
+export interface ProjectImportSummary {
+  project: Project;
+  runsImported: number;
+  checkpointsImported: number;
+  receiptsImported: number;
+  incidentsGenerated: number;
+}
+
 export interface Policy {
   allowNetwork: boolean;
   budgetTokens: number;
@@ -312,4 +320,16 @@ export async function emitCar(runId: string): Promise<string> {
 
 export async function replayRun(runId: string): Promise<ReplayReport> {
   return await invoke<ReplayReport>('replay_run', { runId });
+}
+
+export async function exportProject(projectId: string): Promise<string> {
+  return await invoke<string>('export_project', { projectId });
+}
+
+export async function importProject(archivePath: string): Promise<ProjectImportSummary> {
+  return await invoke<ProjectImportSummary>('import_project', { archivePath });
+}
+
+export async function importCar(carPath: string): Promise<ReplayReport> {
+  return await invoke<ReplayReport>('import_car', { carPath });
 }

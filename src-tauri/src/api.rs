@@ -1,6 +1,6 @@
 // In src-tauri/src/api.rs
 use crate::{
-    car, orchestrator, provenance, replay,
+    car, orchestrator, portability, provenance, replay,
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
@@ -888,4 +888,46 @@ pub fn emit_car(
         .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
     let path = emit_car_to_base_dir(&run_id, pool.inner(), &base_dir)?;
     Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn export_project(
+    project_id: String,
+    pool: State<DbPool>,
+    app_handle: AppHandle,
+) -> Result<String, Error> {
+    let base_dir = app_handle
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
+    let path = portability::export_project_archive(pool.inner(), &project_id, &base_dir)?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn import_project(
+    archive_path: String,
+    pool: State<DbPool>,
+    app_handle: AppHandle,
+) -> Result<portability::ProjectImportSummary, Error> {
+    let base_dir = app_handle
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
+    let path = PathBuf::from(archive_path);
+    portability::import_project_archive(pool.inner(), &path, &base_dir)
+}
+
+#[tauri::command]
+pub fn import_car(
+    car_path: String,
+    pool: State<DbPool>,
+    app_handle: AppHandle,
+) -> Result<replay::ReplayReport, Error> {
+    let base_dir = app_handle
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
+    let path = PathBuf::from(car_path);
+    portability::import_car_file(pool.inner(), &path, &base_dir)
 }

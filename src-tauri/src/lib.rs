@@ -40,6 +40,7 @@ pub mod governance;
 pub mod ingest;
 pub mod keychain;
 pub mod orchestrator;
+pub mod portability;
 pub mod provenance;
 pub mod replay;
 pub mod runtime;
