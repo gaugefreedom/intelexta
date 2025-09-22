@@ -8,6 +8,7 @@ const MIGRATION_SCRIPTS: &[&str] = &[
     include_str!("migrations/V4__create_checkpoint_messages.sql"),
     include_str!("migrations/V5__create_run_checkpoint_configs.sql"),
     include_str!("migrations/V6__add_checkpoint_config_reference.sql"),
+    include_str!("migrations/V7__create_checkpoint_payloads.sql"),
 ];
 
 pub fn runner() -> Migrations<'static> {

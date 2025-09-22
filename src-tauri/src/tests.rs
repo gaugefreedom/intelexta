@@ -203,6 +203,56 @@ fn list_checkpoints_includes_message_payload() -> Result<()> {
 }
 
 #[test]
+fn get_checkpoint_details_includes_payloads() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Details".into(), &pool)?;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "details-run".into(),
+            seed: 11,
+            token_budget: 100,
+            model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 100,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
+        },
+    )?;
+
+    let checkpoint_id: String = {
+        let conn = pool.get()?;
+        conn.query_row(
+            "SELECT id FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?
+    };
+
+    let details = api::get_checkpoint_details_with_pool(checkpoint_id.clone(), &pool)?;
+
+    assert_eq!(details.id, checkpoint_id);
+    assert_eq!(details.run_id, run_id);
+    assert_eq!(details.kind, "Step");
+    assert_eq!(details.prompt_payload.as_deref(), Some("{}"));
+    assert!(details.output_payload.as_ref().is_some());
+    assert!(details.inputs_sha256.as_ref().is_some());
+    assert!(details.outputs_sha256.as_ref().is_some());
+    assert_eq!(details.prompt_tokens, 0);
+    assert!(details.completion_tokens > 0);
+
+    Ok(())
+}
+
+#[test]
 fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
