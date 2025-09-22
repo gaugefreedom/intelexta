@@ -7,16 +7,27 @@ import InspectorPanel from './components/InspectorPanel';
 
 export default function App() {
   const [selectedProject, setSelectedProject] = React.useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
   const [runsRefreshToken, setRunsRefreshToken] = React.useState(0);
 
-  const handleRunStarted = React.useCallback((_: string) => {
+  const handleProjectSelect = React.useCallback((projectId: string | null) => {
+    setSelectedProject(projectId);
+    setSelectedRunId(null);
+  }, []);
+
+  const handleRunExecuted = React.useCallback((runId: string) => {
     setRunsRefreshToken((token) => token + 1);
+    setSelectedRunId(runId);
+  }, []);
+
+  const handleRunSelection = React.useCallback((runId: string | null) => {
+    setSelectedRunId(runId);
   }, []);
 
   return (
     <main style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif', background: '#1e1e1e', color: '#d4d4d4' }}>
       <div style={{ width: '250px', borderRight: '1px solid #333', padding: '8px' }}>
-        <ProjectTree onSelectProject={setSelectedProject} refreshToken={runsRefreshToken} />
+        <ProjectTree onSelectProject={handleProjectSelect} refreshToken={runsRefreshToken} />
       </div>
       <div style={{ flex: 1, display: 'flex' }}>
         <div style={{ width: '300px', borderRight: '1px solid #333', padding: '8px' }}>
@@ -24,12 +35,23 @@ export default function App() {
         </div>
         <div style={{ flex: 1, padding: '8px' }}>
           {selectedProject ? (
-            <EditorPanel projectId={selectedProject} onRunStarted={handleRunStarted} />
+            <EditorPanel
+              projectId={selectedProject}
+              selectedRunId={selectedRunId}
+              onSelectRun={handleRunSelection}
+              refreshToken={runsRefreshToken}
+              onRunExecuted={handleRunExecuted}
+            />
           ) : null}
         </div>
         <div style={{ width: '350px', borderLeft: '1px solid #333', padding: '8px' }}>
           {selectedProject ? (
-            <InspectorPanel projectId={selectedProject} refreshToken={runsRefreshToken} />
+            <InspectorPanel
+              projectId={selectedProject}
+              refreshToken={runsRefreshToken}
+              selectedRunId={selectedRunId}
+              onSelectRun={handleRunSelection}
+            />
           ) : null}
         </div>
       </div>

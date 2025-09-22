@@ -167,6 +167,10 @@ export async function reorderCheckpointConfigs(
   });
 }
 
+export async function startRun(runId: string): Promise<void> {
+  await invoke('start_run', { runId });
+}
+
 export async function reopenRun(runId: string): Promise<void> {
   await invoke('reopen_run', { runId });
 }

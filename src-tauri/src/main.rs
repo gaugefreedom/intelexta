@@ -51,6 +51,7 @@ fn main() {
             api::update_checkpoint_config,
             api::delete_checkpoint_config,
             api::reorder_checkpoint_configs,
+            api::start_run,
             api::reopen_run,
             api::clone_run,
             api::get_policy,

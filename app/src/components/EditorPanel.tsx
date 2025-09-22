@@ -3,20 +3,20 @@ import {
   CheckpointSummary,
   listCheckpoints,
   listLocalModels,
-  RunProofMode,
-  startHelloRun,
   submitTurn,
+  RunSummary,
+  listRuns,
+  listRunCheckpointConfigs,
+  RunCheckpointConfig,
+  createCheckpointConfig,
+  updateCheckpointConfig,
+  deleteCheckpointConfig,
+  reorderCheckpointConfigs,
+  CheckpointConfigRequest,
+  startRun,
 } from "../lib/api";
-
-function generateRandomSeed(): number {
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-    const array = new Uint32Array(1);
-    crypto.getRandomValues(array);
-    return array[0];
-  }
-
-  return Math.floor(Math.random() * 1_000_000_000);
-}
+import CheckpointEditor, { CheckpointFormValue } from "./CheckpointEditor";
+import CheckpointListItem from "./CheckpointListItem";
 
 type ConversationRoleCategory = "human" | "ai" | "other";
 
@@ -338,36 +338,126 @@ function InteractiveConversationView({ runId, onExit }: InteractiveConversationV
   );
 }
 
-interface EditorPanelProps {
-  projectId: string;
-  onRunStarted?: (runId: string) => void;
+function proofModeLabel(kind: string): string {
+  switch (kind) {
+    case "concordant":
+      return "Concordant";
+    case "interactive":
+      return "Interactive";
+    case "exact":
+    default:
+      return "Exact";
+  }
 }
 
-export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProps) {
-  const [name, setName] = React.useState("");
-  const [seed, setSeed] = React.useState(() => String(generateRandomSeed()));
-  const [dagJson, setDagJson] = React.useState("");
-  const [tokenBudget, setTokenBudget] = React.useState("");
-  const [model, setModel] = React.useState("stub-model");
+function sanitizeLabelForRequest(value: string, fallback: string): string {
+  const cleaned = value.replace(/\u0000/g, "").replace(/\s+/g, " " ).trim();
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+function normalizeModelSelection(value: string, options: string[], fallback: string): string {
+  const sanitized = sanitizeLabelForRequest(value, fallback);
+  const normalized = sanitized.toLowerCase();
+  const match = options.find((option) => option.toLowerCase() === normalized);
+  return match ?? sanitized;
+}
+
+function sanitizePromptForRequest(value: string): string {
+  return value.replace(/\u0000/g, "").replace(/\r\n/g, "\n").trim();
+}
+
+function clampTokenBudget(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  const clamped = Math.max(0, Math.floor(value));
+  return Math.min(clamped, Number.MAX_SAFE_INTEGER);
+}
+
+function sanitizeCheckpointFormValue(
+  value: CheckpointFormValue,
+  modelOptions: string[],
+): CheckpointConfigRequest {
+  const fallbackModel = modelOptions[0] ?? "stub-model";
+  const model = normalizeModelSelection(value.model, modelOptions, fallbackModel);
+  const checkpointType = sanitizeLabelForRequest(value.checkpointType, "Step");
+  const prompt = sanitizePromptForRequest(value.prompt);
+  const tokenBudget = clampTokenBudget(value.tokenBudget);
+  return {
+    model,
+    prompt,
+    tokenBudget,
+    checkpointType,
+  };
+}
+
+function formatRunTimestamp(value?: string): string {
+  if (!value) {
+    return "—";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
+type EditorState =
+  | { mode: "create" }
+  | { mode: "edit"; checkpoint: RunCheckpointConfig };
+
+interface EditorPanelProps {
+  projectId: string;
+  selectedRunId: string | null;
+  onSelectRun: (runId: string | null) => void;
+  refreshToken: number;
+  onRunExecuted?: (runId: string) => void;
+}
+
+export default function EditorPanel({
+  projectId,
+  selectedRunId,
+  onSelectRun,
+  refreshToken,
+  onRunExecuted,
+}: EditorPanelProps) {
+  const [runs, setRuns] = React.useState<RunSummary[]>([]);
+  const [runsLoading, setRunsLoading] = React.useState(false);
+  const [runsError, setRunsError] = React.useState<string | null>(null);
+
+  const [checkpointConfigs, setCheckpointConfigs] = React.useState<RunCheckpointConfig[]>([]);
+  const [configsLoading, setConfigsLoading] = React.useState(false);
+  const [configsError, setConfigsError] = React.useState<string | null>(null);
+  const [configsRefreshToken, setConfigsRefreshToken] = React.useState(0);
+
   const [availableModels, setAvailableModels] = React.useState<string[]>(["stub-model"]);
   const [modelsLoading, setModelsLoading] = React.useState(false);
   const [modelsError, setModelsError] = React.useState<string | null>(null);
-  const [proofMode, setProofMode] = React.useState<RunProofMode>("exact");
-  const [uiState, setUiState] = React.useState<"configure" | "conversation">("configure");
-  const [activeRunId, setActiveRunId] = React.useState<string | null>(null);
-  const [isInteractiveSession, setIsInteractiveSession] = React.useState(false);
-  const [epsilon, setEpsilon] = React.useState(0.15);
-  const [formError, setFormError] = React.useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = React.useState(false);
 
-  const handleConversationExit = React.useCallback(() => {
-    setActiveRunId(null);
-    setIsInteractiveSession(false);
-    setUiState("configure");
-    setSuccessMessage(null);
-    setFormError(null);
-  }, []);
+  const [activeEditor, setActiveEditor] = React.useState<EditorState | null>(null);
+  const [editorSubmitting, setEditorSubmitting] = React.useState(false);
+
+  const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const [executingRun, setExecutingRun] = React.useState(false);
+
+  const [uiState, setUiState] = React.useState<"builder" | "conversation">("builder");
+  const [conversationRunId, setConversationRunId] = React.useState<string | null>(null);
+
+  const combinedModelOptions = React.useMemo(() => {
+    const set = new Set<string>(availableModels);
+    for (const config of checkpointConfigs) {
+      set.add(config.model);
+    }
+    return Array.from(set).sort();
+  }, [availableModels, checkpointConfigs]);
+
+  const selectedRun = React.useMemo(() => {
+    if (!selectedRunId) {
+      return null;
+    }
+    return runs.find((run) => run.id === selectedRunId) ?? null;
+  }, [runs, selectedRunId]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -376,21 +466,18 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
     listLocalModels()
       .then((models) => {
         if (cancelled) return;
-        const filtered = models.filter((entry) => entry.trim().length > 0);
+        const filtered = models.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
         if (filtered.length === 0) {
           setAvailableModels(["stub-model"]);
-          setModel("stub-model");
-          return;
+        } else {
+          setAvailableModels(filtered);
         }
-        setAvailableModels(filtered);
-        setModel((current) => (filtered.includes(current) ? current : filtered[0]));
       })
       .catch((err) => {
         if (cancelled) return;
         console.error("Failed to load local models", err);
         setModelsError("Unable to load local models. Falling back to defaults.");
         setAvailableModels(["stub-model"]);
-        setModel("stub-model");
       })
       .finally(() => {
         if (!cancelled) {
@@ -403,272 +490,420 @@ export default function EditorPanel({ projectId, onRunStarted }: EditorPanelProp
     };
   }, []);
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setFormError(null);
-    setSuccessMessage(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    setRunsLoading(true);
+    setRunsError(null);
+    listRuns(projectId)
+      .then((runList) => {
+        if (cancelled) return;
+        setRuns(runList);
+        if (runList.length === 0) {
+          if (selectedRunId !== null) {
+            onSelectRun(null);
+          }
+          return;
+        }
+        if (!selectedRunId || !runList.some((run) => run.id === selectedRunId)) {
+          onSelectRun(runList[0].id);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Failed to load runs", err);
+        setRunsError("Could not load runs for this project.");
+        setRuns([]);
+        onSelectRun(null);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRunsLoading(false);
+        }
+      });
 
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      setFormError("Run name is required.");
-      return;
-    }
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, refreshToken, onSelectRun, selectedRunId]);
 
-    const seedInput = seed.trim();
-    if (!seedInput) {
-      setFormError("Seed is required.");
+  React.useEffect(() => {
+    if (!selectedRunId) {
+      setCheckpointConfigs([]);
+      setConfigsError(null);
+      setConfigsLoading(false);
       return;
     }
-    const parsedSeed = Number(seedInput);
-    if (
-      !Number.isFinite(parsedSeed) ||
-      !Number.isInteger(parsedSeed) ||
-      parsedSeed < 0 ||
-      parsedSeed > Number.MAX_SAFE_INTEGER
-    ) {
-      setFormError("Seed must be a non-negative integer within JavaScript's safe range.");
-      return;
-    }
+    let cancelled = false;
+    setConfigsLoading(true);
+    setConfigsError(null);
+    listRunCheckpointConfigs(selectedRunId)
+      .then((items) => {
+        if (!cancelled) {
+          setCheckpointConfigs(items);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error("Failed to load checkpoint configurations", err);
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Could not load checkpoint configurations for the selected run.";
+          setConfigsError(message);
+          setCheckpointConfigs([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setConfigsLoading(false);
+        }
+      });
 
-    const dagJsonInput = dagJson.trim();
-    if (!dagJsonInput) {
-      setFormError("DAG JSON is required.");
-      return;
-    }
-    try {
-      JSON.parse(dagJsonInput);
-    } catch (err) {
-      console.error("Invalid DAG JSON", err);
-      setFormError("DAG JSON must be valid JSON.");
-      return;
-    }
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRunId, configsRefreshToken]);
 
-    const modelInput = model.trim();
-    if (!modelInput) {
-      setFormError("Model identifier is required.");
-      return;
+  React.useEffect(() => {
+    setActiveEditor(null);
+    setEditorSubmitting(false);
+    setStatusMessage(null);
+    setErrorMessage(null);
+    if (uiState === "conversation") {
+      setUiState("builder");
+      setConversationRunId(null);
     }
+  }, [selectedRunId, uiState]);
 
-    const tokenBudgetInput = tokenBudget.trim();
-    if (!tokenBudgetInput) {
-      setFormError("Token budget is required.");
+  const handleAddCheckpoint = React.useCallback(() => {
+    if (!selectedRunId) {
       return;
     }
-    const parsedTokenBudget = Number(tokenBudgetInput);
-    if (
-      !Number.isFinite(parsedTokenBudget) ||
-      !Number.isInteger(parsedTokenBudget) ||
-      parsedTokenBudget < 0 ||
-      parsedTokenBudget > Number.MAX_SAFE_INTEGER
-    ) {
-      setFormError("Token budget must be a non-negative integer within JavaScript's safe range.");
-      return;
-    }
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setActiveEditor({ mode: "create" });
+  }, [selectedRunId]);
 
-    let epsilonValue: number | null = null;
-    if (proofMode === "concordant") {
-      epsilonValue = Number(epsilon);
-      if (!Number.isFinite(epsilonValue) || epsilonValue < 0) {
-        setFormError("Epsilon must be a finite, non-negative number.");
+  const handleEditCheckpoint = React.useCallback((config: RunCheckpointConfig) => {
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setActiveEditor({ mode: "edit", checkpoint: config });
+  }, []);
+
+  const handleCancelEditor = React.useCallback(() => {
+    setActiveEditor(null);
+    setEditorSubmitting(false);
+  }, []);
+
+  const handleEditorSubmit = React.useCallback(
+    async (formValue: CheckpointFormValue) => {
+      if (!selectedRunId || !activeEditor) {
         return;
       }
-    }
-
-    setIsSubmitting(true);
-    try {
-      const runId = await startHelloRun({
-        projectId,
-        name: trimmedName,
-        seed: parsedSeed,
-        dagJson: dagJsonInput,
-        tokenBudget: parsedTokenBudget,
-        model: modelInput,
-        proofMode,
-        epsilon: epsilonValue,
-      });
-      if (proofMode === "interactive") {
-        setActiveRunId(runId);
-        setIsInteractiveSession(true);
-        setUiState("conversation");
-        setSuccessMessage(null);
-      } else {
-        setActiveRunId(null);
-        setIsInteractiveSession(false);
-        setUiState("configure");
-        setSuccessMessage(`Run started successfully. ID: ${runId}`);
+      setEditorSubmitting(true);
+      setStatusMessage(null);
+      setErrorMessage(null);
+      const payload = sanitizeCheckpointFormValue(formValue, combinedModelOptions);
+      try {
+        if (activeEditor.mode === "create") {
+          const created = await createCheckpointConfig(selectedRunId, payload);
+          setCheckpointConfigs((previous) => {
+            const next = [...previous, created];
+            next.sort((a, b) => a.orderIndex - b.orderIndex);
+            return next;
+          });
+          setStatusMessage("Checkpoint added.");
+        } else {
+          const updated = await updateCheckpointConfig(activeEditor.checkpoint.id, payload);
+          setCheckpointConfigs((previous) => {
+            const next = previous.map((item) => (item.id === updated.id ? updated : item));
+            next.sort((a, b) => a.orderIndex - b.orderIndex);
+            return next;
+          });
+          setStatusMessage("Checkpoint updated.");
+        }
+        setActiveEditor(null);
+      } catch (err) {
+        console.error("Failed to save checkpoint configuration", err);
+        const message =
+          err instanceof Error ? err.message : "Unable to save checkpoint configuration.";
+        setErrorMessage(message);
+      } finally {
+        setEditorSubmitting(false);
       }
-      onRunStarted?.(runId);
-    } catch (err) {
-      console.error("Failed to start run", err);
-      const message = err instanceof Error ? err.message : "Failed to start run.";
-      setFormError(message);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+    },
+    [activeEditor, combinedModelOptions, selectedRunId],
+  );
 
-  const showConversation = uiState === "conversation" && isInteractiveSession && activeRunId;
+  const handleDeleteCheckpoint = React.useCallback(
+    async (config: RunCheckpointConfig) => {
+      if (!selectedRunId) {
+        return;
+      }
+      const confirmed = window.confirm(
+        `Delete checkpoint "${config.checkpointType}" from this run?`,
+      );
+      if (!confirmed) {
+        return;
+      }
+      setStatusMessage(null);
+      setErrorMessage(null);
+      const previous = checkpointConfigs.map((item) => ({ ...item }));
+      const optimistic = checkpointConfigs
+        .filter((item) => item.id !== config.id)
+        .map((item, index) => ({ ...item, orderIndex: index }));
+      setCheckpointConfigs(optimistic);
+      try {
+        await deleteCheckpointConfig(config.id);
+        setStatusMessage("Checkpoint deleted.");
+        setActiveEditor(null);
+        setConfigsRefreshToken((token) => token + 1);
+      } catch (err) {
+        console.error("Failed to delete checkpoint configuration", err);
+        const message =
+          err instanceof Error ? err.message : "Unable to delete checkpoint configuration.";
+        setErrorMessage(message);
+        setCheckpointConfigs(previous);
+      }
+    },
+    [checkpointConfigs, selectedRunId],
+  );
+
+  const handleReorderCheckpoint = React.useCallback(
+    async (index: number, offset: number) => {
+      if (!selectedRunId) {
+        return;
+      }
+      const targetIndex = index + offset;
+      if (targetIndex < 0 || targetIndex >= checkpointConfigs.length) {
+        return;
+      }
+      setStatusMessage(null);
+      setErrorMessage(null);
+      const original = checkpointConfigs.map((item) => ({ ...item }));
+      const reordered = checkpointConfigs.map((item) => ({ ...item }));
+      const [moved] = reordered.splice(index, 1);
+      reordered.splice(targetIndex, 0, moved);
+      const optimistic = reordered.map((item, position) => ({ ...item, orderIndex: position }));
+      setCheckpointConfigs(optimistic);
+      try {
+        const updated = await reorderCheckpointConfigs(
+          selectedRunId,
+          optimistic.map((item) => item.id),
+        );
+        setCheckpointConfigs(updated);
+        setStatusMessage("Checkpoint order updated.");
+      } catch (err) {
+        console.error("Failed to reorder checkpoints", err);
+        const message = err instanceof Error ? err.message : "Unable to reorder checkpoints.";
+        setErrorMessage(message);
+        setCheckpointConfigs(original);
+      }
+    },
+    [checkpointConfigs, selectedRunId],
+  );
+
+  const handleExecuteRun = React.useCallback(async () => {
+    if (!selectedRunId) {
+      return;
+    }
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setExecutingRun(true);
+    try {
+      await startRun(selectedRunId);
+      setStatusMessage("Run executed successfully.");
+      onRunExecuted?.(selectedRunId);
+    } catch (err) {
+      console.error("Failed to execute run", err);
+      const message = err instanceof Error ? err.message : "Unable to execute run.";
+      setErrorMessage(message);
+    } finally {
+      setExecutingRun(false);
+    }
+  }, [selectedRunId, onRunExecuted]);
+
+  const handleOpenConversation = React.useCallback(() => {
+    if (!selectedRun) {
+      return;
+    }
+    if (selectedRun.kind !== "interactive") {
+      setErrorMessage("Interactive conversation is only available for interactive runs.");
+      return;
+    }
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setConversationRunId(selectedRun.id);
+    setUiState("conversation");
+  }, [selectedRun]);
+
+  const handleConversationExit = React.useCallback(() => {
+    setUiState("builder");
+    setConversationRunId(null);
+  }, []);
+
+  const disableExecute =
+    !selectedRun || selectedRun.kind === "interactive" || executingRun || checkpointConfigs.length === 0;
 
   return (
     <div>
-      <h2>Editor</h2>
+      <h2>Workflow Builder</h2>
       <div style={{ fontSize: "0.85rem", marginBottom: "0.75rem", color: "#9cdcfe" }}>
         Project: {projectId}
       </div>
-      {showConversation ? (
-        <InteractiveConversationView runId={activeRunId!} onExit={handleConversationExit} />
+      {uiState === "conversation" && conversationRunId ? (
+        <InteractiveConversationView runId={conversationRunId} onExit={handleConversationExit} />
       ) : (
-        <form
-          onSubmit={handleSubmit}
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-            maxWidth: "600px",
-          }}
-        >
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            Run name
-            <input
-              type="text"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="e.g. Hello world"
-            />
-          </label>
-
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            Seed
-            <input
-              type="number"
-              inputMode="numeric"
-              value={seed}
-              onChange={(event) => setSeed(event.target.value)}
-              placeholder="0"
-              min={0}
-            />
-          </label>
-
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            Model
-            <select
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              disabled={modelsLoading || availableModels.length === 0}
-            >
-              {availableModels.map((modelId) => (
-                <option key={modelId} value={modelId}>
-                  {modelId}
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              Run
+              <select
+                value={selectedRunId ?? ""}
+                onChange={(event) => onSelectRun(event.target.value || null)}
+                disabled={runsLoading || runs.length === 0}
+              >
+                <option value="" disabled>
+                  {runsLoading ? "Loading…" : "Select a run"}
                 </option>
-              ))}
-            </select>
-            {modelsLoading ? (
-              <span style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Loading local models…</span>
-            ) : modelsError ? (
-              <span style={{ fontSize: "0.75rem", color: "#f48771" }}>{modelsError}</span>
+                {runs.map((run) => (
+                  <option key={run.id} value={run.id}>
+                    {`${run.name} · ${formatRunTimestamp(run.createdAt)}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
+            {!runsLoading && runs.length === 0 ? (
+              <span style={{ fontSize: "0.85rem", color: "#808080" }}>
+                No runs found for this project.
+              </span>
             ) : null}
-          </label>
+          </section>
 
-          <fieldset
-            style={{
-              border: "1px solid #333",
-              borderRadius: "6px",
-              padding: "8px 12px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "8px",
-            }}
-          >
-            <legend style={{ padding: "0 4px" }}>Proof mode</legend>
-            <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <input
-                type="radio"
-                name="proof-mode"
-                value="exact"
-                checked={proofMode === "exact"}
-                onChange={() => setProofMode("exact")}
-              />
-              Exact
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <input
-                type="radio"
-                name="proof-mode"
-                value="concordant"
-                checked={proofMode === "concordant"}
-                onChange={() => setProofMode("concordant")}
-              />
-              Concordant
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <input
-                type="radio"
-                name="proof-mode"
-                value="interactive"
-                checked={proofMode === "interactive"}
-                onChange={() => setProofMode("interactive")}
-              />
-              Interactive
-            </label>
-            {proofMode === "concordant" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                <label style={{ fontSize: "0.85rem", color: "#9cdcfe" }}>
-                  Semantic tolerance (ε)
-                </label>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={epsilon}
-                  onChange={(event) => setEpsilon(Number(event.target.value))}
-                />
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem" }}>
-                  <span>0.00</span>
-                  <span>
-                    ε = {epsilon.toFixed(2)}
-                  </span>
-                  <span>1.00</span>
+          {selectedRun ? (
+            <>
+              <section
+                style={{
+                  border: "1px solid #333",
+                  borderRadius: "8px",
+                  padding: "12px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ fontSize: "1rem", fontWeight: 600 }}>Run metadata</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "8px" }}>
+                  <div>
+                    <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Name</div>
+                    <div>{selectedRun.name}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Proof mode</div>
+                    <div>{proofModeLabel(selectedRun.kind)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Created</div>
+                    <div>{formatRunTimestamp(selectedRun.createdAt)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Run ID</div>
+                    <div style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{selectedRun.id}</div>
+                  </div>
                 </div>
-              </div>
-            )}
-            {proofMode === "interactive" && (
-              <div style={{ fontSize: "0.8rem", color: "#4ec9b0" }}>
-                Interactive runs open the conversational workspace after launch.
-              </div>
-            )}
-          </fieldset>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button type="button" onClick={handleExecuteRun} disabled={disableExecute}>
+                    {executingRun ? "Executing…" : "Execute Full Run"}
+                  </button>
+                  {selectedRun.kind === "interactive" && (
+                    <button type="button" onClick={handleOpenConversation}>
+                      Open Interactive Session
+                    </button>
+                  )}
+                </div>
+                {selectedRun.kind === "interactive" && (
+                  <span style={{ fontSize: "0.8rem", color: "#c586c0" }}>
+                    Interactive runs execute through the conversational workspace.
+                  </span>
+                )}
+              </section>
 
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            DAG JSON
-            <textarea
-              value={dagJson}
-              onChange={(event) => setDagJson(event.target.value)}
-              rows={8}
-              placeholder='{ "nodes": [] }'
-              style={{ fontFamily: "monospace" }}
-            />
-          </label>
+              {statusMessage && (
+                <div style={{ color: "#b5cea8" }}>{statusMessage}</div>
+              )}
+              {errorMessage && <div style={{ color: "#f48771" }}>{errorMessage}</div>}
 
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            Token budget
-            <input
-              type="number"
-              inputMode="numeric"
-              value={tokenBudget}
-              onChange={(event) => setTokenBudget(event.target.value)}
-              placeholder="1000"
-              min={0}
-            />
-          </label>
+              <section style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: "1rem", fontWeight: 600 }}>Checkpoint sequence</div>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    {modelsLoading && (
+                      <span style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Loading models…</span>
+                    )}
+                    {modelsError && (
+                      <span style={{ fontSize: "0.75rem", color: "#f48771" }}>{modelsError}</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleAddCheckpoint}
+                      disabled={!selectedRunId || activeEditor !== null || editorSubmitting}
+                    >
+                      + Add checkpoint
+                    </button>
+                  </div>
+                </div>
+                {configsError && <div style={{ color: "#f48771" }}>{configsError}</div>}
+                {configsLoading ? (
+                  <div style={{ color: "#9cdcfe" }}>Loading checkpoint configurations…</div>
+                ) : checkpointConfigs.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    {checkpointConfigs.map((config, index) => (
+                      <CheckpointListItem
+                        key={config.id}
+                        config={config}
+                        onEdit={handleEditCheckpoint}
+                        onDelete={handleDeleteCheckpoint}
+                        onMoveUp={() => handleReorderCheckpoint(index, -1)}
+                        onMoveDown={() => handleReorderCheckpoint(index, 1)}
+                        isFirst={index === 0}
+                        isLast={index === checkpointConfigs.length - 1}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: "0.85rem", color: "#808080" }}>
+                    No checkpoints configured for this run yet.
+                  </div>
+                )}
+              </section>
 
-          <button type="submit" disabled={isSubmitting} style={{ alignSelf: "flex-start" }}>
-            {isSubmitting ? "Starting…" : "Start run"}
-          </button>
-
-          {formError && <div style={{ color: "#f48771" }}>{formError}</div>}
-          {successMessage && <div style={{ color: "#b5cea8" }}>{successMessage}</div>}
-        </form>
+              {activeEditor && (
+                <CheckpointEditor
+                  availableModels={combinedModelOptions}
+                  initialValue={
+                    activeEditor.mode === "edit"
+                      ? {
+                          checkpointType: activeEditor.checkpoint.checkpointType,
+                          model: activeEditor.checkpoint.model,
+                          tokenBudget: activeEditor.checkpoint.tokenBudget,
+                          prompt: activeEditor.checkpoint.prompt,
+                        }
+                      : undefined
+                  }
+                  mode={activeEditor.mode}
+                  onSubmit={handleEditorSubmit}
+                  onCancel={handleCancelEditor}
+                  submitting={editorSubmitting}
+                />
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: "0.85rem", color: "#808080" }}>
+              Select a run to manage its checkpoint sequence.
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
