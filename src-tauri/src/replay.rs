@@ -4,11 +4,15 @@ use crate::{
     provenance, DbPool,
 };
 use anyhow::{anyhow, Context, Result};
+#[cfg(feature = "interactive")]
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+#[cfg(feature = "interactive")]
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "interactive")]
 use serde_json::Value;
+#[cfg(feature = "interactive")]
 use std::convert::TryInto;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -135,6 +139,7 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "interactive")]
 mod tests {
     use super::*;
     use crate::{api, keychain, orchestrator, store};
@@ -404,6 +409,7 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
     Ok(report)
 }
 
+#[cfg(feature = "interactive")]
 #[derive(Serialize)]
 struct ReplayCheckpointBody<'a> {
     run_id: &'a str,
@@ -417,6 +423,7 @@ struct ReplayCheckpointBody<'a> {
     completion_tokens: u64,
 }
 
+#[cfg(feature = "interactive")]
 struct InteractiveCheckpointRow {
     id: String,
     parent_checkpoint_id: Option<String>,
@@ -434,6 +441,7 @@ struct InteractiveCheckpointRow {
     completion_tokens: u64,
 }
 
+#[cfg(feature = "interactive")]
 pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
     let conn = pool.get()?;
 

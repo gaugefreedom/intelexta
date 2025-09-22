@@ -186,6 +186,7 @@ pub struct LlmGeneration {
     pub usage: TokenUsage,
 }
 
+#[cfg(feature = "interactive")]
 #[derive(Debug, Clone, Serialize)]
 pub struct SubmitTurnOutcome {
     pub human_checkpoint_id: String,
@@ -569,6 +570,7 @@ fn persist_checkpoint(
     })
 }
 
+#[cfg(feature = "interactive")]
 fn sum_checkpoint_token_usage(
     conn: &Connection,
     run_id: &str,
@@ -721,6 +723,7 @@ fn load_last_checkpoint(
     Ok(row)
 }
 
+#[cfg(feature = "interactive")]
 fn load_last_checkpoint_for_config(
     conn: &Connection,
     run_id: &str,
@@ -746,6 +749,7 @@ fn load_last_checkpoint_for_config(
     Ok(row)
 }
 
+#[cfg(feature = "interactive")]
 fn load_interactive_messages(
     conn: &Connection,
     run_id: &str,
@@ -769,6 +773,7 @@ fn load_interactive_messages(
     Ok(messages)
 }
 
+#[cfg(feature = "interactive")]
 fn build_interactive_prompt(
     template_prompt: &str,
     transcript: &[(String, String)],
@@ -797,6 +802,7 @@ fn build_interactive_prompt(
     prompt
 }
 
+#[cfg(feature = "interactive")]
 pub fn submit_interactive_checkpoint_turn(
     pool: &DbPool,
     run_id: &str,
@@ -813,6 +819,7 @@ pub fn submit_interactive_checkpoint_turn(
     )
 }
 
+#[cfg(feature = "interactive")]
 pub(crate) fn submit_interactive_checkpoint_turn_with_client(
     pool: &DbPool,
     run_id: &str,
@@ -967,6 +974,7 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
     })
 }
 
+#[cfg(feature = "interactive")]
 pub fn finalize_interactive_checkpoint(
     pool: &DbPool,
     run_id: &str,
@@ -1714,6 +1722,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "interactive")]
     #[test]
     fn start_hello_run_interactive_skips_initial_checkpoint() -> Result<()> {
         init_keychain_backend();
@@ -1779,6 +1788,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "interactive")]
     #[test]
     fn submit_turn_records_usage_and_messages() -> Result<()> {
         init_keychain_backend();
@@ -1941,6 +1951,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "interactive")]
     #[test]
     fn submit_turn_rejects_when_budget_exceeded() -> Result<()> {
         init_keychain_backend();
@@ -2056,6 +2067,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "interactive")]
     #[test]
     fn finalize_interactive_checkpoint_requires_transcript() -> Result<()> {
         init_keychain_backend();

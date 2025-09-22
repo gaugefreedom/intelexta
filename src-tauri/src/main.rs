@@ -9,60 +9,85 @@ use tauri::Manager;
 use intelexta::{api, keychain, runtime, store};
 
 fn main() {
-    tauri::Builder::default()
-        .setup(|app| {
-            keychain::initialize_backend();
+    let builder = tauri::Builder::default().setup(|app| {
+        keychain::initialize_backend();
 
-            runtime::initialize().expect("failed to initialize runtime");
+        runtime::initialize().expect("failed to initialize runtime");
 
-            let app_data_dir = app
-                .path()
-                .app_local_data_dir()
-                .expect("failed to find app data dir");
+        let app_data_dir = app
+            .path()
+            .app_local_data_dir()
+            .expect("failed to find app data dir");
 
-            std::fs::create_dir_all(&app_data_dir)?;
+        std::fs::create_dir_all(&app_data_dir)?;
 
-            let db_path = app_data_dir.join("intelexta.sqlite");
+        let db_path = app_data_dir.join("intelexta.sqlite");
 
-            let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
-            let pool = r2d2::Pool::new(manager).expect("failed to create db pool");
+        let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
+        let pool = r2d2::Pool::new(manager).expect("failed to create db pool");
 
-            // --- FIX IS HERE ---
-            // 1. Get a mutable connection from the pool.
-            let mut conn = pool.get()?;
-            // 2. Pass a mutable reference to the migrate function.
-            store::migrate_db(&mut conn)?;
-            // --- END FIX ---
+        // --- FIX IS HERE ---
+        // 1. Get a mutable connection from the pool.
+        let mut conn = pool.get()?;
+        // 2. Pass a mutable reference to the migrate function.
+        store::migrate_db(&mut conn)?;
+        // --- END FIX ---
 
-            app.manage(pool);
+        app.manage(pool);
 
-            Ok(())
-        })
-        // Add our API commands to the handler
-        .invoke_handler(tauri::generate_handler![
-            api::create_project,
-            api::list_projects,
-            api::list_local_models,
-            api::create_run,
-            api::start_hello_run,
-            api::list_runs,
-            api::list_checkpoints,
-            api::open_interactive_checkpoint_session,
-            api::list_run_checkpoint_configs,
-            api::create_checkpoint_config,
-            api::update_checkpoint_config,
-            api::delete_checkpoint_config,
-            api::reorder_checkpoint_configs,
-            api::submit_interactive_checkpoint_turn,
-            api::finalize_interactive_checkpoint,
-            api::start_run,
-            api::reopen_run,
-            api::clone_run,
-            api::get_policy,
-            api::update_policy,
-            api::replay_run,
-            api::emit_car
-        ])
+        Ok(())
+    });
+
+    #[cfg(feature = "interactive")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        api::create_project,
+        api::list_projects,
+        api::list_local_models,
+        api::create_run,
+        api::start_hello_run,
+        api::list_runs,
+        api::list_checkpoints,
+        api::open_interactive_checkpoint_session,
+        api::list_run_checkpoint_configs,
+        api::create_checkpoint_config,
+        api::update_checkpoint_config,
+        api::delete_checkpoint_config,
+        api::reorder_checkpoint_configs,
+        api::submit_interactive_checkpoint_turn,
+        api::finalize_interactive_checkpoint,
+        api::start_run,
+        api::reopen_run,
+        api::clone_run,
+        api::get_policy,
+        api::update_policy,
+        api::replay_run,
+        api::emit_car
+    ]);
+
+    #[cfg(not(feature = "interactive"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        api::create_project,
+        api::list_projects,
+        api::list_local_models,
+        api::create_run,
+        api::start_hello_run,
+        api::list_runs,
+        api::list_checkpoints,
+        api::list_run_checkpoint_configs,
+        api::create_checkpoint_config,
+        api::update_checkpoint_config,
+        api::delete_checkpoint_config,
+        api::reorder_checkpoint_configs,
+        api::start_run,
+        api::reopen_run,
+        api::clone_run,
+        api::get_policy,
+        api::update_policy,
+        api::replay_run,
+        api::emit_car
+    ]);
+
+    builder
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, _event| {});

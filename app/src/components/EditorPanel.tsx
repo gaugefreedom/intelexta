@@ -18,7 +18,11 @@ import {
   openInteractiveCheckpointSession,
   submitInteractiveCheckpointTurn,
   finalizeInteractiveCheckpoint,
+  type OpenInteractiveCheckpointSession,
+  type SubmitInteractiveCheckpointTurn,
+  type FinalizeInteractiveCheckpoint,
 } from "../lib/api";
+import { interactiveFeatureEnabled } from "../lib/featureFlags";
 import CheckpointEditor, { CheckpointFormValue } from "./CheckpointEditor";
 import CheckpointListItem from "./CheckpointListItem";
 
@@ -94,12 +98,18 @@ interface InteractiveConversationViewProps {
   runId: string;
   checkpointId: string;
   onExit: () => void;
+  openSession: OpenInteractiveCheckpointSession;
+  submitTurn: SubmitInteractiveCheckpointTurn;
+  finalizeSession: FinalizeInteractiveCheckpoint;
 }
 
 function InteractiveConversationView({
   runId,
   checkpointId,
   onExit,
+  openSession,
+  submitTurn,
+  finalizeSession,
 }: InteractiveConversationViewProps) {
   const [checkpointConfig, setCheckpointConfig] = React.useState<RunCheckpointConfig | null>(
     null,
@@ -115,9 +125,9 @@ function InteractiveConversationView({
   const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
 
   const refreshSession = React.useCallback(async () => {
-    const session = await openInteractiveCheckpointSession(runId, checkpointId);
+    const session = await openSession(runId, checkpointId);
     return session;
-  }, [runId, checkpointId]);
+  }, [runId, checkpointId, openSession]);
 
   React.useEffect(() => {
     setMessages([]);
@@ -203,7 +213,7 @@ function InteractiveConversationView({
     ]);
 
     try {
-      await submitInteractiveCheckpointTurn(runId, checkpointId, trimmed);
+      await submitTurn(runId, checkpointId, trimmed);
       const session = await refreshSession();
       setCheckpointConfig(session.checkpoint);
       setMessages(extractMessagesFromCheckpoints(session.messages));
@@ -229,7 +239,7 @@ function InteractiveConversationView({
     setFinalizeMessage(null);
     setFinalizeError(null);
     try {
-      await finalizeInteractiveCheckpoint(runId, checkpointId);
+      await finalizeSession(runId, checkpointId);
       setFinalizeMessage("Transcript finalized.");
     } catch (err) {
       console.error("Failed to finalize interactive checkpoint", err);
@@ -519,6 +529,30 @@ export default function EditorPanel({
   const [conversationContext, setConversationContext] = React.useState<
     { runId: string; checkpointId: string } | null
   >(null);
+
+  const interactiveSupport:
+    | {
+        openSession: OpenInteractiveCheckpointSession;
+        submitTurn: SubmitInteractiveCheckpointTurn;
+        finalizeSession: FinalizeInteractiveCheckpoint;
+      }
+    | null =
+    interactiveFeatureEnabled &&
+    openInteractiveCheckpointSession &&
+    submitInteractiveCheckpointTurn &&
+    finalizeInteractiveCheckpoint
+      ? {
+          openSession: openInteractiveCheckpointSession as OpenInteractiveCheckpointSession,
+          submitTurn: submitInteractiveCheckpointTurn as SubmitInteractiveCheckpointTurn,
+          finalizeSession: finalizeInteractiveCheckpoint as FinalizeInteractiveCheckpoint,
+        }
+      : null;
+
+  React.useEffect(() => {
+    if (!interactiveSupport) {
+      setConversationContext(null);
+    }
+  }, [interactiveSupport]);
 
   const combinedModelOptions = React.useMemo(() => {
     const set = new Set<string>(availableModels);
@@ -980,14 +1014,14 @@ export default function EditorPanel({
 
   const handleOpenInteractiveCheckpoint = React.useCallback(
     (config: RunCheckpointConfig) => {
-      if (!selectedRunId) {
+      if (!selectedRunId || !interactiveSupport) {
         return;
       }
       setStatusMessage(null);
       setErrorMessage(null);
       setConversationContext({ runId: selectedRunId, checkpointId: config.id });
     },
-    [selectedRunId],
+    [interactiveSupport, selectedRunId],
   );
 
   const handleConversationExit = React.useCallback(() => {
@@ -1004,11 +1038,14 @@ export default function EditorPanel({
       <div style={{ fontSize: "0.85rem", marginBottom: "0.75rem", color: "#9cdcfe" }}>
         Project: {projectId}
       </div>
-      {conversationContext ? (
+      {conversationContext && interactiveSupport ? (
         <InteractiveConversationView
           runId={conversationContext.runId}
           checkpointId={conversationContext.checkpointId}
           onExit={handleConversationExit}
+          openSession={interactiveSupport.openSession}
+          submitTurn={interactiveSupport.submitTurn}
+          finalizeSession={interactiveSupport.finalizeSession}
         />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -1104,9 +1141,14 @@ export default function EditorPanel({
                     {cloningRun ? "Cloning…" : "Clone run"}
                   </button>
                 </div>
-                {hasInteractiveCheckpoint && (
+                {hasInteractiveCheckpoint && interactiveSupport && (
                   <span style={{ fontSize: "0.8rem", color: "#c586c0" }}>
                     This run contains interactive checkpoints. Manage them via the chat controls below.
+                  </span>
+                )}
+                {hasInteractiveCheckpoint && !interactiveSupport && (
+                  <span style={{ fontSize: "0.8rem", color: "#c586c0" }}>
+                    This run includes interactive checkpoints, but chat controls are disabled in this build.
                   </span>
                 )}
               </section>
@@ -1150,7 +1192,9 @@ export default function EditorPanel({
                         onMoveDown={() => handleReorderCheckpoint(index, 1)}
                         isFirst={index === 0}
                         isLast={index === checkpointConfigs.length - 1}
-                        onOpenInteractive={handleOpenInteractiveCheckpoint}
+                        onOpenInteractive={
+                          interactiveSupport ? handleOpenInteractiveCheckpoint : undefined
+                        }
                       />
                     ))}
                   </div>
