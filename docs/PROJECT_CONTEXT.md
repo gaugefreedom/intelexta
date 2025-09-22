@@ -373,6 +373,61 @@ Phase 2: Frontend for Conversational UI
     • REPLAY-03 (Process Proof): Replaying an Interactive run successfully verifies the entire checkpoint chain and signature integrity, returning a "PASS" status for the process proof.
     • UI-04 (Attribution): Each message in the conversation view is clearly marked as either "Human" or "AI," and provides a way to view its associated checkpoint ID.
 
+Sprint 3A-0: V1 Polish & Refined Plan
+
+The original Sprint 3A plan is excellent but ambitious. After fixing the bugs, the priority should be on making the application robust and usable. The "Negotiated Co-Agency" feature is complex and should be treated as a stretch goal.
+
+Here is a revised, prioritized plan for the agent.
+
+1. Sprint Goal
+
+"Transition from a feature-complete prototype to a polished and shippable V1.0 by implementing robust asynchronous feedback, comprehensive error handling, and project portability."
+
+2. Actionable Steps & Tasks
+
+Phase 1: User Experience & Robustness (Highest Priority)
+
+    Task: Implement Asynchronous Task Handling
+
+        Problem: Long-running AI calls freeze the UI.
+
+        Agent Instruction: Refactor the start_hello_run and replay_run API calls. Use tauri::async_runtime::spawn in the Rust backend to run the orchestrator logic on a background thread. In the frontend, disable the "Start Run" and "Replay" buttons and show a loading spinner while the background task is running. The UI must remain responsive.
+
+    Task: Implement a Global Notification System
+
+        Problem: Backend errors are silent or only appear in the console.
+
+        Agent Instruction: Implement a "toast" notification system in the frontend (App.tsx). Create a global React Context for notifications. Wrap all Tauri invoke calls in a helper function within app/src/lib/api.ts that automatically catches any Err result from Rust and pushes a user-friendly error message to the notification context.
+
+    Task: Create the "Onboarding" / Empty State
+
+        Problem: The app is a blank, confusing screen for new users.
+
+        Agent Instruction: In app/src/components/ProjectTree.tsx, if the list of projects is empty, display a welcoming message with a brief explanation of the app and a prominent "Create Your First Project" button.
+
+Phase 2: Project Portability
+
+    Task: Implement Project Export (.ixp)
+
+        Problem: Users cannot backup or share their work.
+
+        Agent Instruction: Implement the export_project Tauri command as described in the plan. The function should gather all project data (policy, runs, checkpoints), package it into a structured .zip archive with an .ixp extension, and save it to the user's default downloads directory. Report the final file path to the UI via a success notification.
+
+Phase 3: Negotiated Co-Agency (Stretch Goal)
+
+    Task: Implement AI Budget Request & Human Approval
+
+        Problem: The AI is limited by its initial budget and cannot ask for more resources.
+
+        Agent Instruction: If all previous tasks are complete and stable, proceed with this feature.
+
+            In the backend, teach the orchestrator to parse a special token like [ACTION:REQUEST_BUDGET:500] in the AI's response during an interactive turn.
+
+            When this token is detected, halt execution and return a special status to the frontend.
+
+            In the frontend, render a special message bubble with "[Approve]" and "[Deny]" buttons.
+
+            Create a new resolve_action Tauri command that records the user's decision as a new, signed checkpoint and resumes or terminates the run accordingly.
 
 **Intelexta - Sprint 3A Implementation Plan (V1 Polish)**
 Based on: PROJECT_CONTEXT.md v3
