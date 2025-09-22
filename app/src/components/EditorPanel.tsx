@@ -11,7 +11,10 @@ import {
   deleteCheckpointConfig,
   reorderCheckpointConfigs,
   CheckpointConfigRequest,
+  createRun,
   startRun,
+  reopenRun,
+  cloneRun,
   openInteractiveCheckpointSession,
   submitInteractiveCheckpointTurn,
   finalizeInteractiveCheckpoint,
@@ -479,6 +482,7 @@ interface EditorPanelProps {
   onSelectRun: (runId: string | null) => void;
   refreshToken: number;
   onRunExecuted?: (runId: string) => void;
+  onRunsMutated?: () => void;
 }
 
 export default function EditorPanel({
@@ -487,6 +491,7 @@ export default function EditorPanel({
   onSelectRun,
   refreshToken,
   onRunExecuted,
+  onRunsMutated,
 }: EditorPanelProps) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
   const [runsLoading, setRunsLoading] = React.useState(false);
@@ -507,6 +512,9 @@ export default function EditorPanel({
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [executingRun, setExecutingRun] = React.useState(false);
+  const [creatingRun, setCreatingRun] = React.useState(false);
+  const [reopeningRun, setReopeningRun] = React.useState(false);
+  const [cloningRun, setCloningRun] = React.useState(false);
 
   const [conversationContext, setConversationContext] = React.useState<
     { runId: string; checkpointId: string } | null
@@ -664,6 +672,74 @@ export default function EditorPanel({
     });
   }, [checkpointConfigs]);
 
+  const handleCreateRun = React.useCallback(async () => {
+    if (creatingRun) {
+      return;
+    }
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setCreatingRun(true);
+    try {
+      const fallbackModel = availableModels[0] ?? "stub-model";
+      const timestampLabel = new Date().toLocaleString();
+      const generatedName = `New run ${timestampLabel}`;
+      const randomSeed = Math.floor(Math.random() * 1_000_000_000);
+      const runId = await createRun({
+        projectId,
+        name: generatedName,
+        proofMode: "exact",
+        seed: randomSeed,
+        tokenBudget: 1_000,
+        defaultModel: fallbackModel,
+      });
+
+      let runList: RunSummary[] | null = null;
+      try {
+        runList = await listRuns(projectId);
+      } catch (refreshErr) {
+        console.error("Failed to refresh run list after creation", refreshErr);
+        setRunsError(
+          "Run was created, but the run list could not be refreshed automatically.",
+        );
+      }
+
+      if (runList) {
+        setRuns(runList);
+        setRunsError(null);
+      } else {
+        const fallbackCreatedAt = new Date().toISOString();
+        setRuns((previous) => {
+          const filtered = previous.filter((item) => item.id !== runId);
+          return [
+            {
+              id: runId,
+              name: generatedName,
+              createdAt: fallbackCreatedAt,
+              kind: "exact",
+            },
+            ...filtered,
+          ];
+        });
+      }
+
+      onSelectRun(runId);
+      setStatusMessage("Run created. Configure checkpoints before execution.");
+      onRunsMutated?.();
+    } catch (err) {
+      console.error("Failed to create run", err);
+      const message = err instanceof Error ? err.message : "Unable to create run.";
+      setErrorMessage(message);
+    } finally {
+      setCreatingRun(false);
+    }
+  }, [
+    creatingRun,
+    availableModels,
+    projectId,
+    onSelectRun,
+    onRunsMutated,
+  ]);
+
   const handleAddCheckpoint = React.useCallback(() => {
     if (!selectedRunId) {
       return;
@@ -812,6 +888,96 @@ export default function EditorPanel({
     }
   }, [selectedRunId, onRunExecuted]);
 
+  const handleReopenRun = React.useCallback(async () => {
+    if (!selectedRunId) {
+      return;
+    }
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setActiveEditor(null);
+    setEditorSubmitting(false);
+    setConversationContext(null);
+    setReopeningRun(true);
+    try {
+      await reopenRun(selectedRunId);
+      setStatusMessage("Run reopened with a fresh execution.");
+      setConfigsRefreshToken((token) => token + 1);
+      onRunExecuted?.(selectedRunId);
+      onRunsMutated?.();
+    } catch (err) {
+      console.error("Failed to reopen run", err);
+      const message = err instanceof Error ? err.message : "Unable to reopen run.";
+      setErrorMessage(message);
+    } finally {
+      setReopeningRun(false);
+    }
+  }, [
+    selectedRunId,
+    onRunExecuted,
+    onRunsMutated,
+  ]);
+
+  const handleCloneRun = React.useCallback(async () => {
+    if (!selectedRunId) {
+      return;
+    }
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setCloningRun(true);
+    try {
+      const clonedRunId = await cloneRun(selectedRunId);
+
+      let runList: RunSummary[] | null = null;
+      try {
+        runList = await listRuns(projectId);
+      } catch (refreshErr) {
+        console.error("Failed to refresh run list after clone", refreshErr);
+        setRunsError(
+          "Run was cloned, but the run list could not be refreshed automatically.",
+        );
+      }
+
+      if (runList) {
+        setRuns(runList);
+        setRunsError(null);
+      } else {
+        const cloneName = selectedRun
+          ? `${selectedRun.name} (clone)`
+          : "Cloned run";
+        const fallbackKind = selectedRun?.kind ?? "exact";
+        const fallbackCreatedAt = new Date().toISOString();
+        setRuns((previous) => {
+          const filtered = previous.filter((item) => item.id !== clonedRunId);
+          return [
+            {
+              id: clonedRunId,
+              name: cloneName,
+              createdAt: fallbackCreatedAt,
+              kind: fallbackKind,
+            },
+            ...filtered,
+          ];
+        });
+      }
+
+      setStatusMessage("Run cloned. Switched to the duplicate for editing.");
+      onRunExecuted?.(clonedRunId);
+      onRunsMutated?.();
+    } catch (err) {
+      console.error("Failed to clone run", err);
+      const message = err instanceof Error ? err.message : "Unable to clone run.";
+      setErrorMessage(message);
+    } finally {
+      setCloningRun(false);
+    }
+  }, [
+    selectedRunId,
+    projectId,
+    onRunExecuted,
+    onRunsMutated,
+    selectedRun,
+  ]);
+
   const handleOpenInteractiveCheckpoint = React.useCallback(
     (config: RunCheckpointConfig) => {
       if (!selectedRunId) {
@@ -828,8 +994,9 @@ export default function EditorPanel({
     setConversationContext(null);
   }, []);
 
+  const runActionPending = executingRun || reopeningRun || cloningRun;
   const disableExecute =
-    !selectedRun || executingRun || checkpointConfigs.length === 0;
+    !selectedRun || runActionPending || checkpointConfigs.length === 0;
 
   return (
     <div>
@@ -846,23 +1013,39 @@ export default function EditorPanel({
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
           <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              Run
-              <select
-                value={selectedRunId ?? ""}
-                onChange={(event) => onSelectRun(event.target.value || null)}
-                disabled={runsLoading || runs.length === 0}
-              >
-                <option value="" disabled>
-                  {runsLoading ? "Loading…" : "Select a run"}
-                </option>
-                {runs.map((run) => (
-                  <option key={run.id} value={run.id}>
-                    {`${run.name} · ${formatRunTimestamp(run.createdAt)}`}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: "8px",
+                alignItems: "flex-end",
+              }}
+            >
+              <label style={{ display: "flex", flexDirection: "column", gap: "4px", flex: 1 }}>
+                Run
+                <select
+                  value={selectedRunId ?? ""}
+                  onChange={(event) => onSelectRun(event.target.value || null)}
+                  disabled={runsLoading || runs.length === 0}
+                >
+                  <option value="" disabled>
+                    {runsLoading ? "Loading…" : "Select a run"}
                   </option>
-                ))}
-              </select>
-            </label>
+                  {runs.map((run) => (
+                    <option key={run.id} value={run.id}>
+                      {`${run.name} · ${formatRunTimestamp(run.createdAt)}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={handleCreateRun}
+                disabled={creatingRun || runsLoading}
+              >
+                {creatingRun ? "Creating…" : "+ New run"}
+              </button>
+            </div>
             {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
             {!runsLoading && runs.length === 0 ? (
               <span style={{ fontSize: "0.85rem", color: "#808080" }}>
@@ -905,6 +1088,20 @@ export default function EditorPanel({
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                   <button type="button" onClick={handleExecuteRun} disabled={disableExecute}>
                     {executingRun ? "Executing…" : "Execute Full Run"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReopenRun}
+                    disabled={!selectedRunId || runActionPending}
+                  >
+                    {reopeningRun ? "Reopening…" : "Reopen run"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCloneRun}
+                    disabled={!selectedRunId || runActionPending}
+                  >
+                    {cloningRun ? "Cloning…" : "Clone run"}
                   </button>
                 </div>
                 {hasInteractiveCheckpoint && (

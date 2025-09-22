@@ -113,6 +113,16 @@ export interface HelloRunSpec {
   epsilon?: number | null;
 }
 
+export interface CreateRunParams {
+  projectId: string;
+  name: string;
+  proofMode: RunProofMode;
+  seed: number;
+  tokenBudget: number;
+  defaultModel: string;
+  epsilon?: number | null;
+}
+
 export async function listLocalModels(): Promise<string[]> {
   return await invoke<string[]>("list_local_models");
 }
@@ -123,6 +133,18 @@ export async function listProjects(): Promise<Project[]> {
 
 export async function createProject(name: string): Promise<Project> {
   return await invoke<Project>('create_project', { name });
+}
+
+export async function createRun(params: CreateRunParams): Promise<string> {
+  return await invoke<string>('create_run', {
+    projectId: params.projectId,
+    name: params.name,
+    proofMode: params.proofMode,
+    seed: params.seed,
+    tokenBudget: params.tokenBudget,
+    defaultModel: params.defaultModel,
+    epsilon: params.epsilon ?? null,
+  });
 }
 
 export async function listRuns(projectId: string): Promise<RunSummary[]> {
