@@ -84,12 +84,15 @@ function abbreviateId(value?: string | null): string | null {
 export default function InspectorPanel({
   projectId,
   refreshToken,
+  selectedRunId,
+  onSelectRun,
 }: {
   projectId: string;
   refreshToken: number;
+  selectedRunId: string | null;
+  onSelectRun: (runId: string | null) => void;
 }) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
-  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
   const [checkpoints, setCheckpoints] = React.useState<CheckpointSummary[]>([]);
   const [loadingRuns, setLoadingRuns] = React.useState<boolean>(false);
   const [loadingCheckpoints, setLoadingCheckpoints] = React.useState<boolean>(false);
@@ -121,7 +124,10 @@ export default function InspectorPanel({
         if (cancelled) return;
         setRuns(runList);
         if (!selectedRunId || !runList.find((r) => r.id === selectedRunId)) {
-          setSelectedRunId(runList.length > 0 ? runList[0].id : null);
+          const nextId = runList.length > 0 ? runList[0].id : null;
+          if (nextId !== selectedRunId) {
+            onSelectRun(nextId);
+          }
         }
       })
       .catch((err) => {
@@ -129,7 +135,9 @@ export default function InspectorPanel({
         console.error("Failed to load runs", err);
         setRunsError("Could not load runs for this project.");
         setRuns([]);
-        setSelectedRunId(null);
+        if (selectedRunId !== null) {
+          onSelectRun(null);
+        }
       })
       .finally(() => {
         if (!cancelled) {
@@ -139,7 +147,7 @@ export default function InspectorPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectId, refreshToken]);
+  }, [projectId, refreshToken, onSelectRun, selectedRunId]);
 
   React.useEffect(() => {
     if (!selectedRunId) {
@@ -301,7 +309,7 @@ export default function InspectorPanel({
             )}
             <select
               value={selectedRunId ?? ""}
-              onChange={(event) => setSelectedRunId(event.target.value || null)}
+              onChange={(event) => onSelectRun(event.target.value || null)}
               disabled={loadingRuns || runs.length === 0}
               style={{ flex: 1 }}
             >

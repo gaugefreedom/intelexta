@@ -542,6 +542,11 @@ pub fn reorder_checkpoint_configs(
 }
 
 #[tauri::command]
+pub fn start_run(run_id: String, pool: State<DbPool>) -> Result<(), Error> {
+    orchestrator::start_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
+}
+
+#[tauri::command]
 pub fn reopen_run(run_id: String, pool: State<DbPool>) -> Result<(), Error> {
     orchestrator::reopen_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
 }
