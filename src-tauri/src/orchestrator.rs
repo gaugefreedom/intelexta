@@ -102,7 +102,6 @@ impl TryFrom<&str> for RunProofMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 fn default_checkpoint_type() -> String {
     "Step".to_string()
 }
@@ -642,7 +641,7 @@ pub(crate) fn submit_turn_with_client(
     let LlmGeneration { response, usage } =
         llm_client.stream_generate(&stored_run.default_model, prompt_text)?;
 
-    let mut tx = conn.transaction()?;
+    let tx = conn.transaction()?;
 
     let (prior_prompt, prior_completion) = sum_checkpoint_token_usage(&tx, run_id)?;
     let projected_prompt_total = prior_prompt
@@ -766,7 +765,7 @@ pub(crate) fn start_hello_run_with_client(
         ));
     }
 
-    let conn = pool.get()?;
+    let mut conn = pool.get()?;
     ensure_project_signing_key(&conn, &spec.project_id)?;
 
     let run_id = Uuid::new_v4().to_string();
@@ -775,7 +774,7 @@ pub(crate) fn start_hello_run_with_client(
     let spec_json = serde_json::to_string(&spec)?;
 
     {
-        let mut tx = conn.transaction()?;
+        let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
@@ -832,7 +831,7 @@ pub(crate) fn start_run_with_client(
     run_id: &str,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<()> {
-    let conn = pool.get()?;
+    let mut conn = pool.get()?;
     let stored_run = load_stored_run(&conn, run_id)?;
 
     if stored_run.proof_mode.is_interactive() {
@@ -856,7 +855,7 @@ pub(crate) fn start_run_with_client(
         )));
     }
 
-    let mut tx = conn.transaction()?;
+    let tx = conn.transaction()?;
     let signing_key = ensure_project_signing_key(&tx, &stored_run.project_id)?;
     let mut prev_chain = String::new();
 
@@ -925,8 +924,8 @@ pub(crate) fn start_run_with_client(
 
 pub fn reopen_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
     {
-        let conn = pool.get()?;
-        let mut tx = conn.transaction()?;
+        let mut conn = pool.get()?;
+        let tx = conn.transaction()?;
         tx.execute("DELETE FROM checkpoints WHERE run_id = ?1", params![run_id])?;
         tx.commit()?;
     }
@@ -935,14 +934,14 @@ pub fn reopen_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
 }
 
 pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
-    let conn = pool.get()?;
+    let mut conn = pool.get()?;
     let source_run = load_stored_run(&conn, source_run_id)?;
     let new_run_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let clone_name = format!("{} (clone)", source_run.name);
 
     {
-        let mut tx = conn.transaction()?;
+        let tx = conn.transaction()?;
         let spec_templates: Vec<RunCheckpointTemplate> = source_run
             .checkpoints
             .iter()

@@ -6,6 +6,13 @@ ALTER TABLE runs ADD COLUMN epsilon REAL;
 ALTER TABLE runs ADD COLUMN token_budget INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE runs ADD COLUMN default_model TEXT NOT NULL DEFAULT '';
 
+UPDATE runs
+SET
+    seed = COALESCE(CAST(json_extract(spec_json, '$.seed') AS INTEGER), seed),
+    token_budget = COALESCE(CAST(json_extract(spec_json, '$.token_budget') AS INTEGER), token_budget),
+    default_model = COALESCE(json_extract(spec_json, '$.model'), default_model)
+WHERE spec_json IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS run_checkpoints (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,

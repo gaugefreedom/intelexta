@@ -371,8 +371,8 @@ pub fn create_checkpoint_config(
     config: CheckpointConfigRequest,
     pool: State<DbPool>,
 ) -> Result<orchestrator::RunCheckpointConfig, Error> {
-    let conn = pool.get()?;
-    let mut tx = conn.transaction()?;
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
 
     let exists: Option<()> = tx
         .query_row("SELECT 1 FROM runs WHERE id = ?1", params![&run_id], |_| {
@@ -437,8 +437,8 @@ pub fn update_checkpoint_config(
     updates: UpdateCheckpointConfigRequest,
     pool: State<DbPool>,
 ) -> Result<orchestrator::RunCheckpointConfig, Error> {
-    let conn = pool.get()?;
-    let mut tx = conn.transaction()?;
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
     let mut config = load_checkpoint_config(&tx, &checkpoint_id)?;
 
     if let Some(model) = updates.model {
@@ -471,8 +471,8 @@ pub fn update_checkpoint_config(
 
 #[tauri::command]
 pub fn delete_checkpoint_config(checkpoint_id: String, pool: State<DbPool>) -> Result<(), Error> {
-    let conn = pool.get()?;
-    let mut tx = conn.transaction()?;
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
 
     let row: Option<(String, i64)> = tx
         .query_row(
@@ -504,16 +504,20 @@ pub fn reorder_checkpoint_configs(
     checkpoint_ids: Vec<String>,
     pool: State<DbPool>,
 ) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
-    let conn = pool.get()?;
-    let mut tx = conn.transaction()?;
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
 
-    let mut existing_stmt =
-        tx.prepare("SELECT id FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC")?;
-    let existing_rows = existing_stmt.query_map(params![&run_id], |row| row.get::<_, String>(0))?;
-    let mut existing = Vec::new();
-    for row in existing_rows {
-        existing.push(row?);
-    }
+    let existing: Vec<String> = {
+        let mut existing_stmt = tx
+            .prepare("SELECT id FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC")?;
+        let existing_rows =
+            existing_stmt.query_map(params![&run_id], |row| row.get::<_, String>(0))?;
+        let mut existing = Vec::new();
+        for row in existing_rows {
+            existing.push(row?);
+        }
+        existing
+    };
 
     if existing.len() != checkpoint_ids.len() {
         return Err(Error::Api(
