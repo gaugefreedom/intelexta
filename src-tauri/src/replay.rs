@@ -1,6 +1,6 @@
 // In src-tauri/src/replay.rs
 use crate::{
-    orchestrator::{self, RunProofMode, RunSpec},
+    orchestrator::{self, RunProofMode},
     provenance, DbPool,
 };
 use anyhow::{anyhow, Context, Result};
@@ -29,20 +29,26 @@ pub struct ReplayReport {
     pub epsilon: Option<f64>,
 }
 
+fn simulate_stub_checkpoint(
+    run_seed: u64,
+    config: &orchestrator::RunCheckpointConfig,
+) -> (String, String) {
+    let mut output = b"hello".to_vec();
+    output.extend_from_slice(&run_seed.to_le_bytes());
+    output.extend_from_slice(&config.order_index.to_le_bytes());
+    let prompt_hash = provenance::sha256_hex(config.prompt.as_bytes());
+    output.extend_from_slice(prompt_hash.as_bytes());
+    let outputs_hex = provenance::sha256_hex(&output);
+    let semantic_source = hex::encode(&output);
+    let semantic_digest = provenance::semantic_digest(&semantic_source);
+    (outputs_hex, semantic_digest)
+}
+
 pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
     let conn = pool.get()?;
-
-    let spec_json_opt: Option<String> = conn
-        .query_row(
-            "SELECT spec_json FROM runs WHERE id = ?1",
-            params![&run_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-
-    let spec_json = match spec_json_opt {
-        Some(value) => value,
-        None => {
+    let stored_run = match orchestrator::load_stored_run(&conn, &run_id) {
+        Ok(run) => run,
+        Err(_) => {
             return Ok(ReplayReport {
                 run_id,
                 match_status: false,
@@ -57,16 +63,48 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
         }
     };
 
-    let spec: RunSpec = serde_json::from_str(&spec_json)
-        .map_err(|err| anyhow!("failed to parse stored run spec: {err}"))?;
+    if !matches!(stored_run.proof_mode, RunProofMode::Exact) {
+        return Ok(ReplayReport {
+            run_id,
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: Some("run is not an exact replay".to_string()),
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: None,
+        });
+    }
 
-    let mut replay_input = b"hello".to_vec();
-    replay_input.extend_from_slice(&spec.seed.to_le_bytes());
-    let replay_digest = provenance::sha256_hex(&replay_input);
+    if stored_run.checkpoints.is_empty() {
+        return Ok(ReplayReport {
+            run_id,
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: Some("run has no configured checkpoints".to_string()),
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: None,
+        });
+    }
+
+    let mut replay_digest = String::new();
+    for config in &stored_run.checkpoints {
+        if config.model == "stub-model" {
+            let (outputs_hex, _) = simulate_stub_checkpoint(stored_run.seed, config);
+            replay_digest = outputs_hex;
+        } else {
+            let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
+            replay_digest = provenance::sha256_hex(generation.response.as_bytes());
+        }
+    }
 
     let final_digest: Option<String> = conn
         .query_row(
-            "SELECT outputs_sha256 FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp DESC LIMIT 1",
+            "SELECT outputs_sha256 FROM checkpoints WHERE run_id = ?1 AND kind = 'Step' ORDER BY timestamp DESC LIMIT 1",
             params![&run_id],
             |row| row.get::<_, Option<String>>(0),
         )
@@ -188,9 +226,9 @@ mod tests {
             project_id: project.id.clone(),
             name: "interactive-replay".into(),
             seed: 0,
-            dag_json: "{}".into(),
             token_budget: 10_000,
             model: "stub-model".into(),
+            checkpoints: Vec::new(),
             proof_mode: RunProofMode::Interactive,
             epsilon: None,
         };
@@ -238,17 +276,9 @@ mod tests {
 pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
     let conn = pool.get()?;
 
-    let spec_json_opt: Option<String> = conn
-        .query_row(
-            "SELECT spec_json FROM runs WHERE id = ?1",
-            params![&run_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-
-    let spec_json = match spec_json_opt {
-        Some(value) => value,
-        None => {
+    let stored_run = match orchestrator::load_stored_run(&conn, &run_id) {
+        Ok(run) => run,
+        Err(_) => {
             return Ok(ReplayReport {
                 run_id,
                 match_status: false,
@@ -263,10 +293,7 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
         }
     };
 
-    let spec: RunSpec = serde_json::from_str(&spec_json)
-        .map_err(|err| anyhow!("failed to parse stored run spec: {err}"))?;
-
-    if !matches!(spec.proof_mode, RunProofMode::Concordant) {
+    if !matches!(stored_run.proof_mode, RunProofMode::Concordant) {
         return Ok(ReplayReport {
             run_id,
             match_status: false,
@@ -280,27 +307,41 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
         });
     }
 
-    let epsilon = spec
+    let epsilon = stored_run
         .epsilon
         .ok_or_else(|| anyhow!("concordant run missing epsilon"))?;
 
-    let (replay_digest, replay_semantic_digest) = if spec.model == "stub-model" {
-        let mut replay_bytes = b"hello".to_vec();
-        replay_bytes.extend_from_slice(&spec.seed.to_le_bytes());
-        let replay_digest = provenance::sha256_hex(&replay_bytes);
-        let semantic_source = hex::encode(&replay_bytes);
-        let replay_semantic_digest = provenance::semantic_digest(&semantic_source);
-        (replay_digest, replay_semantic_digest)
-    } else {
-        let replay_generation = orchestrator::replay_llm_generation(&spec)?;
-        let replay_digest = provenance::sha256_hex(replay_generation.response.as_bytes());
-        let replay_semantic_digest = provenance::semantic_digest(&replay_generation.response);
-        (replay_digest, replay_semantic_digest)
-    };
+    if stored_run.checkpoints.is_empty() {
+        return Ok(ReplayReport {
+            run_id,
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: Some("run has no configured checkpoints".to_string()),
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: Some(epsilon),
+        });
+    }
+
+    let mut replay_digest = String::new();
+    let mut replay_semantic_digest = String::new();
+    for config in &stored_run.checkpoints {
+        if config.model == "stub-model" {
+            let (digest, semantic) = simulate_stub_checkpoint(stored_run.seed, config);
+            replay_digest = digest;
+            replay_semantic_digest = semantic;
+        } else {
+            let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
+            replay_digest = provenance::sha256_hex(generation.response.as_bytes());
+            replay_semantic_digest = provenance::semantic_digest(&generation.response);
+        }
+    }
 
     let (original_digest_opt, semantic_digest_opt): (Option<String>, Option<String>) = conn
         .query_row(
-            "SELECT outputs_sha256, semantic_digest FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp DESC LIMIT 1",
+            "SELECT outputs_sha256, semantic_digest FROM checkpoints WHERE run_id = ?1 AND kind = 'Step' ORDER BY timestamp DESC LIMIT 1",
             params![&run_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

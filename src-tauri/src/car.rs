@@ -10,7 +10,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{orchestrator::RunSpec, provenance, store};
+use crate::{orchestrator, provenance, store};
 // TODO: You will need a robust canonical JSON crate. `serde_json_canon` is a good choice.
 // use serde_json_canon;
 
@@ -180,19 +180,19 @@ struct CheckpointRow {
 }
 
 pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
-    let (project_id, run_created_at, run_kind, spec_json): (String, String, String, String) = conn
+    let (project_id, run_created_at, run_kind): (String, String, String) = conn
         .query_row(
-            "SELECT project_id, created_at, kind, spec_json FROM runs WHERE id = ?1",
+            "SELECT project_id, created_at, kind FROM runs WHERE id = ?1",
             params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|err| anyhow!("failed to load run {run_id}: {err}"))?;
 
     let created_at = DateTime::parse_from_rfc3339(&run_created_at)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|err| anyhow!("invalid run created_at timestamp: {err}"))?;
-    let run_spec: RunSpec = serde_json::from_str(&spec_json)
-        .map_err(|err| anyhow!("failed to parse stored RunSpec: {err}"))?;
+    let stored_run = orchestrator::load_stored_run(conn, run_id)
+        .map_err(|err| anyhow!("failed to load stored run: {err}"))?;
 
     let mut stmt = conn.prepare(
         "SELECT id, kind, timestamp, inputs_sha256, outputs_sha256, usage_tokens, parent_checkpoint_id, turn_index, prev_chain, curr_chain, signature
@@ -251,7 +251,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
     let estimated_g_co2e = co2_per_token * total_usage_tokens as f64;
 
     let mut provenance_claims = Vec::new();
-    let spec_canon = provenance::canonical_json(&run_spec);
+    let spec_canon = provenance::canonical_json(&stored_run.checkpoints);
     let spec_hash = provenance::sha256_hex(&spec_canon);
     provenance_claims.push(ProvenanceClaim {
         claim_type: "config".to_string(),
@@ -273,8 +273,9 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         }
     }
 
-    let model_identifier = format!("workflow:{}", run_spec.name);
-    let version_digest = provenance::sha256_hex(run_spec.dag_json.as_bytes());
+    let model_identifier = format!("workflow:{}", stored_run.name);
+    let checkpoints_canon = provenance::canonical_json(&stored_run.checkpoints);
+    let version_digest = provenance::sha256_hex(&checkpoints_canon);
     let had_incident = checkpoints
         .iter()
         .any(|ck| ck.kind.eq_ignore_ascii_case("Incident"));
@@ -320,7 +321,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
             kind: run_kind,
             model: model_identifier,
             version: version_digest,
-            seed: run_spec.seed,
+            seed: stored_run.seed,
             sampler: None,
         },
         proof: Proof {

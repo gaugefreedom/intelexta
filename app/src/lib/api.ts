@@ -78,6 +78,24 @@ export interface Policy {
   budgetGCo2e: number;
 }
 
+export interface RunCheckpointConfig {
+  id: string;
+  runId: string;
+  orderIndex: number;
+  checkpointType: string;
+  model: string;
+  prompt: string;
+  tokenBudget: number;
+}
+
+export interface CheckpointConfigRequest {
+  model: string;
+  prompt: string;
+  tokenBudget: number;
+  checkpointType?: string;
+  orderIndex?: number;
+}
+
 export interface HelloRunSpec {
   projectId: string;
   name: string;
@@ -107,6 +125,54 @@ export async function listRuns(projectId: string): Promise<RunSummary[]> {
 
 export async function listCheckpoints(runId: string): Promise<CheckpointSummary[]> {
   return await invoke<CheckpointSummary[]>('list_checkpoints', { runId });
+}
+
+export async function listRunCheckpointConfigs(
+  runId: string,
+): Promise<RunCheckpointConfig[]> {
+  return await invoke<RunCheckpointConfig[]>('list_run_checkpoint_configs', { runId });
+}
+
+export async function createCheckpointConfig(
+  runId: string,
+  config: CheckpointConfigRequest,
+): Promise<RunCheckpointConfig> {
+  return await invoke<RunCheckpointConfig>('create_checkpoint_config', {
+    runId,
+    config,
+  });
+}
+
+export async function updateCheckpointConfig(
+  checkpointId: string,
+  updates: Partial<CheckpointConfigRequest> & { checkpointType?: string },
+): Promise<RunCheckpointConfig> {
+  return await invoke<RunCheckpointConfig>('update_checkpoint_config', {
+    checkpointId,
+    updates,
+  });
+}
+
+export async function deleteCheckpointConfig(checkpointId: string): Promise<void> {
+  await invoke('delete_checkpoint_config', { checkpointId });
+}
+
+export async function reorderCheckpointConfigs(
+  runId: string,
+  checkpointIds: string[],
+): Promise<RunCheckpointConfig[]> {
+  return await invoke<RunCheckpointConfig[]>('reorder_checkpoint_configs', {
+    runId,
+    checkpointIds,
+  });
+}
+
+export async function reopenRun(runId: string): Promise<void> {
+  await invoke('reopen_run', { runId });
+}
+
+export async function cloneRun(runId: string): Promise<string> {
+  return await invoke<string>('clone_run', { runId });
 }
 
 export async function submitTurn(

@@ -7,6 +7,7 @@ use keyring::Error as KeyringError;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -88,18 +89,76 @@ impl RunProofMode {
     }
 }
 
+impl TryFrom<&str> for RunProofMode {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "exact" => Ok(RunProofMode::Exact),
+            "concordant" => Ok(RunProofMode::Concordant),
+            "interactive" => Ok(RunProofMode::Interactive),
+            other => Err(anyhow!(format!("unsupported run proof mode: {other}"))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+fn default_checkpoint_type() -> String {
+    "Step".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCheckpointTemplate {
+    pub model: String,
+    pub prompt: String,
+    pub token_budget: u64,
+    #[serde(default)]
+    pub order_index: Option<i64>,
+    #[serde(default = "default_checkpoint_type")]
+    pub checkpoint_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunSpec {
     pub project_id: String,
     pub name: String,
     pub seed: u64,
-    pub dag_json: String,
     pub token_budget: u64,
     pub model: String,
+    pub checkpoints: Vec<RunCheckpointTemplate>,
     #[serde(default)]
     pub proof_mode: RunProofMode,
     #[serde(default)]
     pub epsilon: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCheckpointConfig {
+    pub id: String,
+    pub run_id: String,
+    pub order_index: i64,
+    pub checkpoint_type: String,
+    pub model: String,
+    pub prompt: String,
+    pub token_budget: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredRun {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub proof_mode: RunProofMode,
+    pub seed: u64,
+    pub token_budget: u64,
+    pub default_model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epsilon: Option<f64>,
+    pub checkpoints: Vec<RunCheckpointConfig>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -151,9 +210,9 @@ impl LlmClient for DefaultOllamaClient {
     }
 }
 
-pub fn replay_llm_generation(spec: &RunSpec) -> anyhow::Result<LlmGeneration> {
+pub fn replay_llm_generation(model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
     let client = DefaultOllamaClient::new();
-    client.stream_generate(&spec.model, &spec.dag_json)
+    client.stream_generate(model, prompt)
 }
 
 #[derive(Debug, Deserialize)]
@@ -459,6 +518,71 @@ fn sum_checkpoint_token_usage(conn: &Connection, run_id: &str) -> anyhow::Result
     Ok((prompt, completion))
 }
 
+fn load_run_checkpoint_configs(
+    conn: &Connection,
+    run_id: &str,
+) -> anyhow::Result<Vec<RunCheckpointConfig>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, order_index, checkpoint_type, model, prompt, token_budget FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+    )?;
+    let rows = stmt.query_map(params![run_id], |row| {
+        let token_budget: i64 = row.get(5)?;
+        Ok(RunCheckpointConfig {
+            id: row.get(0)?,
+            run_id: run_id.to_string(),
+            order_index: row.get(1)?,
+            checkpoint_type: row.get(2)?,
+            model: row.get(3)?,
+            prompt: row.get(4)?,
+            token_budget: token_budget.max(0) as u64,
+        })
+    })?;
+
+    let mut configs = Vec::new();
+    for row in rows {
+        configs.push(row?);
+    }
+
+    Ok(configs)
+}
+
+pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<StoredRun> {
+    let row: Option<(String, String, String, i64, Option<f64>, i64, String)> = conn
+        .query_row(
+            "SELECT project_id, name, kind, seed, epsilon, token_budget, default_model FROM runs WHERE id = ?1",
+            params![run_id],
+            |row| Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            )),
+        )
+        .optional()?;
+
+    let (project_id, name, kind, seed_raw, epsilon, token_budget_raw, default_model) =
+        row.ok_or_else(|| anyhow!(format!("run {run_id} not found")))?;
+    let proof_mode = RunProofMode::try_from(kind.as_str())?;
+    let seed = seed_raw.max(0) as u64;
+    let token_budget = token_budget_raw.max(0) as u64;
+    let checkpoints = load_run_checkpoint_configs(conn, run_id)?;
+
+    Ok(StoredRun {
+        id: run_id.to_string(),
+        project_id,
+        name,
+        proof_mode,
+        seed,
+        token_budget,
+        default_model,
+        epsilon,
+        checkpoints,
+    })
+}
+
 struct LastCheckpointInfo {
     id: String,
     curr_chain: String,
@@ -506,27 +630,17 @@ pub(crate) fn submit_turn_with_client(
 ) -> anyhow::Result<SubmitTurnOutcome> {
     let mut conn = pool.get()?;
 
-    let run_row: Option<(String, String, String)> = conn
-        .query_row(
-            "SELECT project_id, kind, spec_json FROM runs WHERE id = ?1",
-            params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-
-    let (project_id, run_kind, spec_json) =
-        run_row.ok_or_else(|| anyhow!(format!("run {run_id} not found")))?;
-    if run_kind != "interactive" {
+    let stored_run = load_stored_run(&conn, run_id)?;
+    if !stored_run.proof_mode.is_interactive() {
         return Err(anyhow!(
             "submit_turn is only supported for interactive runs"
         ));
     }
 
-    let run_spec: RunSpec = serde_json::from_str(&spec_json)?;
-    let signing_key = ensure_project_signing_key(&conn, &project_id)?;
+    let signing_key = ensure_project_signing_key(&conn, &stored_run.project_id)?;
 
     let LlmGeneration { response, usage } =
-        llm_client.stream_generate(&run_spec.model, prompt_text)?;
+        llm_client.stream_generate(&stored_run.default_model, prompt_text)?;
 
     let mut tx = conn.transaction()?;
 
@@ -541,7 +655,8 @@ pub(crate) fn submit_turn_with_client(
         .checked_add(projected_completion_total)
         .ok_or_else(|| anyhow!("usage token total overflow"))?;
 
-    if let Err(incident) = governance::enforce_budget(run_spec.token_budget, projected_usage_total)
+    if let Err(incident) =
+        governance::enforce_budget(stored_run.token_budget, projected_usage_total)
     {
         let incident_json = serde_json::to_string(&incident)?;
         return Err(anyhow!(format!(
@@ -636,14 +751,6 @@ pub(crate) fn start_hello_run_with_client(
     spec: RunSpec,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<String> {
-    let conn = pool.get()?;
-
-    let signing_key = ensure_project_signing_key(&conn, &spec.project_id)?;
-    let run_id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-    let spec_json = serde_json::to_string(&spec)?;
-    let run_kind = spec.proof_mode.as_str();
-
     if spec.proof_mode.is_concordant() {
         let epsilon = spec
             .epsilon
@@ -653,85 +760,282 @@ pub(crate) fn start_hello_run_with_client(
         }
     }
 
-    conn.execute(
-        "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1,?2,?3,?4,?5,?6)",
-        params![&run_id, &spec.project_id, &spec.name, &now, run_kind, &spec_json],
-    )?;
+    if !spec.proof_mode.is_interactive() && spec.checkpoints.is_empty() {
+        return Err(anyhow!(
+            "run requires at least one checkpoint configuration"
+        ));
+    }
+
+    let conn = pool.get()?;
+    ensure_project_signing_key(&conn, &spec.project_id)?;
+
+    let run_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let run_kind = spec.proof_mode.as_str();
+    let spec_json = serde_json::to_string(&spec)?;
+
+    {
+        let mut tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                &run_id,
+                &spec.project_id,
+                &spec.name,
+                &now,
+                run_kind,
+                &spec_json,
+                Option::<String>::None,
+                (spec.seed as i64),
+                spec.epsilon,
+                (spec.token_budget as i64),
+                &spec.model,
+            ],
+        )?;
+
+        for (index, template) in spec.checkpoints.iter().enumerate() {
+            let checkpoint_id = Uuid::new_v4().to_string();
+            let order_index = template.order_index.unwrap_or(index as i64);
+            tx.execute(
+                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    &checkpoint_id,
+                    &run_id,
+                    order_index,
+                    &template.checkpoint_type,
+                    &template.model,
+                    &template.prompt,
+                    (template.token_budget as i64),
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+    }
 
     if spec.proof_mode.is_interactive() {
         return Ok(run_id);
     }
 
-    let execution = execute_node(&spec, llm_client)?;
-    let total_usage = execution.usage.total();
-    let prompt_tokens = execution.usage.prompt_tokens;
-    let completion_tokens = execution.usage.completion_tokens;
-    let budget_check = governance::enforce_budget(spec.token_budget, total_usage);
-
-    let prev_chain = "";
-    let mut incident_value: Option<serde_json::Value> = None;
-    let (kind, inputs_sha, outputs_sha) = match budget_check {
-        Ok(_) => (
-            "Step",
-            execution.inputs_sha256.as_deref(),
-            execution.outputs_sha256.as_deref(),
-        ),
-        Err(incident) => {
-            incident_value = Some(serde_json::to_value(&incident)?);
-            ("Incident", None, None)
-        }
-    };
-
-    let semantic_digest = if spec.proof_mode.is_concordant() {
-        Some(
-            execution
-                .semantic_digest
-                .clone()
-                .ok_or_else(|| anyhow!("semantic digest missing for concordant run"))?,
-        )
-    } else {
-        None
-    };
-    let checkpoint_insert = CheckpointInsert {
-        run_id: &run_id,
-        parent_checkpoint_id: None,
-        turn_index: None,
-        kind,
-        timestamp: &now,
-        incident: incident_value.as_ref(),
-        inputs_sha256: inputs_sha,
-        outputs_sha256: outputs_sha,
-        prev_chain,
-        usage_tokens: total_usage,
-        prompt_tokens,
-        completion_tokens,
-        semantic_digest: semantic_digest.as_deref(),
-        message: None,
-    };
-
-    let _ = persist_checkpoint(&conn, &signing_key, &checkpoint_insert)?;
+    start_run_with_client(pool, &run_id, llm_client)?;
 
     Ok(run_id)
 }
 
-fn execute_node(spec: &RunSpec, llm_client: &dyn LlmClient) -> anyhow::Result<NodeExecution> {
-    if spec.model == STUB_MODEL_ID {
-        Ok(execute_stub_node(spec))
+pub fn start_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
+    let client = DefaultOllamaClient::new();
+    start_run_with_client(pool, run_id, &client)
+}
+
+pub(crate) fn start_run_with_client(
+    pool: &DbPool,
+    run_id: &str,
+    llm_client: &dyn LlmClient,
+) -> anyhow::Result<()> {
+    let conn = pool.get()?;
+    let stored_run = load_stored_run(&conn, run_id)?;
+
+    if stored_run.proof_mode.is_interactive() {
+        return Ok(());
+    }
+
+    if stored_run.checkpoints.is_empty() {
+        return Err(anyhow!(format!(
+            "run {run_id} has no configured checkpoints"
+        )));
+    }
+
+    let existing_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+        params![run_id],
+        |row| row.get(0),
+    )?;
+    if existing_count > 0 {
+        return Err(anyhow!(format!(
+            "run {run_id} already has persisted checkpoints; reopen or clone before re-running"
+        )));
+    }
+
+    let mut tx = conn.transaction()?;
+    let signing_key = ensure_project_signing_key(&tx, &stored_run.project_id)?;
+    let mut prev_chain = String::new();
+
+    for config in &stored_run.checkpoints {
+        let timestamp = Utc::now().to_rfc3339();
+        let execution = execute_checkpoint(config, stored_run.seed, llm_client)?;
+        let total_usage = execution.usage.total();
+        let prompt_tokens = execution.usage.prompt_tokens;
+        let completion_tokens = execution.usage.completion_tokens;
+        let mut incident_value: Option<serde_json::Value> = None;
+
+        let budget_outcome = governance::enforce_budget(config.token_budget, total_usage);
+
+        let (kind, inputs_sha, outputs_sha, semantic_digest) =
+            match budget_outcome {
+                Ok(_) => {
+                    let semantic =
+                        if stored_run.proof_mode.is_concordant() {
+                            Some(execution.semantic_digest.clone().ok_or_else(|| {
+                                anyhow!("semantic digest missing for concordant run")
+                            })?)
+                        } else {
+                            None
+                        };
+                    (
+                        "Step",
+                        execution.inputs_sha256.as_deref(),
+                        execution.outputs_sha256.as_deref(),
+                        semantic,
+                    )
+                }
+                Err(incident) => {
+                    incident_value = Some(serde_json::to_value(&incident)?);
+                    ("Incident", None, None, None)
+                }
+            };
+
+        let checkpoint_insert = CheckpointInsert {
+            run_id,
+            parent_checkpoint_id: None,
+            turn_index: None,
+            kind,
+            timestamp: &timestamp,
+            incident: incident_value.as_ref(),
+            inputs_sha256: inputs_sha,
+            outputs_sha256: outputs_sha,
+            prev_chain: prev_chain.as_str(),
+            usage_tokens: total_usage,
+            prompt_tokens,
+            completion_tokens,
+            semantic_digest: semantic_digest.as_deref(),
+            message: None,
+        };
+
+        let persisted = persist_checkpoint(&tx, &signing_key, &checkpoint_insert)?;
+        prev_chain = persisted.curr_chain;
+
+        if kind == "Incident" {
+            break;
+        }
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn reopen_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
+    {
+        let conn = pool.get()?;
+        let mut tx = conn.transaction()?;
+        tx.execute("DELETE FROM checkpoints WHERE run_id = ?1", params![run_id])?;
+        tx.commit()?;
+    }
+
+    start_run(pool, run_id)
+}
+
+pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
+    let conn = pool.get()?;
+    let source_run = load_stored_run(&conn, source_run_id)?;
+    let new_run_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let clone_name = format!("{} (clone)", source_run.name);
+
+    {
+        let mut tx = conn.transaction()?;
+        let spec_templates: Vec<RunCheckpointTemplate> = source_run
+            .checkpoints
+            .iter()
+            .map(|cfg| RunCheckpointTemplate {
+                model: cfg.model.clone(),
+                prompt: cfg.prompt.clone(),
+                token_budget: cfg.token_budget,
+                order_index: Some(cfg.order_index),
+                checkpoint_type: cfg.checkpoint_type.clone(),
+            })
+            .collect();
+        let spec_snapshot = RunSpec {
+            project_id: source_run.project_id.clone(),
+            name: clone_name.clone(),
+            seed: source_run.seed,
+            token_budget: source_run.token_budget,
+            model: source_run.default_model.clone(),
+            checkpoints: spec_templates,
+            proof_mode: source_run.proof_mode,
+            epsilon: source_run.epsilon,
+        };
+        let spec_json = serde_json::to_string(&spec_snapshot)?;
+
+        tx.execute(
+            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                &new_run_id,
+                &source_run.project_id,
+                &clone_name,
+                &now,
+                source_run.proof_mode.as_str(),
+                &spec_json,
+                Option::<String>::None,
+                (source_run.seed as i64),
+                source_run.epsilon,
+                (source_run.token_budget as i64),
+                &source_run.default_model,
+            ],
+        )?;
+
+        for config in &source_run.checkpoints {
+            let checkpoint_id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    &checkpoint_id,
+                    &new_run_id,
+                    config.order_index,
+                    &config.checkpoint_type,
+                    &config.model,
+                    &config.prompt,
+                    (config.token_budget as i64),
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+    }
+
+    drop(conn);
+    start_run(pool, &new_run_id)?;
+    Ok(new_run_id)
+}
+
+fn execute_checkpoint(
+    config: &RunCheckpointConfig,
+    run_seed: u64,
+    llm_client: &dyn LlmClient,
+) -> anyhow::Result<NodeExecution> {
+    if config.model == STUB_MODEL_ID {
+        Ok(execute_stub_checkpoint(
+            run_seed,
+            config.order_index,
+            &config.prompt,
+        ))
     } else {
-        execute_llm_run(spec, llm_client)
+        execute_llm_checkpoint(&config.model, &config.prompt, llm_client)
     }
 }
 
-fn stub_output_bytes(seed: u64) -> Vec<u8> {
+fn stub_output_bytes(seed: u64, order_index: i64, prompt: &str) -> Vec<u8> {
     let mut output = b"hello".to_vec();
     output.extend_from_slice(&seed.to_le_bytes());
+    output.extend_from_slice(&order_index.to_le_bytes());
+    let prompt_hash = provenance::sha256_hex(prompt.as_bytes());
+    output.extend_from_slice(prompt_hash.as_bytes());
     output
 }
 
-fn execute_stub_node(spec: &RunSpec) -> NodeExecution {
-    let output_bytes = stub_output_bytes(spec.seed);
+fn execute_stub_checkpoint(run_seed: u64, order_index: i64, prompt: &str) -> NodeExecution {
+    let output_bytes = stub_output_bytes(run_seed, order_index, prompt);
     let outputs_hex = provenance::sha256_hex(&output_bytes);
-    let inputs_hex = provenance::sha256_hex(b"hello");
+    let inputs_hex = provenance::sha256_hex(prompt.as_bytes());
     let semantic_source = hex::encode(&output_bytes);
     let semantic_digest = provenance::semantic_digest(&semantic_source);
 
@@ -746,9 +1050,12 @@ fn execute_stub_node(spec: &RunSpec) -> NodeExecution {
     }
 }
 
-fn execute_llm_run(spec: &RunSpec, llm_client: &dyn LlmClient) -> anyhow::Result<NodeExecution> {
-    let prompt = spec.dag_json.clone();
-    let generation = llm_client.stream_generate(&spec.model, &prompt)?;
+fn execute_llm_checkpoint(
+    model: &str,
+    prompt: &str,
+    llm_client: &dyn LlmClient,
+) -> anyhow::Result<NodeExecution> {
+    let generation = llm_client.stream_generate(model, prompt)?;
     let inputs_hex = provenance::sha256_hex(prompt.as_bytes());
     let outputs_hex = provenance::sha256_hex(generation.response.as_bytes());
     let semantic_digest = provenance::semantic_digest(&generation.response);
@@ -875,9 +1182,15 @@ mod tests {
             project_id: project_id.to_string(),
             name: "hello-run".to_string(),
             seed: 42,
-            dag_json: "{\"nodes\":[]}".to_string(),
             token_budget: 1_000,
             model: STUB_MODEL_ID.to_string(),
+            checkpoints: vec![RunCheckpointTemplate {
+                model: STUB_MODEL_ID.to_string(),
+                prompt: "{\"nodes\":[]}".to_string(),
+                token_budget: 1_000,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
         };
@@ -1035,9 +1348,15 @@ mod tests {
             project_id: project_id.to_string(),
             name: "recover-secret".to_string(),
             seed: 99,
-            dag_json: "{}".to_string(),
             token_budget: 25,
             model: STUB_MODEL_ID.to_string(),
+            checkpoints: vec![RunCheckpointTemplate {
+                model: STUB_MODEL_ID.to_string(),
+                prompt: "{}".to_string(),
+                token_budget: 25,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
         };
@@ -1139,9 +1458,15 @@ mod tests {
             project_id: project_id.to_string(),
             name: "llm-run".to_string(),
             seed: 5,
-            dag_json: prompt_json.clone(),
             token_budget: 10_000,
             model: "llama3".to_string(),
+            checkpoints: vec![RunCheckpointTemplate {
+                model: "llama3".to_string(),
+                prompt: prompt_json.clone(),
+                token_budget: 10_000,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
         };
@@ -1239,9 +1564,9 @@ mod tests {
             project_id: project.id.clone(),
             name: "interactive-start".to_string(),
             seed: 99,
-            dag_json: "{}".to_string(),
             token_budget: 5_000,
             model: STUB_MODEL_ID.to_string(),
+            checkpoints: Vec::new(),
             proof_mode: RunProofMode::Interactive,
             epsilon: None,
         };
@@ -1249,7 +1574,7 @@ mod tests {
 
         let start_client = RecordingLlmClient::new(
             spec.model.clone(),
-            spec.dag_json.clone(),
+            String::new(),
             "unused".to_string(),
             TokenUsage {
                 prompt_tokens: 0,
@@ -1291,16 +1616,16 @@ mod tests {
             project_id: project.id.clone(),
             name: "interactive-run".into(),
             seed: 0,
-            dag_json: "{}".into(),
             token_budget: 10_000,
             model: STUB_MODEL_ID.into(),
+            checkpoints: Vec::new(),
             proof_mode: RunProofMode::Interactive,
             epsilon: None,
         };
 
         let start_client = RecordingLlmClient::new(
             run_spec.model.clone(),
-            run_spec.dag_json.clone(),
+            String::new(),
             "unused".to_string(),
             TokenUsage {
                 prompt_tokens: 0,
@@ -1435,9 +1760,9 @@ mod tests {
             project_id: project.id.clone(),
             name: "interactive-budget".into(),
             seed: 0,
-            dag_json: "{}".into(),
             token_budget: 10,
             model: STUB_MODEL_ID.into(),
+            checkpoints: Vec::new(),
             proof_mode: RunProofMode::Interactive,
             epsilon: None,
         };
@@ -1448,14 +1773,18 @@ mod tests {
         {
             let conn = pool.get()?;
             conn.execute(
-                "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10)",
                 params![
                     &run_id,
                     &run_spec.project_id,
                     &run_spec.name,
                     &created_at,
                     "interactive",
-                    &spec_json
+                    &spec_json,
+                    (run_spec.seed as i64),
+                    run_spec.epsilon,
+                    (run_spec.token_budget as i64),
+                    &run_spec.model,
                 ],
             )?;
         }
