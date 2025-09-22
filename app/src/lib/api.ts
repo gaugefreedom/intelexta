@@ -1,5 +1,6 @@
 // In app/src/lib/api.ts
 import { invoke } from '@tauri-apps/api/core';
+import { interactiveFeatureEnabled } from './featureFlags';
 
 export interface Project {
   id: string;
@@ -93,6 +94,22 @@ export interface InteractiveCheckpointSession {
   checkpoint: RunCheckpointConfig;
   messages: CheckpointSummary[];
 }
+
+export type OpenInteractiveCheckpointSession = (
+  runId: string,
+  checkpointId: string,
+) => Promise<InteractiveCheckpointSession>;
+
+export type SubmitInteractiveCheckpointTurn = (
+  runId: string,
+  checkpointId: string,
+  promptText: string,
+) => Promise<SubmitTurnResult>;
+
+export type FinalizeInteractiveCheckpoint = (
+  runId: string,
+  checkpointId: string,
+) => Promise<void>;
 
 export interface CheckpointConfigRequest {
   model: string;
@@ -207,34 +224,31 @@ export async function cloneRun(runId: string): Promise<string> {
   return await invoke<string>('clone_run', { runId });
 }
 
-export async function openInteractiveCheckpointSession(
-  runId: string,
-  checkpointId: string,
-): Promise<InteractiveCheckpointSession> {
-  return await invoke<InteractiveCheckpointSession>('open_interactive_checkpoint_session', {
-    runId,
-    checkpointId,
-  });
-}
+export const openInteractiveCheckpointSession: OpenInteractiveCheckpointSession | undefined =
+  interactiveFeatureEnabled
+    ? async (runId: string, checkpointId: string) =>
+        await invoke<InteractiveCheckpointSession>('open_interactive_checkpoint_session', {
+          runId,
+          checkpointId,
+        })
+    : undefined;
 
-export async function submitInteractiveCheckpointTurn(
-  runId: string,
-  checkpointId: string,
-  promptText: string,
-): Promise<SubmitTurnResult> {
-  return await invoke<SubmitTurnResult>('submit_interactive_checkpoint_turn', {
-    runId,
-    checkpointId,
-    promptText,
-  });
-}
+export const submitInteractiveCheckpointTurn: SubmitInteractiveCheckpointTurn | undefined =
+  interactiveFeatureEnabled
+    ? async (runId: string, checkpointId: string, promptText: string) =>
+        await invoke<SubmitTurnResult>('submit_interactive_checkpoint_turn', {
+          runId,
+          checkpointId,
+          promptText,
+        })
+    : undefined;
 
-export async function finalizeInteractiveCheckpoint(
-  runId: string,
-  checkpointId: string,
-): Promise<void> {
-  await invoke('finalize_interactive_checkpoint', { runId, checkpointId });
-}
+export const finalizeInteractiveCheckpoint: FinalizeInteractiveCheckpoint | undefined =
+  interactiveFeatureEnabled
+    ? async (runId: string, checkpointId: string) => {
+        await invoke('finalize_interactive_checkpoint', { runId, checkpointId });
+      }
+    : undefined;
 
 export async function getPolicy(projectId: string): Promise<Policy> {
   return await invoke<Policy>('get_policy', { projectId });

@@ -653,6 +653,7 @@ fn replay_concordant_run_detects_semantic_mismatch() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "interactive")]
 #[test]
 fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
     init_keyring_mock();

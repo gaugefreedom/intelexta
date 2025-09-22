@@ -183,6 +183,7 @@ pub struct CheckpointSummary {
     pub message: Option<CheckpointMessageSummary>,
 }
 
+#[cfg(feature = "interactive")]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InteractiveCheckpointSession {
@@ -217,6 +218,7 @@ pub fn list_checkpoints(
     list_checkpoints_with_pool(run_id, pool.inner())
 }
 
+#[cfg(feature = "interactive")]
 #[tauri::command]
 pub fn open_interactive_checkpoint_session(
     run_id: String,
@@ -327,6 +329,7 @@ pub(crate) fn list_checkpoints_with_pool(
     Ok(checkpoints)
 }
 
+#[cfg(feature = "interactive")]
 #[tauri::command]
 pub fn submit_interactive_checkpoint_turn(
     run_id: String,
@@ -343,6 +346,7 @@ pub fn submit_interactive_checkpoint_turn(
     .map_err(|err| Error::Api(err.to_string()))
 }
 
+#[cfg(feature = "interactive")]
 #[tauri::command]
 pub fn finalize_interactive_checkpoint(
     run_id: String,
@@ -430,28 +434,40 @@ pub(crate) fn replay_run_with_pool(
 
     let has_interactive = has_interactive_config || has_interactive_turns;
 
-    let report = if has_interactive {
-        replay::replay_interactive_run(run_id.clone(), pool)
-    } else {
-        match kind_opt.as_deref() {
-            Some("exact") => replay::replay_exact_run(run_id.clone(), pool),
-            Some("concordant") => replay::replay_concordant_run(run_id.clone(), pool),
-            Some(other) => Err(anyhow::anyhow!(
-                "Replay not implemented for run kind: '{}'",
-                other
-            )),
-            None => Ok(replay::ReplayReport {
-                run_id: run_id.clone(),
-                match_status: false,
-                original_digest: String::new(),
-                replay_digest: String::new(),
-                error_message: Some("run not found".to_string()),
-                semantic_original_digest: None,
-                semantic_replay_digest: None,
-                semantic_distance: None,
-                epsilon: None,
-            }),
+    if has_interactive {
+        #[cfg(feature = "interactive")]
+        {
+            let report = replay::replay_interactive_run(run_id.clone(), pool)
+                .map_err(|err| Error::Api(err.to_string()))?;
+            return Ok(report);
         }
+
+        #[cfg(not(feature = "interactive"))]
+        {
+            return Err(Error::Api(
+                "Interactive replays are disabled in this build.".to_string(),
+            ));
+        }
+    }
+
+    let report = match kind_opt.as_deref() {
+        Some("exact") => replay::replay_exact_run(run_id.clone(), pool),
+        Some("concordant") => replay::replay_concordant_run(run_id.clone(), pool),
+        Some(other) => Err(anyhow::anyhow!(
+            "Replay not implemented for run kind: '{}'",
+            other
+        )),
+        None => Ok(replay::ReplayReport {
+            run_id: run_id.clone(),
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: Some("run not found".to_string()),
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: None,
+        }),
     }
     .map_err(|err| Error::Api(err.to_string()))?;
 

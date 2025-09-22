@@ -3,6 +3,10 @@ name = "intelexta"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+interactive = []
+
 [workspace]
 members = [
     "crates/intelexta-verify",
