@@ -63,7 +63,10 @@ fn main() {
         api::get_policy,
         api::update_policy,
         api::replay_run,
-        api::emit_car
+        api::emit_car,
+        api::export_project,
+        api::import_project,
+        api::import_car
     ]);
 
     #[cfg(not(feature = "interactive"))]
@@ -88,7 +91,10 @@ fn main() {
         api::get_policy,
         api::update_policy,
         api::replay_run,
-        api::emit_car
+        api::emit_car,
+        api::export_project,
+        api::import_project,
+        api::import_car
     ]);
 
     builder

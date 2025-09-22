@@ -37,6 +37,7 @@ keyring = "3.0"
 dirs = "5.0"
 serde_jcs = "0.1.0"
 hex = "0.4.3"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 
 # THIS SECTION REPLACES YOUR OLD [build-dependencies]

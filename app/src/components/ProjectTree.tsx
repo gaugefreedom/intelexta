@@ -101,7 +101,7 @@ export default function ProjectTree({
 
   React.useEffect(() => {
     fetchProjects();
-  }, [fetchProjects]);
+  }, [fetchProjects, refreshToken]);
 
   const loadRunsForProject = React.useCallback((projectId: string) => {
     setRunsByProject((prev) => ({
