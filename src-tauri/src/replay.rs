@@ -222,19 +222,36 @@ mod tests {
         }
 
         let project = api::create_project_with_pool("Replay Interactive".into(), &pool)?;
+        let chat_prompt = "Keep the conversation brief.".to_string();
+        let run_model = "stub-model".to_string();
         let spec = RunSpec {
             project_id: project.id.clone(),
             name: "interactive-replay".into(),
             seed: 0,
             token_budget: 10_000,
-            model: "stub-model".into(),
-            checkpoints: Vec::new(),
-            proof_mode: RunProofMode::Interactive,
+            model: run_model.clone(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: run_model.clone(),
+                prompt: chat_prompt.clone(),
+                token_budget: 10_000,
+                order_index: Some(0),
+                checkpoint_type: "InteractiveChat".to_string(),
+            }],
+            proof_mode: RunProofMode::Exact,
             epsilon: None,
         };
 
         let panic_client = PanicLlmClient;
         let run_id = orchestrator::start_hello_run_with_client(&pool, spec.clone(), &panic_client)?;
+
+        let config_id: String = {
+            let conn = pool.get()?;
+            conn.query_row(
+                "SELECT id FROM run_checkpoints WHERE run_id = ?1",
+                params![&run_id],
+                |row| row.get(0),
+            )?
+        };
 
         {
             let conn = pool.get()?;
@@ -253,13 +270,18 @@ mod tests {
             completion_tokens: 5,
         };
         let turn_client = FixedLlmClient::new(
-            spec.model.clone(),
-            prompt_text.clone(),
+            run_model.clone(),
+            format!("{}\n\nHuman: {}\nAI:", chat_prompt, prompt_text.trim()),
             response_text.clone(),
             usage,
         );
-        let outcome =
-            orchestrator::submit_turn_with_client(&pool, &run_id, &prompt_text, &turn_client)?;
+        let outcome = orchestrator::submit_interactive_checkpoint_turn_with_client(
+            &pool,
+            &run_id,
+            &config_id,
+            &prompt_text,
+            &turn_client,
+        )?;
         assert_eq!(outcome.ai_response, response_text);
         assert_eq!(*turn_client.calls.lock().unwrap(), 1);
 

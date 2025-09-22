@@ -286,7 +286,9 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         .max()
         .unwrap_or(created_at);
 
-    let process_proof = if run_kind.eq_ignore_ascii_case("interactive") {
+    let is_interactive = checkpoints.iter().any(|ck| ck.turn_index.is_some());
+
+    let process_proof = if is_interactive {
         let sequential = checkpoints
             .iter()
             .map(|ck| ProcessCheckpointProof {
@@ -305,10 +307,12 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         None
     };
 
-    let proof_match_kind = match run_kind.as_str() {
-        kind if kind.eq_ignore_ascii_case("interactive") => "process".to_string(),
-        kind if kind.eq_ignore_ascii_case("concordant") => "semantic".to_string(),
-        _ => "exact".to_string(),
+    let proof_match_kind = if is_interactive {
+        "process".to_string()
+    } else if run_kind.eq_ignore_ascii_case("concordant") {
+        "semantic".to_string()
+    } else {
+        "exact".to_string()
     };
 
     let checkpoint_ids: Vec<String> = checkpoints.iter().map(|ck| ck.id.clone()).collect();

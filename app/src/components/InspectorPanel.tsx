@@ -49,8 +49,6 @@ function proofBadgeFor(kind: string): { label: string; color: string; title: str
       return { label: "[C]", color: "#c586c0", title: "Concordant proof mode" };
     case "exact":
       return { label: "[E]", color: "#9cdcfe", title: "Exact proof mode" };
-    case "interactive":
-      return { label: "[I]", color: "#4ec9b0", title: "Interactive proof mode" };
     default:
       return { label: "[?]", color: "#dcdcaa", title: "Unknown proof mode" };
   }

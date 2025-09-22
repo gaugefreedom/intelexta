@@ -37,6 +37,7 @@ struct CheckpointMessageInput<'a> {
 
 struct CheckpointInsert<'a> {
     run_id: &'a str,
+    checkpoint_config_id: Option<&'a str>,
     parent_checkpoint_id: Option<&'a str>,
     turn_index: Option<u32>,
     kind: &'a str,
@@ -62,7 +63,6 @@ struct PersistedCheckpoint {
 pub enum RunProofMode {
     Exact,
     Concordant,
-    Interactive,
 }
 
 impl Default for RunProofMode {
@@ -76,16 +76,11 @@ impl RunProofMode {
         match self {
             RunProofMode::Exact => "exact",
             RunProofMode::Concordant => "concordant",
-            RunProofMode::Interactive => "interactive",
         }
     }
 
     pub fn is_concordant(&self) -> bool {
         matches!(self, RunProofMode::Concordant)
-    }
-
-    pub fn is_interactive(&self) -> bool {
-        matches!(self, RunProofMode::Interactive)
     }
 }
 
@@ -96,7 +91,7 @@ impl TryFrom<&str> for RunProofMode {
         match value {
             "exact" => Ok(RunProofMode::Exact),
             "concordant" => Ok(RunProofMode::Concordant),
-            "interactive" => Ok(RunProofMode::Interactive),
+            "interactive" => Ok(RunProofMode::Exact),
             other => Err(anyhow!(format!("unsupported run proof mode: {other}"))),
         }
     }
@@ -143,6 +138,12 @@ pub struct RunCheckpointConfig {
     pub model: String,
     pub prompt: String,
     pub token_budget: u64,
+}
+
+impl RunCheckpointConfig {
+    pub fn is_interactive_chat(&self) -> bool {
+        self.checkpoint_type.eq_ignore_ascii_case("InteractiveChat")
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -466,10 +467,11 @@ fn persist_checkpoint(
     let incident_json = params.incident.map(|value| value.to_string());
 
     conn.execute(
-        "INSERT INTO checkpoints (id, run_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        "INSERT INTO checkpoints (id, run_id, checkpoint_config_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
         params![
             &checkpoint_id,
             params.run_id,
+            params.checkpoint_config_id,
             params.parent_checkpoint_id,
             params.turn_index.map(|value| value as i64),
             params.kind,
@@ -505,12 +507,23 @@ fn persist_checkpoint(
     })
 }
 
-fn sum_checkpoint_token_usage(conn: &Connection, run_id: &str) -> anyhow::Result<(u64, u64)> {
-    let (prompt_total, completion_total): (i64, i64) = conn.query_row(
-        "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1",
-        params![run_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+fn sum_checkpoint_token_usage(
+    conn: &Connection,
+    run_id: &str,
+    checkpoint_config_id: Option<&str>,
+) -> anyhow::Result<(u64, u64)> {
+    let (prompt_total, completion_total): (i64, i64) = match checkpoint_config_id {
+        Some(config_id) => conn.query_row(
+            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1 AND checkpoint_config_id = ?2",
+            params![run_id, config_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?,
+        None => conn.query_row(
+            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?,
+    };
 
     let prompt = prompt_total.max(0) as u64;
     let completion = completion_total.max(0) as u64;
@@ -543,6 +556,40 @@ fn load_run_checkpoint_configs(
     }
 
     Ok(configs)
+}
+
+fn load_checkpoint_config_by_id(
+    conn: &Connection,
+    checkpoint_id: &str,
+) -> anyhow::Result<Option<RunCheckpointConfig>> {
+    let row: Option<(String, i64, String, String, String, i64)> = conn
+        .query_row(
+            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget FROM run_checkpoints WHERE id = ?1",
+            params![checkpoint_id],
+            |row| Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            )),
+        )
+        .optional()?;
+
+    let Some((run_id, order_index, checkpoint_type, model, prompt, token_budget_raw)) = row else {
+        return Ok(None);
+    };
+
+    Ok(Some(RunCheckpointConfig {
+        id: checkpoint_id.to_string(),
+        run_id,
+        order_index,
+        checkpoint_type,
+        model,
+        prompt,
+        token_budget: token_budget_raw.max(0) as u64,
+    }))
 }
 
 pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<StoredRun> {
@@ -612,38 +659,147 @@ fn load_last_checkpoint(
     Ok(row)
 }
 
-pub fn submit_turn(
+fn load_last_checkpoint_for_config(
+    conn: &Connection,
+    run_id: &str,
+    checkpoint_config_id: &str,
+) -> anyhow::Result<Option<LastCheckpointInfo>> {
+    let row = conn
+        .query_row(
+            "SELECT id, curr_chain, turn_index FROM checkpoints WHERE run_id = ?1 AND checkpoint_config_id = ?2 ORDER BY COALESCE(turn_index, -1) DESC, timestamp DESC LIMIT 1",
+            params![run_id, checkpoint_config_id],
+            |row| {
+                let turn_index = row
+                    .get::<_, Option<i64>>(2)?
+                    .map(|value| value.max(0) as u32);
+                Ok(LastCheckpointInfo {
+                    id: row.get(0)?,
+                    curr_chain: row.get(1)?,
+                    turn_index,
+                })
+            },
+        )
+        .optional()?;
+
+    Ok(row)
+}
+
+fn load_interactive_messages(
+    conn: &Connection,
+    run_id: &str,
+    checkpoint_config_id: &str,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT m.role, m.body FROM checkpoints c JOIN checkpoint_messages m ON m.checkpoint_id = c.id WHERE c.run_id = ?1 AND c.checkpoint_config_id = ?2 ORDER BY COALESCE(c.turn_index, -1) ASC, c.timestamp ASC",
+    )?;
+
+    let rows = stmt.query_map(params![run_id, checkpoint_config_id], |row| {
+        let role: String = row.get(0)?;
+        let body: String = row.get(1)?;
+        Ok((role, body))
+    })?;
+
+    let mut messages = Vec::new();
+    for row in rows {
+        messages.push(row?);
+    }
+
+    Ok(messages)
+}
+
+fn build_interactive_prompt(
+    template_prompt: &str,
+    transcript: &[(String, String)],
+    user_input: &str,
+) -> String {
+    let mut prompt = String::new();
+    let trimmed_template = template_prompt.trim();
+    if !trimmed_template.is_empty() {
+        prompt.push_str(trimmed_template);
+        prompt.push_str("\n\n");
+    }
+
+    for (role, body) in transcript {
+        let normalized_role = role.trim();
+        let normalized_body = body.trim();
+        prompt.push_str(normalized_role);
+        prompt.push_str(": ");
+        prompt.push_str(normalized_body);
+        prompt.push('\n');
+    }
+
+    prompt.push_str("Human: ");
+    prompt.push_str(user_input.trim());
+    prompt.push_str("\nAI:");
+
+    prompt
+}
+
+pub fn submit_interactive_checkpoint_turn(
     pool: &DbPool,
     run_id: &str,
+    checkpoint_config_id: &str,
     prompt_text: &str,
 ) -> anyhow::Result<SubmitTurnOutcome> {
     let client = DefaultOllamaClient::new();
-    submit_turn_with_client(pool, run_id, prompt_text, &client)
+    submit_interactive_checkpoint_turn_with_client(
+        pool,
+        run_id,
+        checkpoint_config_id,
+        prompt_text,
+        &client,
+    )
 }
 
-pub(crate) fn submit_turn_with_client(
+pub(crate) fn submit_interactive_checkpoint_turn_with_client(
     pool: &DbPool,
     run_id: &str,
+    checkpoint_config_id: &str,
     prompt_text: &str,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<SubmitTurnOutcome> {
+    let trimmed_prompt = prompt_text.trim();
+    if trimmed_prompt.is_empty() {
+        return Err(anyhow!("prompt text is required"));
+    }
+
     let mut conn = pool.get()?;
 
     let stored_run = load_stored_run(&conn, run_id)?;
-    if !stored_run.proof_mode.is_interactive() {
+    let config = match load_checkpoint_config_by_id(&conn, checkpoint_config_id)? {
+        Some(cfg) => {
+            if cfg.run_id != run_id {
+                return Err(anyhow!(
+                    "checkpoint configuration does not belong to the specified run"
+                ));
+            }
+            cfg
+        }
+        None => {
+            return Err(anyhow!(format!(
+                "checkpoint configuration {checkpoint_config_id} not found"
+            )))
+        }
+    };
+
+    if !config.is_interactive_chat() {
         return Err(anyhow!(
-            "submit_turn is only supported for interactive runs"
+            "interactive turns are only supported for InteractiveChat checkpoints"
         ));
     }
+
+    let transcript = load_interactive_messages(&conn, run_id, checkpoint_config_id)?;
+    let llm_prompt = build_interactive_prompt(&config.prompt, &transcript, trimmed_prompt);
 
     let signing_key = ensure_project_signing_key(&conn, &stored_run.project_id)?;
 
     let LlmGeneration { response, usage } =
-        llm_client.stream_generate(&stored_run.default_model, prompt_text)?;
+        llm_client.stream_generate(&config.model, &llm_prompt)?;
 
     let tx = conn.transaction()?;
 
-    let (prior_prompt, prior_completion) = sum_checkpoint_token_usage(&tx, run_id)?;
+    let (prior_prompt, prior_completion) =
+        sum_checkpoint_token_usage(&tx, run_id, Some(checkpoint_config_id))?;
     let projected_prompt_total = prior_prompt
         .checked_add(usage.prompt_tokens)
         .ok_or_else(|| anyhow!("prompt token total overflow"))?;
@@ -654,12 +810,10 @@ pub(crate) fn submit_turn_with_client(
         .checked_add(projected_completion_total)
         .ok_or_else(|| anyhow!("usage token total overflow"))?;
 
-    if let Err(incident) =
-        governance::enforce_budget(stored_run.token_budget, projected_usage_total)
-    {
+    if let Err(incident) = governance::enforce_budget(config.token_budget, projected_usage_total) {
         let incident_json = serde_json::to_string(&incident)?;
         return Err(anyhow!(format!(
-            "turn would exceed token budget: {incident_json}"
+            "turn would exceed checkpoint token budget: {incident_json}"
         )));
     }
 
@@ -671,7 +825,11 @@ pub(crate) fn submit_turn_with_client(
         .map(|value| value.as_str());
     let prev_chain_ref = prev_chain_owned.as_deref().unwrap_or("");
 
-    let last_turn_index = last_checkpoint.as_ref().and_then(|info| info.turn_index);
+    let config_last_checkpoint =
+        load_last_checkpoint_for_config(&tx, run_id, checkpoint_config_id)?;
+    let last_turn_index = config_last_checkpoint
+        .as_ref()
+        .and_then(|info| info.turn_index);
     let human_turn_index = match last_turn_index {
         Some(value) => value
             .checked_add(1)
@@ -682,6 +840,7 @@ pub(crate) fn submit_turn_with_client(
     let human_timestamp = Utc::now().to_rfc3339();
     let human_insert = CheckpointInsert {
         run_id,
+        checkpoint_config_id: Some(checkpoint_config_id),
         parent_checkpoint_id: parent_checkpoint_ref,
         turn_index: Some(human_turn_index),
         kind: "Step",
@@ -696,7 +855,7 @@ pub(crate) fn submit_turn_with_client(
         semantic_digest: None,
         message: Some(CheckpointMessageInput {
             role: "human",
-            body: prompt_text,
+            body: trimmed_prompt,
         }),
     };
     let human_persisted = persist_checkpoint(&tx, &signing_key, &human_insert)?;
@@ -708,7 +867,7 @@ pub(crate) fn submit_turn_with_client(
         .checked_add(1)
         .ok_or_else(|| anyhow!("turn index overflow"))?;
     let ai_timestamp = Utc::now().to_rfc3339();
-    let prompt_sha = provenance::sha256_hex(prompt_text.as_bytes());
+    let prompt_sha = provenance::sha256_hex(llm_prompt.as_bytes());
     let response_sha = provenance::sha256_hex(response.as_bytes());
     let usage_tokens = usage
         .prompt_tokens
@@ -716,6 +875,7 @@ pub(crate) fn submit_turn_with_client(
         .ok_or_else(|| anyhow!("usage token overflow"))?;
     let ai_insert = CheckpointInsert {
         run_id,
+        checkpoint_config_id: Some(checkpoint_config_id),
         parent_checkpoint_id: Some(human_checkpoint_id.as_str()),
         turn_index: Some(ai_turn_index),
         kind: "Step",
@@ -745,6 +905,50 @@ pub(crate) fn submit_turn_with_client(
     })
 }
 
+pub fn finalize_interactive_checkpoint(
+    pool: &DbPool,
+    run_id: &str,
+    checkpoint_config_id: &str,
+) -> anyhow::Result<()> {
+    let mut conn = pool.get()?;
+
+    let config = match load_checkpoint_config_by_id(&conn, checkpoint_config_id)? {
+        Some(cfg) => {
+            if cfg.run_id != run_id {
+                return Err(anyhow!(
+                    "checkpoint configuration does not belong to the specified run"
+                ));
+            }
+            cfg
+        }
+        None => {
+            return Err(anyhow!(format!(
+                "checkpoint configuration {checkpoint_config_id} not found"
+            )))
+        }
+    };
+
+    if !config.is_interactive_chat() {
+        return Err(anyhow!(
+            "finalization is only supported for InteractiveChat checkpoints"
+        ));
+    }
+
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1 AND checkpoint_config_id = ?2",
+        params![run_id, checkpoint_config_id],
+        |row| row.get(0),
+    )?;
+
+    if count == 0 {
+        return Err(anyhow!(
+            "interactive checkpoint cannot be finalized without any recorded turns"
+        ));
+    }
+
+    Ok(())
+}
+
 pub(crate) fn start_hello_run_with_client(
     pool: &DbPool,
     spec: RunSpec,
@@ -759,7 +963,7 @@ pub(crate) fn start_hello_run_with_client(
         }
     }
 
-    if !spec.proof_mode.is_interactive() && spec.checkpoints.is_empty() {
+    if spec.checkpoints.is_empty() {
         return Err(anyhow!(
             "run requires at least one checkpoint configuration"
         ));
@@ -812,10 +1016,6 @@ pub(crate) fn start_hello_run_with_client(
         tx.commit()?;
     }
 
-    if spec.proof_mode.is_interactive() {
-        return Ok(run_id);
-    }
-
     start_run_with_client(pool, &run_id, llm_client)?;
 
     Ok(run_id)
@@ -833,10 +1033,6 @@ pub(crate) fn start_run_with_client(
 ) -> anyhow::Result<()> {
     let mut conn = pool.get()?;
     let stored_run = load_stored_run(&conn, run_id)?;
-
-    if stored_run.proof_mode.is_interactive() {
-        return Ok(());
-    }
 
     if stored_run.checkpoints.is_empty() {
         return Err(anyhow!(format!(
@@ -860,6 +1056,9 @@ pub(crate) fn start_run_with_client(
     let mut prev_chain = String::new();
 
     for config in &stored_run.checkpoints {
+        if config.is_interactive_chat() {
+            continue;
+        }
         let timestamp = Utc::now().to_rfc3339();
         let execution = execute_checkpoint(config, stored_run.seed, llm_client)?;
         let total_usage = execution.usage.total();
@@ -895,6 +1094,7 @@ pub(crate) fn start_run_with_client(
 
         let checkpoint_insert = CheckpointInsert {
             run_id,
+            checkpoint_config_id: Some(config.id.as_str()),
             parent_checkpoint_id: None,
             turn_index: None,
             kind,
@@ -1565,8 +1765,14 @@ mod tests {
             seed: 99,
             token_budget: 5_000,
             model: STUB_MODEL_ID.to_string(),
-            checkpoints: Vec::new(),
-            proof_mode: RunProofMode::Interactive,
+            checkpoints: vec![RunCheckpointTemplate {
+                model: STUB_MODEL_ID.to_string(),
+                prompt: "Interact with the operator".to_string(),
+                token_budget: 1_000,
+                order_index: Some(0),
+                checkpoint_type: "InteractiveChat".to_string(),
+            }],
+            proof_mode: RunProofMode::Exact,
             epsilon: None,
         };
         let spec_clone = spec.clone();
@@ -1590,10 +1796,17 @@ mod tests {
             params![&run_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        assert_eq!(kind, "interactive");
+        assert_eq!(kind, "exact");
         let stored_spec: RunSpec = serde_json::from_str(&stored_spec_json)?;
         assert_eq!(stored_spec, spec_clone);
         assert_eq!(checkpoint_count, 0);
+
+        let config_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM run_checkpoints WHERE run_id = ?1 AND LOWER(checkpoint_type) = 'interactivechat'",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(config_count, 1);
 
         Ok(())
     }
@@ -1611,19 +1824,27 @@ mod tests {
         }
 
         let project = api::create_project_with_pool("Interactive Submit".into(), &pool)?;
+        let chat_prompt = "You are a meticulous co-pilot.".to_string();
+        let run_model = "stub-model".to_string();
         let run_spec = RunSpec {
             project_id: project.id.clone(),
             name: "interactive-run".into(),
             seed: 0,
             token_budget: 10_000,
-            model: STUB_MODEL_ID.into(),
-            checkpoints: Vec::new(),
-            proof_mode: RunProofMode::Interactive,
+            model: run_model.clone(),
+            checkpoints: vec![RunCheckpointTemplate {
+                model: run_model.clone(),
+                prompt: chat_prompt.clone(),
+                token_budget: 10_000,
+                order_index: Some(0),
+                checkpoint_type: "InteractiveChat".to_string(),
+            }],
+            proof_mode: RunProofMode::Exact,
             epsilon: None,
         };
 
         let start_client = RecordingLlmClient::new(
-            run_spec.model.clone(),
+            run_model.clone(),
             String::new(),
             "unused".to_string(),
             TokenUsage {
@@ -1635,20 +1856,20 @@ mod tests {
         let run_id = start_hello_run_with_client(&pool, run_spec.clone(), &start_client)?;
         assert_eq!(*start_client.calls.lock().unwrap(), 0);
 
-        {
+        let config_id: String = {
             let conn = pool.get()?;
-            let checkpoint_count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+            conn.query_row(
+                "SELECT id FROM run_checkpoints WHERE run_id = ?1",
                 params![&run_id],
                 |row| row.get(0),
-            )?;
-            assert_eq!(checkpoint_count, 0);
-        }
+            )?
+        };
 
-        let prompt_text = "Hello partner";
+        let prompt_text = "Hello partner".to_string();
+        let expected_prompt = super::build_interactive_prompt(&chat_prompt, &[], &prompt_text);
         let client = RecordingLlmClient::new(
-            run_spec.model.clone(),
-            prompt_text.to_string(),
+            run_model.clone(),
+            expected_prompt,
             "Greetings from AI".to_string(),
             TokenUsage {
                 prompt_tokens: 7,
@@ -1656,7 +1877,13 @@ mod tests {
             },
         );
 
-        let outcome = submit_turn_with_client(&pool, &run_id, prompt_text, &client)?;
+        let outcome = submit_interactive_checkpoint_turn_with_client(
+            &pool,
+            &run_id,
+            &config_id,
+            &prompt_text,
+            &client,
+        )?;
         assert_eq!(*client.calls.lock().unwrap(), 1);
         assert_eq!(outcome.ai_response, "Greetings from AI");
         assert_eq!(outcome.usage.prompt_tokens, 7);
@@ -1671,9 +1898,10 @@ mod tests {
             prompt_tokens: u64,
             completion_tokens: u64,
             kind: String,
+            config_id: Option<String>,
         }
         let mut stmt = conn.prepare(
-            "SELECT id, parent_checkpoint_id, turn_index, usage_tokens, prompt_tokens, completion_tokens, kind \
+            "SELECT id, parent_checkpoint_id, turn_index, usage_tokens, prompt_tokens, completion_tokens, kind, checkpoint_config_id \
              FROM checkpoints WHERE run_id = ?1 ORDER BY turn_index ASC",
         )?;
         let rows = stmt.query_map(params![&run_id], |row| {
@@ -1691,6 +1919,7 @@ mod tests {
                 prompt_tokens: prompt_tokens.max(0) as u64,
                 completion_tokens: completion_tokens.max(0) as u64,
                 kind: row.get(6)?,
+                config_id: row.get(7)?,
             })
         })?;
         let mut checkpoints = Vec::new();
@@ -1707,6 +1936,7 @@ mod tests {
         assert_eq!(human.usage_tokens, 0);
         assert_eq!(human.prompt_tokens, 0);
         assert_eq!(human.completion_tokens, 0);
+        assert_eq!(human.config_id.as_deref(), Some(config_id.as_str()));
 
         assert_eq!(ai.kind, "Step");
         assert_eq!(ai.parent.as_deref(), Some(human.id.as_str()));
@@ -1714,6 +1944,7 @@ mod tests {
         assert_eq!(ai.usage_tokens, 18);
         assert_eq!(ai.prompt_tokens, 7);
         assert_eq!(ai.completion_tokens, 11);
+        assert_eq!(ai.config_id.as_deref(), Some(config_id.as_str()));
 
         let (human_role, human_body): (String, String) = conn.query_row(
             "SELECT role, body FROM checkpoint_messages WHERE checkpoint_id = ?1",
@@ -1755,70 +1986,78 @@ mod tests {
         }
 
         let project = api::create_project_with_pool("Interactive Budget Gate".into(), &pool)?;
+        let chat_prompt = "Keep responses concise.".to_string();
+        let run_model = STUB_MODEL_ID.to_string();
+        let token_budget = 10;
         let run_spec = RunSpec {
             project_id: project.id.clone(),
             name: "interactive-budget".into(),
             seed: 0,
-            token_budget: 10,
-            model: STUB_MODEL_ID.into(),
-            checkpoints: Vec::new(),
-            proof_mode: RunProofMode::Interactive,
+            token_budget,
+            model: run_model.clone(),
+            checkpoints: vec![RunCheckpointTemplate {
+                model: run_model.clone(),
+                prompt: chat_prompt.clone(),
+                token_budget,
+                order_index: Some(0),
+                checkpoint_type: "InteractiveChat".to_string(),
+            }],
+            proof_mode: RunProofMode::Exact,
             epsilon: None,
         };
-        let run_id = Uuid::new_v4().to_string();
-        let created_at = Utc::now().to_rfc3339();
-        let spec_json = serde_json::to_string(&run_spec)?;
 
-        {
-            let conn = pool.get()?;
-            conn.execute(
-                "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10)",
-                params![
-                    &run_id,
-                    &run_spec.project_id,
-                    &run_spec.name,
-                    &created_at,
-                    "interactive",
-                    &spec_json,
-                    (run_spec.seed as i64),
-                    run_spec.epsilon,
-                    (run_spec.token_budget as i64),
-                    &run_spec.model,
-                ],
-            )?;
-        }
+        let start_client = RecordingLlmClient::new(
+            run_model.clone(),
+            String::new(),
+            "unused".to_string(),
+            TokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+            },
+        );
+        let run_id = start_hello_run_with_client(&pool, run_spec, &start_client)?;
+        assert_eq!(*start_client.calls.lock().unwrap(), 0);
 
-        let signing_key = {
+        let config_id: String = {
             let conn = pool.get()?;
-            ensure_project_signing_key(&conn, &project.id)?
+            conn.query_row(
+                "SELECT id FROM run_checkpoints WHERE run_id = ?1",
+                params![&run_id],
+                |row| row.get(0),
+            )?
         };
 
-        {
-            let conn = pool.get()?;
-            let timestamp = Utc::now().to_rfc3339();
-            let existing = CheckpointInsert {
-                run_id: &run_id,
-                parent_checkpoint_id: None,
-                turn_index: Some(0),
-                kind: "Step",
-                timestamp: &timestamp,
-                incident: None,
-                inputs_sha256: None,
-                outputs_sha256: None,
-                prev_chain: "",
-                usage_tokens: 9,
-                prompt_tokens: 8,
-                completion_tokens: 1,
-                semantic_digest: None,
-                message: None,
-            };
-            let _ = persist_checkpoint(&conn, &signing_key, &existing)?;
-        }
+        let first_prompt = "Initial exchange".to_string();
+        let first_expected = super::build_interactive_prompt(&chat_prompt, &[], &first_prompt);
+        let first_client = RecordingLlmClient::new(
+            run_model.clone(),
+            first_expected,
+            "First reply".to_string(),
+            TokenUsage {
+                prompt_tokens: 6,
+                completion_tokens: 2,
+            },
+        );
+        submit_interactive_checkpoint_turn_with_client(
+            &pool,
+            &run_id,
+            &config_id,
+            &first_prompt,
+            &first_client,
+        )?;
+        assert_eq!(*first_client.calls.lock().unwrap(), 1);
 
-        let prompt_text = "Need more budget";
-        let client = RecordingLlmClient::new(
-            run_spec.model.clone(),
-            prompt_text.to_string(),
+        let transcript = {
+            let conn = pool.get()?;
+            super::load_interactive_messages(&conn, &run_id, &config_id)?
+        };
+
+        let second_prompt = "Need more budget".to_string();
+        let second_expected =
+            super::build_interactive_prompt(&chat_prompt, &transcript, &second_prompt);
+        let second_client = RecordingLlmClient::new(
+            run_model.clone(),
+            second_expected,
             "Denied".to_string(),
             TokenUsage {
                 prompt_tokens: 5,
@@ -1826,11 +2065,17 @@ mod tests {
             },
         );
 
-        let result = submit_turn_with_client(&pool, &run_id, prompt_text, &client);
+        let result = submit_interactive_checkpoint_turn_with_client(
+            &pool,
+            &run_id,
+            &config_id,
+            &second_prompt,
+            &second_client,
+        );
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert!(err.to_string().contains("token budget"));
-        assert_eq!(*client.calls.lock().unwrap(), 1);
+        assert_eq!(*second_client.calls.lock().unwrap(), 1);
 
         let conn = pool.get()?;
         let checkpoint_count: i64 = conn.query_row(
@@ -1838,7 +2083,88 @@ mod tests {
             params![&run_id],
             |row| row.get(0),
         )?;
-        assert_eq!(checkpoint_count, 1);
+        assert_eq!(checkpoint_count, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn finalize_interactive_checkpoint_requires_transcript() -> Result<()> {
+        init_keychain_backend();
+
+        let manager = SqliteConnectionManager::memory();
+        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
+        {
+            let mut conn = pool.get()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            store::migrate_db(&mut conn)?;
+        }
+
+        let project = api::create_project_with_pool("Interactive Finalize".into(), &pool)?;
+        let chat_prompt = "Act as a careful reviewer.".to_string();
+        let run_model = STUB_MODEL_ID.to_string();
+        let run_spec = RunSpec {
+            project_id: project.id.clone(),
+            name: "interactive-finalize".into(),
+            seed: 1,
+            token_budget: 5_000,
+            model: run_model.clone(),
+            checkpoints: vec![RunCheckpointTemplate {
+                model: run_model.clone(),
+                prompt: chat_prompt.clone(),
+                token_budget: 5_000,
+                order_index: Some(0),
+                checkpoint_type: "InteractiveChat".to_string(),
+            }],
+            proof_mode: RunProofMode::Exact,
+            epsilon: None,
+        };
+
+        let start_client = RecordingLlmClient::new(
+            run_model.clone(),
+            String::new(),
+            "unused".to_string(),
+            TokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+            },
+        );
+        let run_id = start_hello_run_with_client(&pool, run_spec, &start_client)?;
+        assert_eq!(*start_client.calls.lock().unwrap(), 0);
+
+        let config_id: String = {
+            let conn = pool.get()?;
+            conn.query_row(
+                "SELECT id FROM run_checkpoints WHERE run_id = ?1",
+                params![&run_id],
+                |row| row.get(0),
+            )?
+        };
+
+        let empty_finalize = finalize_interactive_checkpoint(&pool, &run_id, &config_id);
+        assert!(empty_finalize.is_err());
+
+        let prompt_text = "First turn".to_string();
+        let expected_prompt = super::build_interactive_prompt(&chat_prompt, &[], &prompt_text);
+        let turn_client = RecordingLlmClient::new(
+            run_model.clone(),
+            expected_prompt,
+            "Response".to_string(),
+            TokenUsage {
+                prompt_tokens: 2,
+                completion_tokens: 3,
+            },
+        );
+        submit_interactive_checkpoint_turn_with_client(
+            &pool,
+            &run_id,
+            &config_id,
+            &prompt_text,
+            &turn_client,
+        )?;
+        assert_eq!(*turn_client.calls.lock().unwrap(), 1);
+
+        finalize_interactive_checkpoint(&pool, &run_id, &config_id)?;
 
         Ok(())
     }

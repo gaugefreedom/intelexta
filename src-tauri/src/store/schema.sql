@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS runs (
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant' | 'interactive'
+    kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant'
     spec_json TEXT NOT NULL, -- Serialized RunSpec (deprecated; retained for compatibility)
     sampler_json TEXT, -- Optional sampler config
     seed INTEGER NOT NULL DEFAULT 0,
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS checkpoints (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
+    checkpoint_config_id TEXT,
     parent_checkpoint_id TEXT, -- For chaining interactive turns
     turn_index INTEGER,        -- Strict ordering for interactive mode
     kind TEXT NOT NULL DEFAULT 'Step', -- 'Step' | 'Incident'
@@ -52,8 +53,12 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     completion_tokens INTEGER NOT NULL DEFAULT 0,
     semantic_digest TEXT,
     FOREIGN KEY (run_id) REFERENCES runs(id),
-    FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id)
+    FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id),
+    FOREIGN KEY (checkpoint_config_id) REFERENCES run_checkpoints(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_checkpoints_config_id
+    ON checkpoints(checkpoint_config_id);
 
 CREATE TABLE IF NOT EXISTS checkpoint_messages (
     checkpoint_id TEXT PRIMARY KEY,

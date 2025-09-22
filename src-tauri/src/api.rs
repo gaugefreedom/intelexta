@@ -154,7 +154,15 @@ pub struct CheckpointSummary {
     pub completion_tokens: u64,
     pub parent_checkpoint_id: Option<String>,
     pub turn_index: Option<u32>,
+    pub checkpoint_config_id: Option<String>,
     pub message: Option<CheckpointMessageSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveCheckpointSession {
+    pub checkpoint: orchestrator::RunCheckpointConfig,
+    pub messages: Vec<CheckpointSummary>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -184,13 +192,52 @@ pub fn list_checkpoints(
     list_checkpoints_with_pool(run_id, pool.inner())
 }
 
+#[tauri::command]
+pub fn open_interactive_checkpoint_session(
+    run_id: String,
+    checkpoint_id: String,
+    pool: State<DbPool>,
+) -> Result<InteractiveCheckpointSession, Error> {
+    let conn = pool.get()?;
+    let config = load_checkpoint_config(&conn, &checkpoint_id)?;
+
+    if config.run_id != run_id {
+        return Err(Error::Api(
+            "checkpoint configuration does not belong to the specified run".to_string(),
+        ));
+    }
+
+    if !config.is_interactive_chat() {
+        return Err(Error::Api(
+            "checkpoint is not configured for interactive chat".to_string(),
+        ));
+    }
+
+    drop(conn);
+
+    let mut messages = list_checkpoints_with_pool(run_id.clone(), pool.inner())?;
+    let checkpoint_id_ref = checkpoint_id.as_str();
+    messages.retain(|entry| {
+        entry
+            .checkpoint_config_id
+            .as_deref()
+            .map(|value| value == checkpoint_id_ref)
+            .unwrap_or(false)
+    });
+
+    Ok(InteractiveCheckpointSession {
+        checkpoint: config,
+        messages,
+    })
+}
+
 pub(crate) fn list_checkpoints_with_pool(
     run_id: String,
     pool: &DbPool,
 ) -> Result<Vec<CheckpointSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, m.role, m.body, m.created_at, m.updated_at
+        "SELECT c.id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, c.checkpoint_config_id, m.role, m.body, m.created_at, m.updated_at
          FROM checkpoints c
          LEFT JOIN checkpoint_messages m ON m.checkpoint_id = c.id
          WHERE c.run_id = ?1
@@ -208,10 +255,11 @@ pub(crate) fn list_checkpoints_with_pool(
         let turn_index = row
             .get::<_, Option<i64>>(11)?
             .map(|value| value.max(0) as u32);
-        let message_role: Option<String> = row.get(12)?;
-        let message_body: Option<String> = row.get(13)?;
-        let message_created_at: Option<String> = row.get(14)?;
-        let message_updated_at: Option<String> = row.get(15)?;
+        let checkpoint_config_id: Option<String> = row.get(12)?;
+        let message_role: Option<String> = row.get(13)?;
+        let message_body: Option<String> = row.get(14)?;
+        let message_created_at: Option<String> = row.get(15)?;
+        let message_updated_at: Option<String> = row.get(16)?;
         let message = match (message_role, message_body, message_created_at) {
             (Some(role), Some(body), Some(created_at)) => Some(CheckpointMessageSummary {
                 role,
@@ -243,6 +291,7 @@ pub(crate) fn list_checkpoints_with_pool(
             },
             parent_checkpoint_id,
             turn_index,
+            checkpoint_config_id,
             message,
         })
     })?;
@@ -251,6 +300,32 @@ pub(crate) fn list_checkpoints_with_pool(
         checkpoints.push(row?);
     }
     Ok(checkpoints)
+}
+
+#[tauri::command]
+pub fn submit_interactive_checkpoint_turn(
+    run_id: String,
+    checkpoint_id: String,
+    prompt_text: String,
+    pool: State<DbPool>,
+) -> Result<orchestrator::SubmitTurnOutcome, Error> {
+    orchestrator::submit_interactive_checkpoint_turn(
+        pool.inner(),
+        &run_id,
+        &checkpoint_id,
+        &prompt_text,
+    )
+    .map_err(|err| Error::Api(err.to_string()))
+}
+
+#[tauri::command]
+pub fn finalize_interactive_checkpoint(
+    run_id: String,
+    checkpoint_id: String,
+    pool: State<DbPool>,
+) -> Result<(), Error> {
+    orchestrator::finalize_interactive_checkpoint(pool.inner(), &run_id, &checkpoint_id)
+        .map_err(|err| Error::Api(err.to_string()))
 }
 
 fn load_checkpoint_config(
@@ -310,25 +385,48 @@ pub(crate) fn replay_run_with_pool(
         )
         .optional()?;
 
-    let report = match kind_opt.as_deref() {
-        Some("exact") => replay::replay_exact_run(run_id.clone(), pool),
-        Some("concordant") => replay::replay_concordant_run(run_id.clone(), pool),
-        Some("interactive") => replay::replay_interactive_run(run_id.clone(), pool),
-        Some(other) => Err(anyhow::anyhow!(
-            "Replay not implemented for run kind: '{}'",
-            other
-        )),
-        None => Ok(replay::ReplayReport {
-            run_id: run_id.clone(),
-            match_status: false,
-            original_digest: String::new(),
-            replay_digest: String::new(),
-            error_message: Some("run not found".to_string()),
-            semantic_original_digest: None,
-            semantic_replay_digest: None,
-            semantic_distance: None,
-            epsilon: None,
-        }),
+    let has_interactive_config: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM run_checkpoints WHERE run_id = ?1 AND LOWER(checkpoint_type) = 'interactivechat')",
+        params![&run_id],
+        |row| {
+            let value: i64 = row.get(0)?;
+            Ok(value != 0)
+        },
+    )?;
+
+    let has_interactive_turns: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM checkpoints WHERE run_id = ?1 AND turn_index IS NOT NULL)",
+        params![&run_id],
+        |row| {
+            let value: i64 = row.get(0)?;
+            Ok(value != 0)
+        },
+    )?;
+
+    let has_interactive = has_interactive_config || has_interactive_turns;
+
+    let report = if has_interactive {
+        replay::replay_interactive_run(run_id.clone(), pool)
+    } else {
+        match kind_opt.as_deref() {
+            Some("exact") => replay::replay_exact_run(run_id.clone(), pool),
+            Some("concordant") => replay::replay_concordant_run(run_id.clone(), pool),
+            Some(other) => Err(anyhow::anyhow!(
+                "Replay not implemented for run kind: '{}'",
+                other
+            )),
+            None => Ok(replay::ReplayReport {
+                run_id: run_id.clone(),
+                match_status: false,
+                original_digest: String::new(),
+                replay_digest: String::new(),
+                error_message: Some("run not found".to_string()),
+                semantic_original_digest: None,
+                semantic_replay_digest: None,
+                semantic_distance: None,
+                epsilon: None,
+            }),
+        }
     }
     .map_err(|err| Error::Api(err.to_string()))?;
 
