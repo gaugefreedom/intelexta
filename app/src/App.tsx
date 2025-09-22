@@ -35,7 +35,15 @@ export default function App() {
       </div>
       <div style={{ flex: 1, display: 'flex' }}>
         <div style={{ width: '300px', borderRight: '1px solid #333', padding: '8px' }}>
-          {selectedProject ? <ContextPanel projectId={selectedProject} /> : <div>Select a project</div>}
+          {selectedProject ? (
+            <ContextPanel
+              projectId={selectedProject}
+              selectedRunId={selectedRunId}
+              onPolicyUpdated={requestRunsRefresh}
+            />
+          ) : (
+            <div>Select a project</div>
+          )}
         </div>
         <div style={{ flex: 1, padding: '8px' }}>
           {selectedProject ? (

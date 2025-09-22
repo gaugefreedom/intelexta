@@ -7,6 +7,7 @@ use crate::{
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
@@ -808,6 +809,16 @@ pub fn reopen_run(run_id: String, pool: State<DbPool>) -> Result<(), Error> {
 #[tauri::command]
 pub fn clone_run(run_id: String, pool: State<DbPool>) -> Result<String, Error> {
     orchestrator::clone_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
+}
+
+#[tauri::command]
+pub fn estimate_run_cost(
+    run_id: String,
+    pool: State<DbPool>,
+) -> Result<orchestrator::RunCostEstimates, Error> {
+    let conn = pool.get()?;
+    orchestrator::estimate_run_cost(conn.deref(), &run_id)
+        .map_err(|err| Error::Api(err.to_string()))
 }
 
 #[tauri::command]
