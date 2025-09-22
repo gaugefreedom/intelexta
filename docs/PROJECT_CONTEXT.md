@@ -18,23 +18,23 @@ Intelexta is an embodiment of the Gauge Freedom mission, designed to build a sca
 3. Default Guardrails & Posture
 Intelexta is designed with a "secure by default" posture to protect the user and their work.
     • Default Posture: Network egress is disabled by default. Local models are preferred. Cryptographic keys are stored in the OS keychain, not the main database. A content-addressed cache is enabled to prevent redundant computation.
-    • Policy & Budget Governance: Policies set allowances at the project scope, while each checkpoint records the configuration snapshot it executed under so budget reconciliations and overrides are provable and auditable.
-    • Audit Trail: Every policy change, budget denial, or rule violation becomes a signed, verifiable "incident" checkpoint in the project's history.
-    • Privacy: No data leaves the user's machine unless explicitly exported by the user in a portable format (.ixp or .car.json).
+    • Policy & Budget Governance: Policies set allowances at the project scope, while each checkpoint persists a signed configuration snapshot, policy revision pointer, and budget reconciliation so enforcement is provable across edits, reruns, and exports.
+    • Audit Trail: Every policy change, budget denial, or rule violation becomes a signed, verifiable "incident" checkpoint in the project's history, preserving the context needed to justify re-runs or overrides.
+    • Privacy & Portability: No data leaves the user's machine unless explicitly exported by the user. When it is exported (.ixp or .car.json), the package carries the policy lineage and checkpoint configurations required for third-party verification without leaking excess project data.
 
 4. User Experience Philosophy: Control Plane for Checkpointed Runs
 Intelexta deliberately trades the raw velocity of a conventional chat UI for the rigor of a verifiable control plane.
-    • Checkpointed Workflow Editing: A run is curated as an editable sequence of checkpoints. Until a run is sealed, users can reorder, refine, or replace checkpoints, and every adjustment produces a new canonicalized state that is ready to be signed.
+    • Runs as Editable Checkpoint Sequences: Every run is curated as an editable sequence of checkpoints. Until the run is sealed, users can reorder, refine, or replace checkpoints, and every adjustment produces a new canonicalized state that is ready to be signed.
+    • EditorPanel as Workflow Builder: The EditorPanel functions as a structured workflow builder. Its explicit RunSpec fields orchestrate checkpoint configuration, budget alignment, and signing prep so the authored sequence can be executed or re-run with proof.
     • Verifiability Over Velocity: Tools like Cursor are optimized for developer velocity. Intelexta is optimized for process verifiability. Every UI element exists to surface checkpoint metadata, budgets, and signatures so that edits remain accountable.
-    • Sprint 1A Interface ("Launch Control"): The EditorPanel is a structured workflow builder, not a chat box. Its explicit fields (RunSpec) define the initial checkpoint sequence and provide the evidence that gets canonicalized, hashed, and signed to initiate a verifiable run.
-    • Foundations for the Workflow Builder: The current orchestrator.rs module and the dag_json field in the RunSpec are the foundational seeds for the advanced workflow builder capability. The V1 product focuses on perfecting single-step ("single-node DAG") execution and editable checkpoint sequencing. Future versions will expand the orchestrator's capabilities to manage complex, multi-node DAGs for intelligent pipelines.
-    • Post-V1 Interactive Symbiosis: Interactive co-creation remains a research track that will arrive after V1. The eventual Interactive proof mode will resemble a notebook or chat, but each turn (human prompt, AI response) will be captured as a distinct, signed checkpoint in the hash-chain.
+    • Foundations for Chaining: The current orchestrator.rs module and the dag_json field in the RunSpec seed the advanced workflow builder capability. V1 emphasizes perfecting single-step execution and editable sequencing while preparing for multi-node chains.
+    • Sprint 2C Interactive Checkpoint: Interactive chat emerges as a specialized checkpoint type delivered in Sprint 2C. Each exchange (human prompt, AI response) is captured as a signed checkpoint, letting conversational collaboration live within the same audited workflow timeline.
 
 5. Artifact Taxonomy
-    • Checkpoint: The atomic unit of proof and configuration. A signed, hash-chained record of a single step in a workflow that captures its inputs, outputs, policy snapshot, and budget reconciliation against the project-wide allowance.
-    • Run: An editable, versioned sequence of checkpoints defined by a specific RunSpec and proof mode. Runs can be iterated until sealed; the final, immutable sequence becomes the reference for replay and receipts.
-    • CAR (Content-Addressable Receipt): A portable, self-contained JSON file that serves as a verifiable receipt for a single run, including the ordered checkpoint configurations and their budget compliance.
-    • IXP (Intelexta Project Export): A compressed archive (.zip) containing the entire project state: project.json, the governing policy.json, and all associated runs, checkpoints, and CARs so project-wide budgets and checkpoint-level evidence stay linked.
+    • Checkpoint: The atomic unit of proof and configuration. Each checkpoint stores its configuration JSON, resolved policy snapshot, inputs/outputs, and budget reconciliation, all signed and hash-chained so enforcement decisions are reproducible.
+    • Run: An editable, versioned sequence of checkpoints defined by a specific RunSpec and proof mode. Drafts capture in-progress edits; sealing freezes the canonical sequence for execution, re-run, CAR generation, and export.
+    • CAR (Content-Addressable Receipt): A portable, self-contained JSON file that carries the sealed checkpoint configurations, policy lineage, and budget outcomes for a run, enabling third parties to verify compliance without accessing the full project.
+    • IXP (Intelexta Project Export): A compressed archive (.zip) containing project.json, full policy and budget history, run and checkpoint data (including interactive checkpoints), and referenced CARs so governance context and portability travel together.
 
  6. Product Roadmap & Future Capabilities
 
@@ -46,7 +46,7 @@ Intelexta is developed through a phased roadmap. The V1.0 release focuses on est
 
         • Goal: Ship a polished, local-first control plane for verifiable AI workflows.
 
-        • Key Features: Exact and Concordant proof modes, editable checkpoint sequencing for runs, portable signed CAR generation, project export/import (.ixp), and integration with local and online AI models under strict governance.
+        • Key Features: Exact and Concordant proof modes, editable checkpoint sequencing with checkpoint CRUD and rerun support, interactive checkpoint type for guided chat, portable signed CAR generation, project export/import (.ixp), and integration with local and online AI models under strict governance.
 
     • V1.X (Post-MVP): Sprints 4+
 
@@ -54,7 +54,7 @@ Intelexta is developed through a phased roadmap. The V1.0 release focuses on est
 
         • Intelligent Orchestration (DAG Engine): The orchestrator.rs will be enhanced to support multi-step, branching workflows defined in dag_json. This will enable users to chain AI calls, run comparisons, and build complex, reproducible research pipelines.
 
-        • Interactive Co-Agency: The Interactive proof mode, including conversational UX, will be delivered after V1 once the checkpointed workflow builder is stable. Each turn (human prompt, AI response) will materialize as a checkpoint so the transcript itself remains auditable.
+        • Interactive Co-Agency: Post-V1 work grows the interactive checkpoint into collaborative notebooks and multi-party review flows. Each turn (human prompt, AI response) remains a checkpoint so the transcript itself stays auditable while unlocking richer co-agency patterns.
 
         • Optional Blockchain Anchoring: A feature to take a finalized CAR's ID and publish it to a public blockchain. This provides a decentralized, immutable, and universally verifiable timestamp, proving the CAR's existence at a specific point in time. This is critical for academic, legal, and IP-sensitive use cases.
 
@@ -318,77 +318,77 @@ Phase 3: Update Frontend for New Features
 
 
 
-**Intelexta - Sprint 2B Milestone Plan (Workflow Builder Foundation)**
+**Intelexta - Sprint 2B Milestone Plan (Checkpoint CRUD & Reruns)**
 Based on: PROJECT_CONTEXT.md v4
 Date: September 23, 2025 (Assumes start after S2A completion)
 
 1. Sprint Goal
-"Establish the workflow builder foundation so runs can be authored as editable checkpoint sequences before sealing."
-This sprint transforms the current launch form into a sequencing tool that captures configuration at each checkpoint while honoring project-wide policies.
+"Deliver the schema, orchestrator plumbing, and UI needed to author checkpoint sequences, edit them safely, and re-run sealed workflows."
+This sprint turns the EditorPanel into a full workflow builder with checkpoint CRUD support while establishing the API surface for deterministic reruns under governance.
 2. Actionable Steps & Tasks
-Phase 1: Data Model & API Support for Editable Sequences
-    1. Task: Introduce run revisioning fields (e.g., version INTEGER, sealed_at TIMESTAMP NULL) so drafts and final runs are distinct.
-    2. Task: Extend checkpoints to include config_json and budget_snapshot JSON blobs that capture per-checkpoint overrides bound to project budgets.
-    3. Task: Add Tauri commands for creating, updating, reordering, and deleting draft checkpoints prior to sealing a run, with guardrails that block edits once sealed.
-Phase 2: EditorPanel Workflow Builder UX
-    1. Task: Replace the single-submit form with a checkpoint timeline editor that supports adding steps, cloning an existing checkpoint, and editing configuration for each node.
-    2. Task: Surface live budget tallies in the builder so editors see remaining project allowances as they adjust checkpoint usage estimates.
-    3. Task: Add a "Seal Run" action that snapshots the final sequence, signs the initial checkpoint, and transitions the run into execution.
-Phase 3: Governance Alignment
-    1. Task: Ensure enforce_budget validates each checkpoint edit against the latest project budget before it can be persisted.
-    2. Task: Record policy_snapshot_id on checkpoints so later audits can prove which policy version governed the configuration.
-    3. Task: Update replay logic to reference the sealed checkpoint sequence rather than the mutable draft state.
+Phase 1: Schema & Persistence Upgrades
+    1. Task: Add run revisioning columns (e.g., draft_hash TEXT, sealed_at TIMESTAMP NULL, rerun_of TEXT) so drafts, sealed runs, and reruns are first-class records.
+    2. Task: Extend checkpoints with config_json, policy_snapshot_id, budget_snapshot_json, and position INTEGER so edits are captured precisely and auditable.
+    3. Task: Introduce checkpoint_edit_log to capture create/update/delete operations with actor, timestamp, and diff payloads for accountability.
+Phase 2: Orchestrator & Command Surface
+    1. Task: Expose Tauri commands for checkpoint create, update, reorder, and delete that validate against current project policy and budgets before persisting.
+    2. Task: Implement seal_run(run_id) to freeze the draft, record the governing policy snapshot, and produce the initial signed checkpoint sequence digest.
+    3. Task: Implement rerun_run(run_id, reason) that clones the sealed configuration, emits a rerun record linked to the original run, and prepares the orchestrator to execute it deterministically.
+Phase 3: EditorPanel Workflow Builder UX
+    1. Task: Replace the single-submit form with a checkpoint list editor supporting add, duplicate, edit, reorder, and delete interactions with inline validation feedback.
+    2. Task: Display live budget projections per checkpoint and flag edits that exceed policy allowances before they can be saved.
+    3. Task: Add "Seal" and "Re-Run" affordances that call the new commands, surface policy references, and update the run timeline without requiring a full refresh.
 3. Acceptance Criteria (Definition of "Done")
-    • WFB-01: Draft runs support checkpoint insert, reorder, and delete operations until sealed, with all edits logged in the audit trail.
-    • WFB-02: The EditorPanel displays project budget consumption projections per checkpoint and prevents sealing if projections exceed allowances.
-    • WFB-03: Sealing a run freezes the checkpoint sequence, records the governing policy snapshot, and produces a signed initial checkpoint ready for execution.
+    • CRUD-01: Draft runs support checkpoint insert, update, reorder, and delete operations until sealed, with every action recorded in checkpoint_edit_log.
+    • CRUD-02: Sealing a run freezes the checkpoint sequence, records the governing policy snapshot, and emits a signed initial checkpoint ready for execution.
+    • RERUN-01: Triggering rerun_run on a sealed run produces a linked rerun record, reuses the checkpoint configurations, and prepares the orchestrator to execute without manual re-entry.
 
-**Intelexta - Sprint 2C Milestone Plan (Chaining & Inspector Visualization)**
+**Intelexta - Sprint 2C Milestone Plan (Chaining, Interactive Checkpoint, Inspector Detail)**
 Based on: PROJECT_CONTEXT.md v4
 Date: September 30, 2025 (Assumes start after S2B completion)
 
 1. Sprint Goal
-"Enable checkpoint chaining and rich inspector visualization so users can reason about multi-step workflows and their budget impact."
-This sprint extends the workflow builder to orchestrate sequential and branching logic while giving inspectors the tools to validate each transition.
+"Activate checkpoint chaining, deliver the interactive checkpoint type, and deepen inspector visibility so multi-step workflows remain explainable."
+This sprint connects the workflow builder to a chaining-capable orchestrator, introduces a conversational checkpoint mode, and equips inspectors with rich detail views.
 2. Actionable Steps & Tasks
 Phase 1: Orchestrator Chaining Enhancements
-    1. Task: Expand dag_json to support explicit node identifiers, dependencies, and checkpoint templates for each node.
-    2. Task: Update orchestrator.rs to execute nodes in dependency order, persisting a checkpoint after each node and emitting incident checkpoints when prerequisites fail.
-    3. Task: Add resumable execution that can restart from the last successful checkpoint when a node fails and a human edits its configuration.
-Phase 2: Inspector Visualization
-    1. Task: Build a graph/timeline hybrid view that displays each checkpoint, its upstream dependencies, and accumulated budget usage.
-    2. Task: Allow selecting a checkpoint to reveal its config_json, policy snapshot, and diff against prior revisions.
-    3. Task: Surface replay status per checkpoint so reviewers can see which steps have been re-verified.
-Phase 3: Governance & Replay Updates
-    1. Task: Update enforce_budget to consume projected usage across chained checkpoints, warning when cumulative totals exceed the project budget.
-    2. Task: Extend replay_exact_run and replay_concordant_run to iterate over the chained checkpoints and halt on the first failure with actionable diagnostics.
-    3. Task: Store inspector layout metadata (e.g., node positions) as part of the run so exported artifacts can reproduce the visualization context.
+    1. Task: Expand dag_json to support ordered node identifiers, dependency lists, and checkpoint templates for each node.
+    2. Task: Update orchestrator.rs to execute nodes in dependency order, emitting checkpoints (or incident checkpoints) per node and honoring resumable execution points.
+    3. Task: Persist chain metadata on the run so replay and exports can reproduce the authored structure.
+Phase 2: Interactive Checkpoint Experience
+    1. Task: Define a checkpoint_kind "interactive" with schema support for transcript turns, participant attribution, and policy references per exchange.
+    2. Task: Implement UI affordances within the EditorPanel to launch an interactive checkpoint session, capture each turn as a sub-checkpoint entry, and finalize it into the sequence.
+    3. Task: Ensure governance hooks (budgets, policy overrides) are invoked for each interactive turn before it is committed.
+Phase 3: Inspector Detail View
+    1. Task: Build an Inspector detail panel that displays the selected checkpoint's configuration JSON, policy snapshot metadata, budget usage, and any interactive transcript content.
+    2. Task: Add per-checkpoint replay status and rerun lineage indicators so reviewers can see when and how steps were re-verified.
+    3. Task: Support chained navigation (previous/next, dependency graph) from the Inspector to help reviewers follow multi-step flows.
 3. Acceptance Criteria (Definition of "Done")
-    • CHAIN-01: Runs may define multi-node chains with dependencies, and the orchestrator executes them in order, producing checkpoints per node.
-    • CHAIN-02: The Inspector displays a visual graph/timeline with budget overlays and lets reviewers inspect the configuration of any checkpoint.
-    • CHAIN-03: Replay tools operate over chained checkpoints, reporting per-node status and honoring resumable execution points.
+    • CHAIN-01: Runs may define chained checkpoints with explicit dependencies, and the orchestrator executes them in order, producing checkpoints (or incidents) per node.
+    • INT-01: Interactive checkpoints capture conversational turns as part of the run, respect governance checks per exchange, and appear alongside other checkpoints in the timeline.
+    • INSP-01: The Inspector detail view surfaces configuration, policy, budget, and replay context for any checkpoint, including interactive transcripts.
 
-**Intelexta - Sprint 3A Milestone Plan (Portability & Verification)**
+**Intelexta - Sprint 3A Milestone Plan (Governance, Portability & Verification)**
 Based on: PROJECT_CONTEXT.md v4
 Date: October 7, 2025 (Assumes start after S2C completion)
 
 1. Sprint Goal
-"Deliver portable artifacts and independent verification so checkpointed workflows can travel and be proven anywhere."
-This sprint finalizes the packaging of checkpoint-level evidence, strengthens policy/budget provenance, and equips reviewers with verification tooling.
+"Harden project-level governance, make checkpointed workflows portable, and deliver independent CAR verification."
+This sprint enforces policy governance across the project lifecycle, packages artifacts for export/import, and equips auditors with robust verification tools.
 2. Actionable Steps & Tasks
-Phase 1: Artifact Packaging
-    1. Task: Update CAR generation to embed the sealed checkpoint sequence, inspector layout metadata, and project budget ledger summaries.
-    2. Task: Ensure each checkpoint entry within the CAR links to the policy_snapshot_id and includes the budget reconciliation delta for that step.
-    3. Task: Add integrity proofs that confirm the sealed run digest covers the workflow builder draft hash, preventing tampering between authoring and execution.
+Phase 1: Governance Reinforcement
+    1. Task: Implement policy versioning with effective_from timestamps and ensure every checkpoint references the correct policy revision.
+    2. Task: Add governance validation that blocks sealing or rerunning if cumulative budgets exceed project allowances or mandatory controls are unmet.
+    3. Task: Surface governance incidents in the UI with remediation actions and ensure they propagate into CARs and exports.
 Phase 2: Project Portability
-    1. Task: Expand export_project to package project.json, policy history, runs, checkpoints, inspector layouts, and CARs into the .ixp archive.
-    2. Task: Implement import_project with validation that reconciles budgets and replays a sample run to confirm the imported data's integrity.
-    3. Task: Provide UI affordances to preview an IXP's contents before import, highlighting any budget conflicts or missing checkpoints.
-Phase 3: Verification Tooling
-    1. Task: Ship intelexta-verify CLI v1 that can validate CAR signatures, policy linkage, and per-checkpoint budgets offline.
-    2. Task: Add a "Verify Externally" button in the Inspector that exports the relevant CAR and launches the CLI with the selected run.
-    3. Task: Publish documentation describing how auditors can reproduce verification results, including canonical_json expectations.
+    1. Task: Expand export_project to package project.json, policy history, runs, checkpoints (including interactive metadata), inspector layouts, and CARs into the .ixp archive with manifest signatures.
+    2. Task: Implement import_project with schema validation, policy/budget reconciliation, and optional dry-run replay to confirm integrity before committing.
+    3. Task: Provide UI previews that highlight inbound policy differences, checkpoint conflicts, and CAR verification status prior to import.
+Phase 3: CAR Verification Tooling
+    1. Task: Ship intelexta-verify CLI v1 that validates CAR signatures, policy linkage, checkpoint budgets, and rerun references offline.
+    2. Task: Add a "Verify Externally" affordance in the Inspector that exports the selected run's CAR and invokes the CLI with captured output.
+    3. Task: Publish documentation describing the verification flow, canonical_json expectations, and how policy governance is represented in CARs.
 3. Acceptance Criteria (Definition of "Done")
-    • PORT-01: Exporting a project produces an .ixp that, when unpacked, contains checkpoint sequences, policies, CARs, and inspector metadata with consistent digests.
-    • PORT-02: Importing an .ixp re-establishes project-wide budgets and successfully replays at least one run without manual fixes.
-    • VERIFY-01: The intelexta-verify CLI validates a CAR's checkpoint chain, policy linkage, and budget compliance, returning actionable errors on mismatch.
+    • GOV-01: Governance checks prevent sealing or rerunning when project policies or budgets would be violated, and the resulting incidents are recorded and viewable.
+    • PORT-01: Exporting a project produces an .ixp that, when inspected, contains runs, checkpoints, policies, inspector metadata, and CARs with consistent digests and manifests.
+    • VERIFY-01: The intelexta-verify CLI validates a CAR's checkpoint chain, policy linkage, budget compliance, and rerun references, returning actionable diagnostics on mismatch.
