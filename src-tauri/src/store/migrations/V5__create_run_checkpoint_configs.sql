@@ -9,7 +9,7 @@ ALTER TABLE runs ADD COLUMN default_model TEXT NOT NULL DEFAULT '';
 UPDATE runs
 SET
     seed = COALESCE(CAST(json_extract(spec_json, '$.seed') AS INTEGER), seed),
-    token_budget = COALESCE(CAST(json_extract(spec_json, '$.token_budget') AS INTEGER), token_budget),
+    token_budget = COALESCE(CAST(json_extract(spec_json, '$.tokenBudget') AS INTEGER), token_budget),
     default_model = COALESCE(json_extract(spec_json, '$.model'), default_model)
 WHERE spec_json IS NOT NULL;
 
