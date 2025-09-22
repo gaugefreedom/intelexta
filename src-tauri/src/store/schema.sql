@@ -25,8 +25,12 @@ CREATE TABLE IF NOT EXISTS runs (
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant' | 'interactive'
-    spec_json TEXT NOT NULL, -- Serialized RunSpec
+    spec_json TEXT NOT NULL, -- Serialized RunSpec (deprecated; retained for compatibility)
     sampler_json TEXT, -- Optional sampler config
+    seed INTEGER NOT NULL DEFAULT 0,
+    epsilon REAL,
+    token_budget INTEGER NOT NULL DEFAULT 0,
+    default_model TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
@@ -74,3 +78,22 @@ CREATE TABLE IF NOT EXISTS receipts (
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_ckpt_run ON checkpoints(run_id);
+
+CREATE TABLE IF NOT EXISTS run_checkpoints (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    order_index INTEGER NOT NULL,
+    checkpoint_type TEXT NOT NULL DEFAULT 'Step',
+    model TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    token_budget INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_checkpoints_order
+    ON run_checkpoints(run_id, order_index);
+
+CREATE INDEX IF NOT EXISTS idx_run_checkpoints_run_id
+    ON run_checkpoints(run_id);

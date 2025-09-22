@@ -15,11 +15,11 @@ pub fn chunk_text(text: &str) -> Result<Vec<String>> {
         let chunk_tokens = &tokens[i..end];
         let chunk_text = bpe.decode(chunk_tokens.to_vec())?;
         chunks.push(chunk_text);
-        
+
         if end == tokens.len() {
             break;
         }
-        
+
         i += CHUNK_SIZE_TOKENS - CHUNK_OVERLAP_TOKENS;
     }
 

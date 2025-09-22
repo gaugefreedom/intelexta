@@ -11,8 +11,7 @@ pub fn extract_text(file_path: &Path) -> Result<String> {
             Ok(text)
         }
         "md" | "txt" => {
-            let text = std::fs::read_to_string(file_path)
-                .context("Failed to read text file")?;
+            let text = std::fs::read_to_string(file_path).context("Failed to read text file")?;
             Ok(text)
         }
         // Add more handlers for .tex, .docx etc. later

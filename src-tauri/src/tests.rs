@@ -70,9 +70,15 @@ fn orchestrator_writes_incident_checkpoint_when_budget_fails() -> Result<()> {
             project_id: project.id.clone(),
             name: "low-budget".into(),
             seed: 1,
-            dag_json: "{}".into(),
             token_budget: 5,
             model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 5,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
         },
@@ -105,9 +111,15 @@ fn list_checkpoints_includes_incident_payload() -> Result<()> {
             project_id: project.id.clone(),
             name: "budget-api".into(),
             seed: 7,
-            dag_json: "{}".into(),
             token_budget: 5,
             model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 5,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
         },
@@ -140,9 +152,15 @@ fn list_checkpoints_includes_message_payload() -> Result<()> {
             project_id: project.id.clone(),
             name: "message-run".into(),
             seed: 3,
-            dag_json: "{}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 50,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
         },
@@ -197,9 +215,15 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
             project_id: project.id.clone(),
             name: "happy-path".into(),
             seed,
-            dag_json: "{\"hello\":true}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{\"hello\":true}".into(),
+                token_budget: 50,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
         },
@@ -308,9 +332,15 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
         project_id: project.id.clone(),
         name: "car-builder-run".into(),
         seed: 31415,
-        dag_json: "{\"nodes\":[]}".into(),
         token_budget: 5_000,
         model: "stub-model".into(),
+        checkpoints: vec![orchestrator::RunCheckpointTemplate {
+            model: "stub-model".into(),
+            prompt: "{\"nodes\":[]}".into(),
+            token_budget: 5_000,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
+        }],
         proof_mode: orchestrator::RunProofMode::Exact,
         epsilon: None,
     };
@@ -347,7 +377,8 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
     let canonical_second = provenance::canonical_json(&body_value_second);
     assert_eq!(canonical_first, canonical_second);
 
-    let expected_version = provenance::sha256_hex(run_spec.dag_json.as_bytes());
+    let expected_version =
+        provenance::sha256_hex(&provenance::canonical_json(&run_spec.checkpoints));
     assert_eq!(first_car.run.kind, "exact");
     assert_eq!(first_car.run.seed, run_spec.seed);
     assert_eq!(first_car.run.version, expected_version);
@@ -383,13 +414,16 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
         .max(0) as u64;
     assert_eq!(first_car.budgets.tokens, total_usage);
 
-    let expected_input_sha = provenance::sha256_hex(b"hello");
+    let expected_input_sha = provenance::sha256_hex(run_spec.checkpoints[0].prompt.as_bytes());
     assert!(first_car.provenance.iter().any(|claim| {
         claim.claim_type == "input" && claim.sha256 == format!("sha256:{expected_input_sha}")
     }));
 
     let mut expected_output_input = b"hello".to_vec();
     expected_output_input.extend_from_slice(&run_spec.seed.to_le_bytes());
+    expected_output_input.extend_from_slice(&0_i64.to_le_bytes());
+    let prompt_hash = provenance::sha256_hex(run_spec.checkpoints[0].prompt.as_bytes());
+    expected_output_input.extend_from_slice(prompt_hash.as_bytes());
     let expected_output_sha = provenance::sha256_hex(&expected_output_input);
     assert!(first_car.provenance.iter().any(|claim| {
         claim.claim_type == "output" && claim.sha256 == format!("sha256:{expected_output_sha}")
@@ -397,7 +431,7 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
 
     let spec_hash = format!(
         "sha256:{}",
-        provenance::sha256_hex(&provenance::canonical_json(&run_spec))
+        provenance::sha256_hex(&provenance::canonical_json(&run_spec.checkpoints))
     );
     assert!(first_car
         .provenance
@@ -437,9 +471,15 @@ fn replay_exact_run_successfully_matches_digest() -> Result<()> {
             project_id: project.id.clone(),
             name: "replay-happy".into(),
             seed,
-            dag_json: "{}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 50,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
         },
@@ -458,6 +498,9 @@ fn replay_exact_run_successfully_matches_digest() -> Result<()> {
 
     let mut expected_input = b"hello".to_vec();
     expected_input.extend_from_slice(&seed.to_le_bytes());
+    expected_input.extend_from_slice(&0_i64.to_le_bytes());
+    let prompt_hash = provenance::sha256_hex(b"{}");
+    expected_input.extend_from_slice(prompt_hash.as_bytes());
     let expected_digest = provenance::sha256_hex(&expected_input);
     assert_eq!(report.original_digest, expected_digest);
 
@@ -476,9 +519,15 @@ fn replay_exact_run_reports_mismatched_digest() -> Result<()> {
             project_id: project.id.clone(),
             name: "replay-tamper".into(),
             seed: 7,
-            dag_json: "{}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 50,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
         },
@@ -522,9 +571,15 @@ fn replay_concordant_run_successfully_matches_semantics() -> Result<()> {
             project_id: project.id.clone(),
             name: "replay-concordant".into(),
             seed: 11,
-            dag_json: "{}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 50,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: orchestrator::RunProofMode::Concordant,
             epsilon: Some(epsilon),
         },
@@ -559,9 +614,15 @@ fn replay_concordant_run_detects_semantic_mismatch() -> Result<()> {
             project_id: project.id.clone(),
             name: "replay-concordant-fail".into(),
             seed: 12,
-            dag_json: "{}".into(),
             token_budget: 50,
             model: "stub-model".into(),
+            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 50,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+            }],
             proof_mode: orchestrator::RunProofMode::Concordant,
             epsilon: Some(epsilon),
         },
@@ -602,9 +663,9 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
         project_id: project.id.clone(),
         name: "interactive-sequential".into(),
         seed: 123,
-        dag_json: "{}".into(),
         token_budget: 10_000,
         model: "stub-model".into(),
+        checkpoints: Vec::new(),
         proof_mode: orchestrator::RunProofMode::Interactive,
         epsilon: None,
     };
@@ -616,14 +677,18 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
     {
         let conn = pool.get()?;
         conn.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10)",
             params![
                 &run_id,
                 &run_spec.project_id,
                 &run_spec.name,
                 &created_at.to_rfc3339(),
                 "interactive",
-                &spec_json
+                &spec_json,
+                (run_spec.seed as i64),
+                run_spec.epsilon,
+                (run_spec.token_budget as i64),
+                &run_spec.model,
             ],
         )?;
     }

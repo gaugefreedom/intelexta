@@ -4,8 +4,9 @@ use crate::{
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
-use rusqlite::{params, types::Type, OptionalExtension};
+use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
@@ -55,6 +56,27 @@ pub struct HelloRunSpec {
     pub epsilon: Option<f64>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointConfigRequest {
+    pub model: String,
+    pub prompt: String,
+    pub token_budget: u64,
+    #[serde(default)]
+    pub checkpoint_type: Option<String>,
+    #[serde(default)]
+    pub order_index: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckpointConfigRequest {
+    pub model: Option<String>,
+    pub prompt: Option<String>,
+    pub token_budget: Option<u64>,
+    pub checkpoint_type: Option<String>,
+}
+
 // In src-tauri/src/api.rs
 
 #[tauri::command]
@@ -63,9 +85,15 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
         project_id: spec.project_id,
         name: spec.name,
         seed: spec.seed,
-        dag_json: spec.dag_json,
         token_budget: spec.token_budget,
-        model: spec.model,
+        model: spec.model.clone(),
+        checkpoints: vec![orchestrator::RunCheckpointTemplate {
+            model: spec.model,
+            prompt: spec.dag_json,
+            token_budget: spec.token_budget,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
+        }],
         proof_mode: spec.proof_mode,
         epsilon: spec.epsilon,
     };
@@ -225,6 +253,39 @@ pub(crate) fn list_checkpoints_with_pool(
     Ok(checkpoints)
 }
 
+fn load_checkpoint_config(
+    conn: &Connection,
+    checkpoint_id: &str,
+) -> Result<orchestrator::RunCheckpointConfig, Error> {
+    let row: Option<(String, i64, String, String, String, i64)> = conn
+        .query_row(
+            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget FROM run_checkpoints WHERE id = ?1",
+            params![checkpoint_id],
+            |row| Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            )),
+        )
+        .optional()?;
+
+    let (run_id, order_index, checkpoint_type, model, prompt, token_budget_raw) =
+        row.ok_or_else(|| Error::Api(format!("checkpoint config {checkpoint_id} not found")))?;
+
+    Ok(orchestrator::RunCheckpointConfig {
+        id: checkpoint_id.to_string(),
+        run_id,
+        order_index,
+        checkpoint_type,
+        model,
+        prompt,
+        token_budget: token_budget_raw.max(0) as u64,
+    })
+}
+
 #[tauri::command]
 pub fn get_policy(project_id: String, pool: State<DbPool>) -> Result<Policy, Error> {
     let conn = pool.get()?;
@@ -272,6 +333,222 @@ pub(crate) fn replay_run_with_pool(
     .map_err(|err| Error::Api(err.to_string()))?;
 
     Ok(report)
+}
+
+#[tauri::command]
+pub fn list_run_checkpoint_configs(
+    run_id: String,
+    pool: State<DbPool>,
+) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+    )?;
+    let rows = stmt.query_map(params![&run_id], |row| {
+        let token_budget: i64 = row.get(6)?;
+        Ok(orchestrator::RunCheckpointConfig {
+            id: row.get(0)?,
+            run_id: row.get(1)?,
+            order_index: row.get(2)?,
+            checkpoint_type: row.get(3)?,
+            model: row.get(4)?,
+            prompt: row.get(5)?,
+            token_budget: token_budget.max(0) as u64,
+        })
+    })?;
+
+    let mut configs = Vec::new();
+    for row in rows {
+        configs.push(row?);
+    }
+
+    Ok(configs)
+}
+
+#[tauri::command]
+pub fn create_checkpoint_config(
+    run_id: String,
+    config: CheckpointConfigRequest,
+    pool: State<DbPool>,
+) -> Result<orchestrator::RunCheckpointConfig, Error> {
+    let conn = pool.get()?;
+    let mut tx = conn.transaction()?;
+
+    let exists: Option<()> = tx
+        .query_row("SELECT 1 FROM runs WHERE id = ?1", params![&run_id], |_| {
+            Ok(())
+        })
+        .optional()?;
+    if exists.is_none() {
+        return Err(Error::Api(format!("run {run_id} not found")));
+    }
+
+    let checkpoint_type = config.checkpoint_type.unwrap_or_else(|| "Step".to_string());
+    let order_index = if let Some(index) = config.order_index {
+        tx.execute(
+            "UPDATE run_checkpoints SET order_index = order_index + 1, updated_at = CURRENT_TIMESTAMP WHERE run_id = ?1 AND order_index >= ?2",
+            params![&run_id, index],
+        )?;
+        index
+    } else {
+        tx.query_row(
+            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM run_checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get::<_, i64>(0),
+        )?
+    };
+
+    let checkpoint_id = Uuid::new_v4().to_string();
+    let CheckpointConfigRequest {
+        model,
+        prompt,
+        token_budget,
+        ..
+    } = config;
+    tx.execute(
+        "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![
+            &checkpoint_id,
+            &run_id,
+            order_index,
+            &checkpoint_type,
+            &model,
+            &prompt,
+            (token_budget as i64),
+        ],
+    )?;
+
+    tx.commit()?;
+
+    Ok(orchestrator::RunCheckpointConfig {
+        id: checkpoint_id,
+        run_id,
+        order_index,
+        checkpoint_type,
+        model,
+        prompt,
+        token_budget,
+    })
+}
+
+#[tauri::command]
+pub fn update_checkpoint_config(
+    checkpoint_id: String,
+    updates: UpdateCheckpointConfigRequest,
+    pool: State<DbPool>,
+) -> Result<orchestrator::RunCheckpointConfig, Error> {
+    let conn = pool.get()?;
+    let mut tx = conn.transaction()?;
+    let mut config = load_checkpoint_config(&tx, &checkpoint_id)?;
+
+    if let Some(model) = updates.model {
+        config.model = model;
+    }
+    if let Some(prompt) = updates.prompt {
+        config.prompt = prompt;
+    }
+    if let Some(token_budget) = updates.token_budget {
+        config.token_budget = token_budget;
+    }
+    if let Some(kind) = updates.checkpoint_type {
+        config.checkpoint_type = kind;
+    }
+
+    tx.execute(
+        "UPDATE run_checkpoints SET model = ?1, prompt = ?2, token_budget = ?3, checkpoint_type = ?4, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
+        params![
+            &config.model,
+            &config.prompt,
+            (config.token_budget as i64),
+            &config.checkpoint_type,
+            &checkpoint_id,
+        ],
+    )?;
+
+    tx.commit()?;
+    Ok(config)
+}
+
+#[tauri::command]
+pub fn delete_checkpoint_config(checkpoint_id: String, pool: State<DbPool>) -> Result<(), Error> {
+    let conn = pool.get()?;
+    let mut tx = conn.transaction()?;
+
+    let row: Option<(String, i64)> = tx
+        .query_row(
+            "SELECT run_id, order_index FROM run_checkpoints WHERE id = ?1",
+            params![&checkpoint_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+
+    let (run_id, order_index) =
+        row.ok_or_else(|| Error::Api(format!("checkpoint config {checkpoint_id} not found")))?;
+
+    tx.execute(
+        "DELETE FROM run_checkpoints WHERE id = ?1",
+        params![&checkpoint_id],
+    )?;
+    tx.execute(
+        "UPDATE run_checkpoints SET order_index = order_index - 1, updated_at = CURRENT_TIMESTAMP WHERE run_id = ?1 AND order_index > ?2",
+        params![&run_id, order_index],
+    )?;
+
+    tx.commit()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reorder_checkpoint_configs(
+    run_id: String,
+    checkpoint_ids: Vec<String>,
+    pool: State<DbPool>,
+) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
+    let conn = pool.get()?;
+    let mut tx = conn.transaction()?;
+
+    let mut existing_stmt =
+        tx.prepare("SELECT id FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC")?;
+    let existing_rows = existing_stmt.query_map(params![&run_id], |row| row.get::<_, String>(0))?;
+    let mut existing = Vec::new();
+    for row in existing_rows {
+        existing.push(row?);
+    }
+
+    if existing.len() != checkpoint_ids.len() {
+        return Err(Error::Api(
+            "reorder list must include all checkpoint ids".to_string(),
+        ));
+    }
+
+    let existing_set: HashSet<_> = existing.iter().cloned().collect();
+    let provided_set: HashSet<_> = checkpoint_ids.iter().cloned().collect();
+    if existing_set != provided_set {
+        return Err(Error::Api(
+            "reorder list does not match stored checkpoint identifiers".to_string(),
+        ));
+    }
+
+    for (index, checkpoint_id) in checkpoint_ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE run_checkpoints SET order_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![index as i64, checkpoint_id],
+        )?;
+    }
+
+    tx.commit()?;
+
+    list_run_checkpoint_configs(run_id, pool)
+}
+
+#[tauri::command]
+pub fn reopen_run(run_id: String, pool: State<DbPool>) -> Result<(), Error> {
+    orchestrator::reopen_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
+}
+
+#[tauri::command]
+pub fn clone_run(run_id: String, pool: State<DbPool>) -> Result<String, Error> {
+    orchestrator::clone_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
 }
 
 #[tauri::command]
