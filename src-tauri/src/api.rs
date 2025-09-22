@@ -183,6 +183,28 @@ pub struct CheckpointSummary {
     pub message: Option<CheckpointMessageSummary>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointDetails {
+    pub id: String,
+    pub run_id: String,
+    pub timestamp: String,
+    pub kind: String,
+    pub incident: Option<IncidentSummary>,
+    pub inputs_sha256: Option<String>,
+    pub outputs_sha256: Option<String>,
+    pub semantic_digest: Option<String>,
+    pub usage_tokens: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub parent_checkpoint_id: Option<String>,
+    pub turn_index: Option<u32>,
+    pub checkpoint_config_id: Option<String>,
+    pub prompt_payload: Option<String>,
+    pub output_payload: Option<String>,
+    pub message: Option<CheckpointMessageSummary>,
+}
+
 #[cfg(feature = "interactive")]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -216,6 +238,14 @@ pub fn list_checkpoints(
     pool: State<DbPool>,
 ) -> Result<Vec<CheckpointSummary>, Error> {
     list_checkpoints_with_pool(run_id, pool.inner())
+}
+
+#[tauri::command]
+pub fn get_checkpoint_details(
+    checkpoint_id: String,
+    pool: State<DbPool>,
+) -> Result<CheckpointDetails, Error> {
+    get_checkpoint_details_with_pool(checkpoint_id, pool.inner())
 }
 
 #[cfg(feature = "interactive")]
@@ -327,6 +357,87 @@ pub(crate) fn list_checkpoints_with_pool(
         checkpoints.push(row?);
     }
     Ok(checkpoints)
+}
+
+pub(crate) fn get_checkpoint_details_with_pool(
+    checkpoint_id: String,
+    pool: &DbPool,
+) -> Result<CheckpointDetails, Error> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.run_id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, c.checkpoint_config_id, p.prompt_payload, p.output_payload, m.role, m.body, m.created_at, m.updated_at
+         FROM checkpoints c
+         LEFT JOIN checkpoint_payloads p ON p.checkpoint_id = c.id
+         LEFT JOIN checkpoint_messages m ON m.checkpoint_id = c.id
+         WHERE c.id = ?1",
+    )?;
+
+    let result = stmt.query_row(params![checkpoint_id], |row| {
+        let incident_json: Option<String> = row.get(4)?;
+        let incident = incident_json
+            .map(|payload| serde_json::from_str::<IncidentSummary>(&payload))
+            .transpose()
+            .map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err))
+            })?;
+        let parent_checkpoint_id: Option<String> = row.get(11)?;
+        let turn_index = row
+            .get::<_, Option<i64>>(12)?
+            .map(|value| value.max(0) as u32);
+        let checkpoint_config_id: Option<String> = row.get(13)?;
+        let prompt_payload: Option<String> = row.get(14)?;
+        let output_payload: Option<String> = row.get(15)?;
+        let message_role: Option<String> = row.get(16)?;
+        let message_body: Option<String> = row.get(17)?;
+        let message_created_at: Option<String> = row.get(18)?;
+        let message_updated_at: Option<String> = row.get(19)?;
+        let message = match (message_role, message_body, message_created_at) {
+            (Some(role), Some(body), Some(created_at)) => Some(CheckpointMessageSummary {
+                role,
+                body,
+                created_at,
+                updated_at: message_updated_at,
+            }),
+            _ => None,
+        };
+
+        Ok(CheckpointDetails {
+            id: row.get(0)?,
+            run_id: row.get(1)?,
+            timestamp: row.get(2)?,
+            kind: row.get(3)?,
+            incident,
+            inputs_sha256: row.get(5)?,
+            outputs_sha256: row.get(6)?,
+            semantic_digest: row.get(7)?,
+            usage_tokens: {
+                let value: i64 = row.get(8)?;
+                value.max(0) as u64
+            },
+            prompt_tokens: {
+                let value: i64 = row.get(9)?;
+                value.max(0) as u64
+            },
+            completion_tokens: {
+                let value: i64 = row.get(10)?;
+                value.max(0) as u64
+            },
+            parent_checkpoint_id,
+            turn_index,
+            checkpoint_config_id,
+            prompt_payload,
+            output_payload,
+            message,
+        })
+    });
+
+    match result {
+        Ok(details) => Ok(details),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Err(Error::Api("checkpoint not found".to_string()))
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[cfg(feature = "interactive")]

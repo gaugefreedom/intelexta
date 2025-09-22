@@ -50,6 +50,8 @@ struct CheckpointInsert<'a> {
     prompt_tokens: u64,
     completion_tokens: u64,
     semantic_digest: Option<&'a str>,
+    prompt_payload: Option<&'a str>,
+    output_payload: Option<&'a str>,
     message: Option<CheckpointMessageInput<'a>>,
 }
 
@@ -178,6 +180,8 @@ struct NodeExecution {
     outputs_sha256: Option<String>,
     semantic_digest: Option<String>,
     usage: TokenUsage,
+    prompt_payload: Option<String>,
+    output_payload: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -197,6 +201,34 @@ pub struct SubmitTurnOutcome {
 
 pub trait LlmClient {
     fn stream_generate(&self, model: &str, prompt: &str) -> anyhow::Result<LlmGeneration>;
+}
+
+fn sanitize_payload(payload: &str) -> String {
+    const MAX_CHARS: usize = 65_536;
+    let mut result = String::new();
+    let mut count = 0usize;
+    let mut truncated = false;
+
+    for ch in payload.chars() {
+        if ch.is_control() && !matches!(ch, '\n' | '\r' | '\t') {
+            continue;
+        }
+        if count >= MAX_CHARS {
+            truncated = true;
+            break;
+        }
+        result.push(ch);
+        count += 1;
+    }
+
+    if truncated {
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str("…[truncated]");
+    }
+
+    result
 }
 
 struct DefaultOllamaClient;
@@ -552,6 +584,17 @@ fn persist_checkpoint(
         ],
     )?;
 
+    if params.prompt_payload.is_some() || params.output_payload.is_some() {
+        conn.execute(
+            "INSERT INTO checkpoint_payloads (checkpoint_id, prompt_payload, output_payload) VALUES (?1, ?2, ?3) ON CONFLICT(checkpoint_id) DO UPDATE SET prompt_payload = excluded.prompt_payload, output_payload = excluded.output_payload, updated_at = CURRENT_TIMESTAMP",
+            params![
+                &checkpoint_id,
+                params.prompt_payload,
+                params.output_payload,
+            ],
+        )?;
+    }
+
     if let Some(message) = params.message {
         conn.execute(
             "INSERT INTO checkpoint_messages (checkpoint_id, role, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
@@ -864,6 +907,8 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
 
     let LlmGeneration { response, usage } =
         llm_client.stream_generate(&config.model, &llm_prompt)?;
+    let sanitized_llm_prompt = sanitize_payload(&llm_prompt);
+    let sanitized_response = sanitize_payload(&response);
 
     let tx = conn.transaction()?;
 
@@ -922,6 +967,8 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
         prompt_tokens: 0,
         completion_tokens: 0,
         semantic_digest: None,
+        prompt_payload: None,
+        output_payload: None,
         message: Some(CheckpointMessageInput {
             role: "human",
             body: trimmed_prompt,
@@ -957,6 +1004,8 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
         prompt_tokens: usage.prompt_tokens,
         completion_tokens: usage.completion_tokens,
         semantic_digest: None,
+        prompt_payload: Some(sanitized_llm_prompt.as_str()),
+        output_payload: Some(sanitized_response.as_str()),
         message: Some(CheckpointMessageInput {
             role: "ai",
             body: &response,
@@ -1122,6 +1171,8 @@ pub(crate) fn start_run_with_client(
             prompt_tokens,
             completion_tokens,
             semantic_digest: semantic_digest.as_deref(),
+            prompt_payload: execution.prompt_payload.as_deref(),
+            output_payload: execution.output_payload.as_deref(),
             message: None,
         };
 
@@ -1213,6 +1264,8 @@ fn execute_stub_checkpoint(run_seed: u64, order_index: i64, prompt: &str) -> Nod
     let inputs_hex = provenance::sha256_hex(prompt.as_bytes());
     let semantic_source = hex::encode(&output_bytes);
     let semantic_digest = provenance::semantic_digest(&semantic_source);
+    let prompt_payload = sanitize_payload(prompt);
+    let output_payload = sanitize_payload(&semantic_source);
 
     NodeExecution {
         inputs_sha256: Some(inputs_hex),
@@ -1222,6 +1275,8 @@ fn execute_stub_checkpoint(run_seed: u64, order_index: i64, prompt: &str) -> Nod
             prompt_tokens: 0,
             completion_tokens: 10,
         },
+        prompt_payload: Some(prompt_payload),
+        output_payload: Some(output_payload),
     }
 }
 
@@ -1234,12 +1289,16 @@ fn execute_llm_checkpoint(
     let inputs_hex = provenance::sha256_hex(prompt.as_bytes());
     let outputs_hex = provenance::sha256_hex(generation.response.as_bytes());
     let semantic_digest = provenance::semantic_digest(&generation.response);
+    let prompt_payload = sanitize_payload(prompt);
+    let output_payload = sanitize_payload(&generation.response);
 
     Ok(NodeExecution {
         inputs_sha256: Some(inputs_hex),
         outputs_sha256: Some(outputs_hex),
         semantic_digest: Some(semantic_digest),
         usage: generation.usage,
+        prompt_payload: Some(prompt_payload),
+        output_payload: Some(output_payload),
     })
 }
 

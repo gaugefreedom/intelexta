@@ -35,6 +35,26 @@ export interface CheckpointSummary {
   message?: CheckpointMessage | null;
 }
 
+export interface CheckpointDetails {
+  id: string;
+  runId: string;
+  timestamp: string;
+  kind: string;
+  incident?: IncidentSummary | null;
+  inputsSha256?: string | null;
+  outputsSha256?: string | null;
+  semanticDigest?: string | null;
+  usageTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  parentCheckpointId?: string | null;
+  turnIndex?: number | null;
+  checkpointConfigId?: string | null;
+  promptPayload?: string | null;
+  outputPayload?: string | null;
+  message?: CheckpointMessage | null;
+}
+
 export interface IncidentSummary {
   kind: string;
   severity: string;
@@ -170,6 +190,14 @@ export async function listRuns(projectId: string): Promise<RunSummary[]> {
 
 export async function listCheckpoints(runId: string): Promise<CheckpointSummary[]> {
   return await invoke<CheckpointSummary[]>('list_checkpoints', { runId });
+}
+
+export async function getCheckpointDetails(
+  checkpointId: string,
+): Promise<CheckpointDetails> {
+  return await invoke<CheckpointDetails>('get_checkpoint_details', {
+    checkpointId,
+  });
 }
 
 export async function listRunCheckpointConfigs(
