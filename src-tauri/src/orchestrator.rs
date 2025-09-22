@@ -180,11 +180,13 @@ struct NodeExecution {
     usage: TokenUsage,
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct LlmGeneration {
     pub response: String,
     pub usage: TokenUsage,
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct SubmitTurnOutcome {
     pub human_checkpoint_id: String,
     pub ai_checkpoint_id: String,
