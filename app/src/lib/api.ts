@@ -100,6 +100,18 @@ export interface Policy {
   budgetGCo2e: number;
 }
 
+export interface RunCostEstimates {
+  estimatedTokens: number;
+  estimatedUsd: number;
+  estimatedGCo2e: number;
+  budgetTokens: number;
+  budgetUsd: number;
+  budgetGCo2e: number;
+  exceedsTokens: boolean;
+  exceedsUsd: boolean;
+  exceedsGCo2e: boolean;
+}
+
 export interface RunCheckpointConfig {
   id: string;
   runId: string;
@@ -250,6 +262,10 @@ export async function reopenRun(runId: string): Promise<void> {
 
 export async function cloneRun(runId: string): Promise<string> {
   return await invoke<string>('clone_run', { runId });
+}
+
+export async function estimateRunCost(runId: string): Promise<RunCostEstimates> {
+  return await invoke<RunCostEstimates>('estimate_run_cost', { runId });
 }
 
 export const openInteractiveCheckpointSession: OpenInteractiveCheckpointSession | undefined =

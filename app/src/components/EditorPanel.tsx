@@ -15,12 +15,14 @@ import {
   startRun,
   reopenRun,
   cloneRun,
+  estimateRunCost,
   openInteractiveCheckpointSession,
   submitInteractiveCheckpointTurn,
   finalizeInteractiveCheckpoint,
   type OpenInteractiveCheckpointSession,
   type SubmitInteractiveCheckpointTurn,
   type FinalizeInteractiveCheckpoint,
+  type RunCostEstimates,
 } from "../lib/api";
 import { interactiveFeatureEnabled } from "../lib/featureFlags";
 import CheckpointEditor, { CheckpointFormValue } from "./CheckpointEditor";
@@ -512,6 +514,11 @@ export default function EditorPanel({
   const [configsError, setConfigsError] = React.useState<string | null>(null);
   const [configsRefreshToken, setConfigsRefreshToken] = React.useState(0);
 
+  const [costEstimates, setCostEstimates] = React.useState<RunCostEstimates | null>(null);
+  const [costEstimateLoading, setCostEstimateLoading] = React.useState(false);
+  const [costEstimateError, setCostEstimateError] = React.useState<string | null>(null);
+  const [costsRefreshToken, setCostsRefreshToken] = React.useState(0);
+
   const [availableModels, setAvailableModels] = React.useState<string[]>(["stub-model"]);
   const [modelsLoading, setModelsLoading] = React.useState(false);
   const [modelsError, setModelsError] = React.useState<string | null>(null);
@@ -574,6 +581,29 @@ export default function EditorPanel({
       (config) => config.checkpointType.trim().toLowerCase() === 'interactivechat'.toLowerCase(),
     );
   }, [checkpointConfigs]);
+
+  const costOverrunMessages = React.useMemo(() => {
+    if (!costEstimates) {
+      return [] as string[];
+    }
+    const messages: string[] = [];
+    if (costEstimates.exceedsTokens) {
+      messages.push(
+        `Tokens: ${costEstimates.estimatedTokens.toLocaleString()} / ${costEstimates.budgetTokens.toLocaleString()}`,
+      );
+    }
+    if (costEstimates.exceedsUsd) {
+      messages.push(
+        `USD: ${costEstimates.estimatedUsd.toFixed(2)} / ${costEstimates.budgetUsd.toFixed(2)}`,
+      );
+    }
+    if (costEstimates.exceedsGCo2e) {
+      messages.push(
+        `Carbon: ${costEstimates.estimatedGCo2e.toFixed(2)} g / ${costEstimates.budgetGCo2e.toFixed(2)} g`,
+      );
+    }
+    return messages;
+  }, [costEstimates]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -679,6 +709,46 @@ export default function EditorPanel({
       cancelled = true;
     };
   }, [selectedRunId, configsRefreshToken]);
+
+  React.useEffect(() => {
+    if (!selectedRunId) {
+      setCostEstimates(null);
+      setCostEstimateError(null);
+      setCostEstimateLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCostEstimateLoading(true);
+    setCostEstimateError(null);
+
+    estimateRunCost(selectedRunId)
+      .then((estimates) => {
+        if (cancelled) {
+          return;
+        }
+        setCostEstimates(estimates);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        console.error("Failed to estimate run cost", err);
+        const message =
+          err instanceof Error ? err.message : "Unable to estimate projected run cost.";
+        setCostEstimateError(message);
+        setCostEstimates(null);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCostEstimateLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRunId, configsRefreshToken, costsRefreshToken, refreshToken]);
 
   React.useEffect(() => {
     setActiveEditor(null);
@@ -812,6 +882,7 @@ export default function EditorPanel({
             return next;
           });
           setStatusMessage("Checkpoint added.");
+          setCostsRefreshToken((token) => token + 1);
         } else {
           const updated = await updateCheckpointConfig(activeEditor.checkpoint.id, payload);
           setCheckpointConfigs((previous) => {
@@ -820,6 +891,7 @@ export default function EditorPanel({
             return next;
           });
           setStatusMessage("Checkpoint updated.");
+          setCostsRefreshToken((token) => token + 1);
         }
         setActiveEditor(null);
       } catch (err) {
@@ -857,6 +929,7 @@ export default function EditorPanel({
         setStatusMessage("Checkpoint deleted.");
         setActiveEditor(null);
         setConfigsRefreshToken((token) => token + 1);
+        setCostsRefreshToken((token) => token + 1);
       } catch (err) {
         console.error("Failed to delete checkpoint configuration", err);
         const message =
@@ -892,6 +965,7 @@ export default function EditorPanel({
         );
         setCheckpointConfigs(updated);
         setStatusMessage("Checkpoint order updated.");
+        setCostsRefreshToken((token) => token + 1);
       } catch (err) {
         console.error("Failed to reorder checkpoints", err);
         const message = err instanceof Error ? err.message : "Unable to reorder checkpoints.";
@@ -1177,6 +1251,43 @@ export default function EditorPanel({
                     </button>
                   </div>
                 </div>
+                {costEstimateLoading && (
+                  <div style={{ color: "#9cdcfe", fontSize: "0.8rem" }}>
+                    Estimating projected run costs…
+                  </div>
+                )}
+                {costEstimateError && <div style={{ color: "#f48771" }}>{costEstimateError}</div>}
+                {costOverrunMessages.length > 0 && costEstimates && (
+                  <div
+                    style={{
+                      backgroundColor: "#402020",
+                      border: "1px solid #7f1d1d",
+                      color: "#f8caca",
+                      padding: "10px",
+                      borderRadius: "6px",
+                      fontSize: "0.85rem",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "6px",
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, color: "#f48771" }}>
+                      Projected costs exceed policy budgets.
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: "18px" }}>
+                      {costOverrunMessages.map((message) => (
+                        <li key={message} style={{ marginBottom: "2px" }}>
+                          {message}
+                        </li>
+                      ))}
+                    </ul>
+                    <div>
+                      Estimated usage totals {costEstimates.estimatedTokens.toLocaleString()} tokens (~
+                      ${costEstimates.estimatedUsd.toFixed(2)}, {costEstimates.estimatedGCo2e.toFixed(2)} gCO₂e).
+                      Adjust checkpoint token budgets or update the project policy before launching this run.
+                    </div>
+                  </div>
+                )}
                 {configsError && <div style={{ color: "#f48771" }}>{configsError}</div>}
                 {configsLoading ? (
                   <div style={{ color: "#9cdcfe" }}>Loading checkpoint configurations…</div>

@@ -1,5 +1,5 @@
 // src-tauri/src/orchestrator.rs
-use crate::{governance, provenance, DbPool};
+use crate::{governance, provenance, store, DbPool};
 use anyhow::{anyhow, Context};
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::TcpStream;
+use std::ops::Deref;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -188,6 +189,67 @@ struct NodeExecution {
 pub struct LlmGeneration {
     pub response: String,
     pub usage: TokenUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCostEstimates {
+    pub estimated_tokens: u64,
+    pub estimated_usd: f64,
+    pub estimated_g_co2e: f64,
+    pub budget_tokens: u64,
+    pub budget_usd: f64,
+    pub budget_g_co2e: f64,
+    pub exceeds_tokens: bool,
+    pub exceeds_usd: bool,
+    pub exceeds_g_co2e: bool,
+}
+
+impl RunCostEstimates {
+    fn exceeds_any(&self) -> bool {
+        self.exceeds_tokens || self.exceeds_usd || self.exceeds_g_co2e
+    }
+}
+
+fn sum_token_budgets(configs: &[RunCheckpointConfig]) -> u64 {
+    configs
+        .iter()
+        .fold(0u64, |acc, cfg| acc.saturating_add(cfg.token_budget))
+}
+
+fn estimate_costs_with_policy(
+    policy: &store::policies::Policy,
+    projected_tokens: u64,
+) -> RunCostEstimates {
+    let token_budget = policy.budget_tokens;
+    let estimated_tokens = projected_tokens;
+    let tokens_f64 = estimated_tokens as f64;
+
+    let usd_per_token = if token_budget > 0 {
+        policy.budget_usd / token_budget as f64
+    } else {
+        0.0
+    };
+    let co2_per_token = if token_budget > 0 {
+        policy.budget_g_co2e / token_budget as f64
+    } else {
+        0.0
+    };
+
+    let estimated_usd = usd_per_token * tokens_f64;
+    let estimated_g_co2e = co2_per_token * tokens_f64;
+
+    RunCostEstimates {
+        estimated_tokens,
+        estimated_usd,
+        estimated_g_co2e,
+        budget_tokens: token_budget,
+        budget_usd: policy.budget_usd,
+        budget_g_co2e: policy.budget_g_co2e,
+        exceeds_tokens: estimated_tokens > token_budget,
+        exceeds_usd: estimated_usd > policy.budget_usd,
+        exceeds_g_co2e: estimated_g_co2e > policy.budget_g_co2e,
+    }
 }
 
 #[cfg(feature = "interactive")]
@@ -665,6 +727,13 @@ fn load_run_checkpoint_configs(
     Ok(configs)
 }
 
+pub fn estimate_run_cost(conn: &Connection, run_id: &str) -> anyhow::Result<RunCostEstimates> {
+    let stored_run = load_stored_run(conn, run_id)?;
+    let policy = store::policies::get(conn, &stored_run.project_id)?;
+    let projected_tokens = sum_token_budgets(&stored_run.checkpoints);
+    Ok(estimate_costs_with_policy(&policy, projected_tokens))
+}
+
 fn load_checkpoint_config_by_id(
     conn: &Connection,
     checkpoint_id: &str,
@@ -1117,15 +1186,82 @@ pub(crate) fn start_run_with_client(
 
     let tx = conn.transaction()?;
     let signing_key = ensure_project_signing_key(&tx, &stored_run.project_id)?;
+    let policy = store::policies::get(tx.deref(), &stored_run.project_id)?;
     let mut prev_chain = String::new();
+    let mut cumulative_usage_tokens: u64 = 0;
 
-    for config in &stored_run.checkpoints {
+    for (index, config) in stored_run.checkpoints.iter().enumerate() {
         if config.is_interactive_chat() {
             continue;
         }
+
         let timestamp = Utc::now().to_rfc3339();
+
+        let projected_remaining_tokens = sum_token_budgets(&stored_run.checkpoints[index..]);
+        let projected_total_tokens =
+            cumulative_usage_tokens.saturating_add(projected_remaining_tokens);
+        let projected_costs = estimate_costs_with_policy(&policy, projected_total_tokens);
+
+        if projected_costs.exceeds_any() {
+            let mut issues = Vec::new();
+            if projected_costs.exceeds_tokens {
+                issues.push(format!(
+                    "tokens {} > {}",
+                    projected_costs.estimated_tokens, projected_costs.budget_tokens
+                ));
+            }
+            if projected_costs.exceeds_usd {
+                issues.push(format!(
+                    "USD {:.2} > {:.2}",
+                    projected_costs.estimated_usd, projected_costs.budget_usd
+                ));
+            }
+            if projected_costs.exceeds_g_co2e {
+                issues.push(format!(
+                    "CO₂ {:.2} g > {:.2} g",
+                    projected_costs.estimated_g_co2e, projected_costs.budget_g_co2e
+                ));
+            }
+
+            let summary = issues.join(", ");
+            let incident = governance::Incident {
+                kind: "budget_projection_exceeded".into(),
+                severity: "error".into(),
+                details: format!(
+                    "Projected costs exceed policy budgets before executing checkpoint {} ({}): {}.",
+                    config.id, config.checkpoint_type, summary
+                ),
+            };
+            let incident_value = serde_json::to_value(&incident)?;
+
+            let checkpoint_insert = CheckpointInsert {
+                run_id,
+                checkpoint_config_id: Some(config.id.as_str()),
+                parent_checkpoint_id: None,
+                turn_index: None,
+                kind: "Incident",
+                timestamp: &timestamp,
+                incident: Some(&incident_value),
+                inputs_sha256: None,
+                outputs_sha256: None,
+                prev_chain: prev_chain.as_str(),
+                usage_tokens: 0,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                semantic_digest: None,
+                prompt_payload: None,
+                output_payload: None,
+                message: None,
+            };
+
+            let persisted = persist_checkpoint(&tx, &signing_key, &checkpoint_insert)?;
+            prev_chain = persisted.curr_chain;
+            break;
+        }
+
         let execution = execute_checkpoint(config, stored_run.seed, llm_client)?;
         let total_usage = execution.usage.total();
+        cumulative_usage_tokens = cumulative_usage_tokens.saturating_add(total_usage);
         let prompt_tokens = execution.usage.prompt_tokens;
         let completion_tokens = execution.usage.completion_tokens;
         let mut incident_value: Option<serde_json::Value> = None;
