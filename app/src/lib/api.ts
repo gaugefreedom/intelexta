@@ -15,7 +15,7 @@ export interface RunSummary {
   kind: string;
 }
 
-export type RunProofMode = 'exact' | 'concordant' | 'interactive';
+export type RunProofMode = 'exact' | 'concordant';
 
 export interface CheckpointSummary {
   id: string;
@@ -30,6 +30,7 @@ export interface CheckpointSummary {
   completionTokens: number;
   parentCheckpointId?: string | null;
   turnIndex?: number | null;
+  checkpointConfigId?: string | null;
   message?: CheckpointMessage | null;
 }
 
@@ -86,6 +87,11 @@ export interface RunCheckpointConfig {
   model: string;
   prompt: string;
   tokenBudget: number;
+}
+
+export interface InteractiveCheckpointSession {
+  checkpoint: RunCheckpointConfig;
+  messages: CheckpointSummary[];
 }
 
 export interface CheckpointConfigRequest {
@@ -179,11 +185,33 @@ export async function cloneRun(runId: string): Promise<string> {
   return await invoke<string>('clone_run', { runId });
 }
 
-export async function submitTurn(
+export async function openInteractiveCheckpointSession(
   runId: string,
+  checkpointId: string,
+): Promise<InteractiveCheckpointSession> {
+  return await invoke<InteractiveCheckpointSession>('open_interactive_checkpoint_session', {
+    runId,
+    checkpointId,
+  });
+}
+
+export async function submitInteractiveCheckpointTurn(
+  runId: string,
+  checkpointId: string,
   promptText: string,
 ): Promise<SubmitTurnResult> {
-  return await invoke<SubmitTurnResult>('submit_turn', { runId, promptText });
+  return await invoke<SubmitTurnResult>('submit_interactive_checkpoint_turn', {
+    runId,
+    checkpointId,
+    promptText,
+  });
+}
+
+export async function finalizeInteractiveCheckpoint(
+  runId: string,
+  checkpointId: string,
+): Promise<void> {
+  await invoke('finalize_interactive_checkpoint', { runId, checkpointId });
 }
 
 export async function getPolicy(projectId: string): Promise<Policy> {

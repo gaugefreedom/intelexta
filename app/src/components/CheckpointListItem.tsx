@@ -9,6 +9,7 @@ interface CheckpointListItemProps {
   onMoveDown: () => void;
   isFirst: boolean;
   isLast: boolean;
+  onOpenInteractive?: (config: RunCheckpointConfig) => void;
 }
 
 function truncatePrompt(value: string, length = 160): string {
@@ -27,9 +28,11 @@ export default function CheckpointListItem({
   onMoveDown,
   isFirst,
   isLast,
+  onOpenInteractive,
 }: CheckpointListItemProps) {
   const orderLabel = config.orderIndex + 1;
   const promptPreview = truncatePrompt(config.prompt);
+  const isInteractive = config.checkpointType.trim().toLowerCase() === 'interactivechat'.toLowerCase();
 
   return (
     <div
@@ -79,6 +82,11 @@ export default function CheckpointListItem({
         >
           Delete
         </button>
+        {isInteractive && onOpenInteractive && (
+          <button type="button" onClick={() => onOpenInteractive(config)}>
+            Open Chat
+          </button>
+        )}
       </div>
     </div>
   );

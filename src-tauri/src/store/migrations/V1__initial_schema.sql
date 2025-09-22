@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS runs (
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant' | 'interactive'
+    kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant'
     spec_json TEXT NOT NULL, -- Serialized RunSpec
     sampler_json TEXT, -- Optional sampler config
     FOREIGN KEY (project_id) REFERENCES projects(id)
