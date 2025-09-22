@@ -43,6 +43,7 @@ fn main() {
             api::create_project,
             api::list_projects,
             api::list_local_models,
+            api::create_run,
             api::start_hello_run,
             api::list_runs,
             api::list_checkpoints,

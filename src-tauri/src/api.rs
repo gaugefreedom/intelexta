@@ -56,6 +56,31 @@ pub struct HelloRunSpec {
     pub epsilon: Option<f64>,
 }
 
+#[tauri::command]
+pub fn create_run(
+    project_id: String,
+    name: String,
+    proof_mode: orchestrator::RunProofMode,
+    seed: u64,
+    token_budget: u64,
+    default_model: String,
+    epsilon: Option<f64>,
+    pool: State<DbPool>,
+) -> Result<String, Error> {
+    let spec = orchestrator::RunSpec {
+        project_id,
+        name,
+        seed,
+        token_budget,
+        model: default_model,
+        checkpoints: Vec::new(),
+        proof_mode,
+        epsilon,
+    };
+
+    orchestrator::create_run(pool.inner(), spec).map_err(|err| Error::Api(err.to_string()))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointConfigRequest {

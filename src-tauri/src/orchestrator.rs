@@ -439,6 +439,66 @@ fn process_stream_chunk(
     Ok(())
 }
 
+pub fn create_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
+    if spec.proof_mode.is_concordant() {
+        let epsilon = spec
+            .epsilon
+            .ok_or_else(|| anyhow!("concordant runs require an epsilon"))?;
+        if !epsilon.is_finite() || epsilon < 0.0 {
+            return Err(anyhow!("epsilon must be a finite, non-negative value"));
+        }
+    }
+
+    let mut conn = pool.get()?;
+    ensure_project_signing_key(&conn, &spec.project_id)?;
+
+    let run_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let run_kind = spec.proof_mode.as_str();
+    let spec_json = serde_json::to_string(&spec)?;
+
+    {
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                &run_id,
+                &spec.project_id,
+                &spec.name,
+                &now,
+                run_kind,
+                &spec_json,
+                Option::<String>::None,
+                (spec.seed as i64),
+                spec.epsilon,
+                (spec.token_budget as i64),
+                &spec.model,
+            ],
+        )?;
+
+        for (index, template) in spec.checkpoints.iter().enumerate() {
+            let checkpoint_id = Uuid::new_v4().to_string();
+            let order_index = template.order_index.unwrap_or(index as i64);
+            tx.execute(
+                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    &checkpoint_id,
+                    &run_id,
+                    order_index,
+                    &template.checkpoint_type,
+                    &template.model,
+                    &template.prompt,
+                    (template.token_budget as i64),
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+    }
+
+    Ok(run_id)
+}
+
 pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let client = DefaultOllamaClient::new();
     start_hello_run_with_client(pool, spec, &client)
@@ -956,68 +1016,13 @@ pub(crate) fn start_hello_run_with_client(
     spec: RunSpec,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<String> {
-    if spec.proof_mode.is_concordant() {
-        let epsilon = spec
-            .epsilon
-            .ok_or_else(|| anyhow!("concordant runs require an epsilon"))?;
-        if !epsilon.is_finite() || epsilon < 0.0 {
-            return Err(anyhow!("epsilon must be a finite, non-negative value"));
-        }
-    }
-
     if spec.checkpoints.is_empty() {
         return Err(anyhow!(
             "run requires at least one checkpoint configuration"
         ));
     }
 
-    let mut conn = pool.get()?;
-    ensure_project_signing_key(&conn, &spec.project_id)?;
-
-    let run_id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-    let run_kind = spec.proof_mode.as_str();
-    let spec_json = serde_json::to_string(&spec)?;
-
-    {
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![
-                &run_id,
-                &spec.project_id,
-                &spec.name,
-                &now,
-                run_kind,
-                &spec_json,
-                Option::<String>::None,
-                (spec.seed as i64),
-                spec.epsilon,
-                (spec.token_budget as i64),
-                &spec.model,
-            ],
-        )?;
-
-        for (index, template) in spec.checkpoints.iter().enumerate() {
-            let checkpoint_id = Uuid::new_v4().to_string();
-            let order_index = template.order_index.unwrap_or(index as i64);
-            tx.execute(
-                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-                params![
-                    &checkpoint_id,
-                    &run_id,
-                    order_index,
-                    &template.checkpoint_type,
-                    &template.model,
-                    &template.prompt,
-                    (template.token_budget as i64),
-                ],
-            )?;
-        }
-
-        tx.commit()?;
-    }
-
+    let run_id = create_run(pool, spec)?;
     start_run_with_client(pool, &run_id, llm_client)?;
 
     Ok(run_id)
@@ -1136,74 +1141,35 @@ pub fn reopen_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
 }
 
 pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
-    let mut conn = pool.get()?;
-    let source_run = load_stored_run(&conn, source_run_id)?;
-    let new_run_id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-    let clone_name = format!("{} (clone)", source_run.name);
+    let source_run = {
+        let mut conn = pool.get()?;
+        load_stored_run(&conn, source_run_id)?
+    };
 
-    {
-        let tx = conn.transaction()?;
-        let spec_templates: Vec<RunCheckpointTemplate> = source_run
-            .checkpoints
-            .iter()
-            .map(|cfg| RunCheckpointTemplate {
-                model: cfg.model.clone(),
-                prompt: cfg.prompt.clone(),
-                token_budget: cfg.token_budget,
-                order_index: Some(cfg.order_index),
-                checkpoint_type: cfg.checkpoint_type.clone(),
-            })
-            .collect();
-        let spec_snapshot = RunSpec {
-            project_id: source_run.project_id.clone(),
-            name: clone_name.clone(),
-            seed: source_run.seed,
-            token_budget: source_run.token_budget,
-            model: source_run.default_model.clone(),
-            checkpoints: spec_templates,
-            proof_mode: source_run.proof_mode,
-            epsilon: source_run.epsilon,
-        };
-        let spec_json = serde_json::to_string(&spec_snapshot)?;
+    let spec_templates: Vec<RunCheckpointTemplate> = source_run
+        .checkpoints
+        .iter()
+        .map(|cfg| RunCheckpointTemplate {
+            model: cfg.model.clone(),
+            prompt: cfg.prompt.clone(),
+            token_budget: cfg.token_budget,
+            order_index: Some(cfg.order_index),
+            checkpoint_type: cfg.checkpoint_type.clone(),
+        })
+        .collect();
 
-        tx.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![
-                &new_run_id,
-                &source_run.project_id,
-                &clone_name,
-                &now,
-                source_run.proof_mode.as_str(),
-                &spec_json,
-                Option::<String>::None,
-                (source_run.seed as i64),
-                source_run.epsilon,
-                (source_run.token_budget as i64),
-                &source_run.default_model,
-            ],
-        )?;
+    let spec_snapshot = RunSpec {
+        project_id: source_run.project_id.clone(),
+        name: format!("{} (clone)", source_run.name),
+        seed: source_run.seed,
+        token_budget: source_run.token_budget,
+        model: source_run.default_model.clone(),
+        checkpoints: spec_templates,
+        proof_mode: source_run.proof_mode,
+        epsilon: source_run.epsilon,
+    };
 
-        for config in &source_run.checkpoints {
-            let checkpoint_id = Uuid::new_v4().to_string();
-            tx.execute(
-                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-                params![
-                    &checkpoint_id,
-                    &new_run_id,
-                    config.order_index,
-                    &config.checkpoint_type,
-                    &config.model,
-                    &config.prompt,
-                    (config.token_budget as i64),
-                ],
-            )?;
-        }
-
-        tx.commit()?;
-    }
-
-    drop(conn);
+    let new_run_id = create_run(pool, spec_snapshot)?;
     start_run(pool, &new_run_id)?;
     Ok(new_run_id)
 }

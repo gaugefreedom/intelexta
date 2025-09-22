@@ -10,15 +10,19 @@ export default function App() {
   const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
   const [runsRefreshToken, setRunsRefreshToken] = React.useState(0);
 
+  const requestRunsRefresh = React.useCallback(() => {
+    setRunsRefreshToken((token) => token + 1);
+  }, []);
+
   const handleProjectSelect = React.useCallback((projectId: string | null) => {
     setSelectedProject(projectId);
     setSelectedRunId(null);
   }, []);
 
   const handleRunExecuted = React.useCallback((runId: string) => {
-    setRunsRefreshToken((token) => token + 1);
+    requestRunsRefresh();
     setSelectedRunId(runId);
-  }, []);
+  }, [requestRunsRefresh]);
 
   const handleRunSelection = React.useCallback((runId: string | null) => {
     setSelectedRunId(runId);
@@ -41,6 +45,7 @@ export default function App() {
               onSelectRun={handleRunSelection}
               refreshToken={runsRefreshToken}
               onRunExecuted={handleRunExecuted}
+              onRunsMutated={requestRunsRefresh}
             />
           ) : null}
         </div>
