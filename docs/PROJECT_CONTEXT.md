@@ -11,28 +11,30 @@ Use this document as the foundational context for all discussions, code generati
 
 2. Mission Alignment (The "Why")
 Intelexta is an embodiment of the Gauge Freedom mission, designed to build a scaffold of trust for cognitive work in the age of AI.
-    • Human+AI Symbiosis (Agency over Autonomy): Intelexta is a control plane, not an autonomous agent. The human is the strategic director, defining the rules of engagement. This is achieved through local-first keys, user-defined Policies & Budgets, and the ability to verify every step. The AI is a powerful cognitive partner, operating within a provable envelope of human-defined policy.
+    • Human+AI Symbiosis (Agency over Autonomy): Intelexta is a control plane, not an autonomous agent. The human is the strategic director, defining the rules of engagement. This is achieved through local-first keys, project-wide Policies & Budgets, and checkpoint-level configuration snapshots that prove how each step complied. The AI is a powerful cognitive partner, operating within a provable envelope of human-defined policy.
     • Consciousness & Culture Preservation (Integrity of Knowledge): Intelexta is a provenance engine. By creating a permanent, tamper-evident record of how information is generated (Signed Checkpoints), it preserves the context and integrity of knowledge, solving the modern crisis of attribution. The Content-Addressable Receipt (CAR) acts as a digital provenance card for intellectual work.
-    • Energy & Climate Impact (Accountable Efficiency): Intelexta makes energy consumption a first-class design parameter. Carbon emissions (gCO₂e) are a budget that can be set and enforced. The system provides transparent reporting, turning an abstract externality into a concrete, manageable metric.
+    • Energy & Climate Impact (Accountable Efficiency): Intelexta makes energy consumption a first-class design parameter. Carbon emissions (gCO₂e) are governed through project-wide budgets that every checkpoint must reconcile against. The system provides transparent reporting, turning an abstract externality into a concrete, manageable metric.
 
 3. Default Guardrails & Posture
 Intelexta is designed with a "secure by default" posture to protect the user and their work.
     • Default Posture: Network egress is disabled by default. Local models are preferred. Cryptographic keys are stored in the OS keychain, not the main database. A content-addressed cache is enabled to prevent redundant computation.
+    • Policy & Budget Governance: Policies set allowances at the project scope, while each checkpoint records the configuration snapshot it executed under so budget reconciliations and overrides are provable and auditable.
     • Audit Trail: Every policy change, budget denial, or rule violation becomes a signed, verifiable "incident" checkpoint in the project's history.
     • Privacy: No data leaves the user's machine unless explicitly exported by the user in a portable format (.ixp or .car.json).
 
-4. User Experience Philosophy: Control Plane, Not Chat
+4. User Experience Philosophy: Control Plane for Checkpointed Runs
 Intelexta deliberately trades the raw velocity of a conventional chat UI for the rigor of a verifiable control plane.
-    • VeVelocity vs. Verifiability: Tools like Cursor are optimized for developer velocity. Intelexta is optimized for process verifiability. Every UI element is designed to support the goal of producing a provable, auditable output.
-    • Sprint 1A Interface ("Launch Control"): The EditorPanel is a structured form, not a chat box. This is fundamental, as the form's explicit fields (RunSpec) are the evidence that gets canonicalized, hashed, and signed to initiate a verifiable run.
-    • The Path to Intelligent Orchestration: The current orchestrator.rs module and the dag_json field in the RunSpec are the foundational seeds for the advanced "Intelligent Orchestration" capability. The V1 product focuses on perfecting single-step ("single-node DAG") execution across all proof modes. Future versions will expand the orchestrator's capabilities to manage complex, multi-node DAGs for intelligent pipelines.
-    • Future Symbiosis (Interactive Mode): The vision for true symbiosis is realized in the Interactive proof mode. This UI will resemble a notebook or chat, but each turn (human prompt, AI response) is captured as a distinct, signed checkpoint in the hash-chain. The transcript itself becomes the auditable artifact of co-creation.
+    • Checkpointed Workflow Editing: A run is curated as an editable sequence of checkpoints. Until a run is sealed, users can reorder, refine, or replace checkpoints, and every adjustment produces a new canonicalized state that is ready to be signed.
+    • Verifiability Over Velocity: Tools like Cursor are optimized for developer velocity. Intelexta is optimized for process verifiability. Every UI element exists to surface checkpoint metadata, budgets, and signatures so that edits remain accountable.
+    • Sprint 1A Interface ("Launch Control"): The EditorPanel is a structured workflow builder, not a chat box. Its explicit fields (RunSpec) define the initial checkpoint sequence and provide the evidence that gets canonicalized, hashed, and signed to initiate a verifiable run.
+    • Foundations for the Workflow Builder: The current orchestrator.rs module and the dag_json field in the RunSpec are the foundational seeds for the advanced workflow builder capability. The V1 product focuses on perfecting single-step ("single-node DAG") execution and editable checkpoint sequencing. Future versions will expand the orchestrator's capabilities to manage complex, multi-node DAGs for intelligent pipelines.
+    • Post-V1 Interactive Symbiosis: Interactive co-creation remains a research track that will arrive after V1. The eventual Interactive proof mode will resemble a notebook or chat, but each turn (human prompt, AI response) will be captured as a distinct, signed checkpoint in the hash-chain.
 
 5. Artifact Taxonomy
-    • Checkpoint: The atomic unit of proof. A signed, hash-chained record of a single step in a workflow.
-    • Run: A sequence of checkpoints that captures a complete workflow, defined by a specific RunSpec and proof mode.
-    • CAR (Content-Addressable Receipt): A portable, self-contained JSON file that serves as a verifiable receipt for a single Run.
-    • IXP (Intelexta Project Export): A compressed archive (.zip) containing the entire project state: project.json, policy.json, and all associated runs, checkpoints, and CARs.
+    • Checkpoint: The atomic unit of proof and configuration. A signed, hash-chained record of a single step in a workflow that captures its inputs, outputs, policy snapshot, and budget reconciliation against the project-wide allowance.
+    • Run: An editable, versioned sequence of checkpoints defined by a specific RunSpec and proof mode. Runs can be iterated until sealed; the final, immutable sequence becomes the reference for replay and receipts.
+    • CAR (Content-Addressable Receipt): A portable, self-contained JSON file that serves as a verifiable receipt for a single run, including the ordered checkpoint configurations and their budget compliance.
+    • IXP (Intelexta Project Export): A compressed archive (.zip) containing the entire project state: project.json, the governing policy.json, and all associated runs, checkpoints, and CARs so project-wide budgets and checkpoint-level evidence stay linked.
 
  6. Product Roadmap & Future Capabilities
 
@@ -44,13 +46,15 @@ Intelexta is developed through a phased roadmap. The V1.0 release focuses on est
 
         • Goal: Ship a polished, local-first control plane for verifiable AI workflows.
 
-        • Key Features: Exact, Concordant, and Interactive proof modes; portable, signed CAR generation; project export/import (.ixp); and integration with local and online AI models under strict governance.
+        • Key Features: Exact and Concordant proof modes, editable checkpoint sequencing for runs, portable signed CAR generation, project export/import (.ixp), and integration with local and online AI models under strict governance.
 
     • V1.X (Post-MVP): Sprints 4+
 
         • Goal: Evolve from a control plane into an intelligent workflow builder and a trusted hub for verifiable knowledge.
 
         • Intelligent Orchestration (DAG Engine): The orchestrator.rs will be enhanced to support multi-step, branching workflows defined in dag_json. This will enable users to chain AI calls, run comparisons, and build complex, reproducible research pipelines.
+
+        • Interactive Co-Agency: The Interactive proof mode, including conversational UX, will be delivered after V1 once the checkpointed workflow builder is stable. Each turn (human prompt, AI response) will materialize as a checkpoint so the transcript itself remains auditable.
 
         • Optional Blockchain Anchoring: A feature to take a finalized CAR's ID and publish it to a public blockchain. This provides a decentralized, immutable, and universally verifiable timestamp, proving the CAR's existence at a specific point in time. This is critical for academic, legal, and IP-sensitive use cases.
 
@@ -314,223 +318,77 @@ Phase 3: Update Frontend for New Features
 
 
 
-**Intelexta - Sprint 2B Implementation Plan**
-Based on: PROJECT_CONTEXT.md v3
+**Intelexta - Sprint 2B Milestone Plan (Workflow Builder Foundation)**
+Based on: PROJECT_CONTEXT.md v4
 Date: September 23, 2025 (Assumes start after S2A completion)
 
 1. Sprint Goal
-"Implement the 'Interactive' proof mode, transforming the EditorPanel into an auditable conversational interface and establishing the foundation for negotiated co-agency."
-By the end of this sprint, a user will be able to engage in a multi-turn dialogue with a local AI, with each turn being captured as a verifiable, signed checkpoint. This makes the collaborative process itself the primary, auditable artifact.
+"Establish the workflow builder foundation so runs can be authored as editable checkpoint sequences before sealing."
+This sprint transforms the current launch form into a sequencing tool that captures configuration at each checkpoint while honoring project-wide policies.
 2. Actionable Steps & Tasks
-This sprint heavily focuses on evolving the EditorPanel UI and enhancing the orchestrator to handle stateful, turn-by-turn interactions.
-Phase 1: Backend for Interactive Runs
-    1. Task: Evolve the Run & Checkpoint Schema
-        ◦ File: src-tauri/src/store/schema.sql
-        ◦ Action: Add a parent_checkpoint_id column to the checkpoints table. This allows us to explicitly chain turns in a conversation.
-        ◦ Action: Add a turn_index column (INTEGER) to the checkpoints table to maintain strict conversational order.
-    2. Task: Refactor Orchestrator for Statefulness
-        ◦ File: src-tauri/src/orchestrator.rs
-        ◦ Action: Modify the start_run command. If the RunKind is Interactive, it should create the initial run entry and a "Run Started" checkpoint, but it will not execute an AI model immediately. Instead, it prepares for the first human turn.
-        ◦ Action: Create a new Tauri command: submit_turn(run_id: String, prompt_text: String) -> Result<AIMessage, ApiError>.
-        ◦ Logic for submit_turn:
-            1. Create a "Human Input" checkpoint containing the prompt_text, turn_index, and linking to the previous checkpoint.
-            2. Call the local LLM with the prompt_text (and potentially a summary of the conversation history).
-            3. Track the usage metrics for this turn.
-            4. Create an "AI Output" checkpoint containing the AI's response text, usage data, turn_index, and linking to the "Human Input" checkpoint.
-            5. Return the AI's response and its checkpoint ID to the frontend.
-    3. Task: Implement Replay for Interactive Mode
-        ◦ File: src-tauri/src/replay.rs
-        ◦ Action: Implement replay_interactive_run(run_id: String).
-        ◦ Logic (Process Proof): This replay is simpler than the others. It does not re-execute the LLM. It queries the database for all checkpoints associated with the run_id, verifies the cryptographic hash-chain and signatures for every checkpoint in order, and confirms the turn_index is sequential. If the entire chain is valid, the process proof is successful.
-        ◦ Action: Update the main replay_run command in api.rs to call this new function when the run kind is Interactive.
-Phase 2: Frontend for Conversational UI
-    1. Task: Transform the EditorPanel
-        ◦ File: app/src/components/
-        ◦ Action: Use a state variable (e.g., runMode) to conditionally render the UI.
-        ◦ If runMode is 'Configuration' (default): Show the existing "Launch Control" form.
-        ◦ If runMode is 'Interactive': Show a new conversational UI.
-        ◦ Action: When a user configures and starts a new run with kind: 'Interactive', switch the EditorPanel's state to runMode: 'Interactive'.
-    2. Task: Build the Conversational Interface
-        ◦ File: app/src/components/
-        ◦ Action: Design and build the conversational UI. This should include:
-            ▪ A message display area that shows the history of human prompts and AI responses.
-            ▪ A text input area for the user to type their next prompt.
-            ▪ A "Send" button.
-        ◦ Logic:
-            ▪ Use a useState array (e.g., const [messages, setMessages] = useState([])) to hold the conversation history.
-            ▪ When a run begins, fetch all existing checkpoints for that run and populate the messages state.
-            ▪ The "Send" button's onClick handler will call the new submit_turn Tauri command.
-            ▪ When submit_turn returns, append both the user's new prompt and the AI's response to the messages array to update the display.
-    3. Task: Enhance UI with Attribution
-        ◦ File: app/src/components/
-        ◦ Action: Style the message display to clearly distinguish between "Human" and "AI" turns.
-        ◦ Action: For each message bubble, add a small, clickable icon or link that reveals the underlying checkpoint_id. This visually connects the conversation to its verifiable proof on the backend.
-    4. Task: Visual feedback during the AI's turn. When the user's message is sent, immediately show a "placeholder" AI message with a typing indicator or spinner. Replace it with the real message when the submit_turn call returns. This dramatically improves the user experience of the Interactive mode, making it feel responsive and alive, just like a modern chat application.
+Phase 1: Data Model & API Support for Editable Sequences
+    1. Task: Introduce run revisioning fields (e.g., version INTEGER, sealed_at TIMESTAMP NULL) so drafts and final runs are distinct.
+    2. Task: Extend checkpoints to include config_json and budget_snapshot JSON blobs that capture per-checkpoint overrides bound to project budgets.
+    3. Task: Add Tauri commands for creating, updating, reordering, and deleting draft checkpoints prior to sealing a run, with guardrails that block edits once sealed.
+Phase 2: EditorPanel Workflow Builder UX
+    1. Task: Replace the single-submit form with a checkpoint timeline editor that supports adding steps, cloning an existing checkpoint, and editing configuration for each node.
+    2. Task: Surface live budget tallies in the builder so editors see remaining project allowances as they adjust checkpoint usage estimates.
+    3. Task: Add a "Seal Run" action that snapshots the final sequence, signs the initial checkpoint, and transitions the run into execution.
+Phase 3: Governance Alignment
+    1. Task: Ensure enforce_budget validates each checkpoint edit against the latest project budget before it can be persisted.
+    2. Task: Record policy_snapshot_id on checkpoints so later audits can prove which policy version governed the configuration.
+    3. Task: Update replay logic to reference the sealed checkpoint sequence rather than the mutable draft state.
 3. Acceptance Criteria (Definition of "Done")
-    • INTERACTIVE-01 (Backend): Calling submit_turn correctly creates two new, linked checkpoints (one for human input, one for AI output) in the database with sequential turn_index values.
-    • INTERACTIVE-02 (UI): Starting a new Interactive run correctly switches the EditorPanel from the configuration form to the conversational UI.
-    • INTERACTIVE-03 (E2E Loop): Typing a message in the conversational UI and clicking "Send" successfully triggers the submit_turn command, and the AI's response is displayed correctly in the message history.
-    • REPLAY-03 (Process Proof): Replaying an Interactive run successfully verifies the entire checkpoint chain and signature integrity, returning a "PASS" status for the process proof.
-    • UI-04 (Attribution): Each message in the conversation view is clearly marked as either "Human" or "AI," and provides a way to view its associated checkpoint ID.
+    • WFB-01: Draft runs support checkpoint insert, reorder, and delete operations until sealed, with all edits logged in the audit trail.
+    • WFB-02: The EditorPanel displays project budget consumption projections per checkpoint and prevents sealing if projections exceed allowances.
+    • WFB-03: Sealing a run freezes the checkpoint sequence, records the governing policy snapshot, and produces a signed initial checkpoint ready for execution.
 
-Sprint 3A-0: V1 Polish & Refined Plan
-
-The original Sprint 3A plan is excellent but ambitious. After fixing the bugs, the priority should be on making the application robust and usable. The "Negotiated Co-Agency" feature is complex and should be treated as a stretch goal.
-
-Here is a revised, prioritized plan for the agent.
-
-1. Sprint Goal
-
-"Transition from a feature-complete prototype to a polished and shippable V1.0 by implementing robust asynchronous feedback, comprehensive error handling, and project portability."
-
-2. Actionable Steps & Tasks
-
-Phase 1: User Experience & Robustness (Highest Priority)
-
-    Task: Implement Asynchronous Task Handling
-
-        Problem: Long-running AI calls freeze the UI.
-
-        Agent Instruction: Refactor the start_hello_run and replay_run API calls. Use tauri::async_runtime::spawn in the Rust backend to run the orchestrator logic on a background thread. In the frontend, disable the "Start Run" and "Replay" buttons and show a loading spinner while the background task is running. The UI must remain responsive.
-
-    Task: Implement a Global Notification System
-
-        Problem: Backend errors are silent or only appear in the console.
-
-        Agent Instruction: Implement a "toast" notification system in the frontend (App.tsx). Create a global React Context for notifications. Wrap all Tauri invoke calls in a helper function within app/src/lib/api.ts that automatically catches any Err result from Rust and pushes a user-friendly error message to the notification context.
-
-    Task: Create the "Onboarding" / Empty State
-
-        Problem: The app is a blank, confusing screen for new users.
-
-        Agent Instruction: In app/src/components/ProjectTree.tsx, if the list of projects is empty, display a welcoming message with a brief explanation of the app and a prominent "Create Your First Project" button.
-
-Phase 2: Project Portability
-
-    Task: Implement Project Export (.ixp)
-
-        Problem: Users cannot backup or share their work.
-
-        Agent Instruction: Implement the export_project Tauri command as described in the plan. The function should gather all project data (policy, runs, checkpoints), package it into a structured .zip archive with an .ixp extension, and save it to the user's default downloads directory. Report the final file path to the UI via a success notification.
-
-Phase 3: Negotiated Co-Agency (Stretch Goal)
-
-    Task: Implement AI Budget Request & Human Approval
-
-        Problem: The AI is limited by its initial budget and cannot ask for more resources.
-
-        Agent Instruction: If all previous tasks are complete and stable, proceed with this feature.
-
-            In the backend, teach the orchestrator to parse a special token like [ACTION:REQUEST_BUDGET:500] in the AI's response during an interactive turn.
-
-            When this token is detected, halt execution and return a special status to the frontend.
-
-            In the frontend, render a special message bubble with "[Approve]" and "[Deny]" buttons.
-
-            Create a new resolve_action Tauri command that records the user's decision as a new, signed checkpoint and resumes or terminates the run accordingly.
-
-**Intelexta - Sprint 3A Implementation Plan (V1 Polish)**
-Based on: PROJECT_CONTEXT.md v3
+**Intelexta - Sprint 2C Milestone Plan (Chaining & Inspector Visualization)**
+Based on: PROJECT_CONTEXT.md v4
 Date: September 30, 2025 (Assumes start after S2B completion)
 
 1. Sprint Goal
-"Transition from a feature-complete prototype to a polished and shippable V1.0 by implementing project portability (export/import), robust asynchronous feedback, comprehensive error handling, and the first version of negotiated co-agency."
-This sprint focuses on the critical "last mile" features that make a tool truly usable and trustworthy. It ensures users can manage their data, understand what the application is doing, and recover gracefully from errors.
+"Enable checkpoint chaining and rich inspector visualization so users can reason about multi-step workflows and their budget impact."
+This sprint extends the workflow builder to orchestrate sequential and branching logic while giving inspectors the tools to validate each transition.
 2. Actionable Steps & Tasks
-This sprint is focused on hardening the application and adding key features that enable real-world collaboration and long-term use.
-Phase 1: Implement Project Portability
-    1. Task: Implement Project Export (IXP)
-        ◦ File: src-tauri/src/api.rs
-        ◦ Action: Implement a new Tauri command: export_project(project_id: String) -> Result<String, ApiError>.
-        ◦ Logic:
-            1. Create a temporary directory.
-            2. Fetch and write project.json and policy.json for the given project.
-            3. Iterate through all associated runs, checkpoints, and receipts, writing each to a structured directory (e.g., runs/<run_id>/spec.json, runs/<run_id>/checkpoints/<, etc.).
-            4. Use a crate like zip to compress the entire directory into a single <project_name>.ixp file.
-            5. Save the .ixp file to the user's "Downloads" directory.
-            6. Return the final path of the exported file to the frontend.
-    2. Task: Implement Project Import (Stretch Goal)
-        ◦ File: src-tauri/src/api.rs
-        ◦ Action: Create a new command: import_project(file_path: String) -> Result<String, ApiError>.
-        ◦ Logic: This involves unzipping the .ixp file, validating its contents, and carefully inserting the data into the database, ensuring no ID conflicts. This is a complex task and can be considered a stretch goal for the sprint.
-Phase 2: Enhance User Experience & Robustness
-    1. Task: Implement Asynchronous Task Handling
-        ◦ Problem: AI runs can be slow, and the UI currently freezes during execution.
-        ◦ File: src-tauri/src/orchestrator.rs and api.rs
-        ◦ Action: Refactor long-running commands like start_run and replay_run to be fully asynchronous. Use tauri::async_runtime::spawn to run the core logic in a background thread.
-        ◦ File: app/src/components/ & InspectorPanel.tsx
-        ◦ Action: While a run is in progress, disable the "Start Run" and "Replay" buttons and display a prominent loading indicator or spinner. The UI must remain responsive.
-    2. Task: Implement a Global Notification System
-        ◦ Problem: Errors from the backend (e.g., budget exceeded, LLM failure) are not clearly communicated in the UI.
-        ◦ File: app/src/App.tsx or a new context provider
-        ◦ Action: Implement a simple "toast" or notification system. Create a global state (e.g., using React Context or Zustand) to manage a list of notifications.
-        ◦ File: app/src/lib/api.ts
-        ◦ Action: Wrap all invoke calls in a utility that can catch Rust Err results and automatically push a user-friendly error message to the notification state.
-    3. Task: Create the "Onboarding" / Empty State
-        ◦ File: app/src/components/
-        ◦ Action: When the app loads and there are no projects, display a helpful message and a prominent "Create New Project" button instead of a blank panel.
-Phase 3: Implement Negotiated Co-Agency
-    1. Task: Backend for AI-Proposed Actions
-        ◦ File: src-tauri/src/orchestrator.rs
-        ◦ Action: In the submit_turn function for Interactive runs, add logic for the AI to "propose" an action. For this sprint, focus on one action: requesting a budget increase.
-        ◦ Logic: The AI's response can include a special, structured block (e.g., [ACTION:REQUEST_BUDGET:{"). The orchestrator will parse this, halt execution, and return a special message type to the frontend indicating a user decision is required.
-    2. Task: Frontend for Human Approval
-        ◦ File: app/src/components/
-        ◦ Action: When the frontend receives the "decision required" message, it should render a modal dialog or a special message bubble: "The AI partner requests a 500 token budget increase to continue. [Approve] [Deny]".
-        ◦ Action: Create a new Tauri command, resolve_action(run_id: String, decision: bool), that the "Approve/Deny" buttons call. The backend will then record the human's decision as a signed checkpoint and either continue the run or terminate it.
+Phase 1: Orchestrator Chaining Enhancements
+    1. Task: Expand dag_json to support explicit node identifiers, dependencies, and checkpoint templates for each node.
+    2. Task: Update orchestrator.rs to execute nodes in dependency order, persisting a checkpoint after each node and emitting incident checkpoints when prerequisites fail.
+    3. Task: Add resumable execution that can restart from the last successful checkpoint when a node fails and a human edits its configuration.
+Phase 2: Inspector Visualization
+    1. Task: Build a graph/timeline hybrid view that displays each checkpoint, its upstream dependencies, and accumulated budget usage.
+    2. Task: Allow selecting a checkpoint to reveal its config_json, policy snapshot, and diff against prior revisions.
+    3. Task: Surface replay status per checkpoint so reviewers can see which steps have been re-verified.
+Phase 3: Governance & Replay Updates
+    1. Task: Update enforce_budget to consume projected usage across chained checkpoints, warning when cumulative totals exceed the project budget.
+    2. Task: Extend replay_exact_run and replay_concordant_run to iterate over the chained checkpoints and halt on the first failure with actionable diagnostics.
+    3. Task: Store inspector layout metadata (e.g., node positions) as part of the run so exported artifacts can reproduce the visualization context.
 3. Acceptance Criteria (Definition of "Done")
-    • EXPORT-01: The "Export Project" feature successfully creates a .ixp zip file containing all the project's data in the correct folder structure.
-    • UX-01 (Async): Starting a multi-second AI run displays a loading indicator, keeps the UI responsive, and the indicator disappears upon completion.
-    • UX-02 (Errors): A deliberate error in the backend (e.g., trying to read a non-existent file) results in a clear, non-crashing error toast appearing in the UI.
-    • UX-03 (Onboarding): Launching the app for the first time (with an empty database) displays a welcoming "empty state" UI that guides the user to create their first project.
-    • GOV-02 (Negotiation): The AI can request a budget increase during an Interactive run, the user is prompted in the UI to approve or deny it, and their choice is recorded as a new, signed checkpoint in the run's history.
+    • CHAIN-01: Runs may define multi-node chains with dependencies, and the orchestrator executes them in order, producing checkpoints per node.
+    • CHAIN-02: The Inspector displays a visual graph/timeline with budget overlays and lets reviewers inspect the configuration of any checkpoint.
+    • CHAIN-03: Replay tools operate over chained checkpoints, reporting per-node status and honoring resumable execution points.
 
-
-**Intelexta - Sprint 3B Implementation Plan (Ecosystem & Adoption)**
-Based on: PROJECT_CONTEXT.md v3
-Date: October 7, 2025 (Assumes start after S3A completion)
+**Intelexta - Sprint 3A Milestone Plan (Portability & Verification)**
+Based on: PROJECT_CONTEXT.md v4
+Date: October 7, 2025 (Assumes start after S2C completion)
 
 1. Sprint Goal
-"Expand Intelexta's utility beyond local models by integrating with online AI providers, and accelerate user adoption through a guided onboarding experience and enhanced usability features."
-This sprint's focus is on growth. We will break out of the local-only sandbox to connect with the broader AI ecosystem and add features that make the application more intuitive and powerful for daily use, based on anticipated V1 feedback.
+"Deliver portable artifacts and independent verification so checkpointed workflows can travel and be proven anywhere."
+This sprint finalizes the packaging of checkpoint-level evidence, strengthens policy/budget provenance, and equips reviewers with verification tooling.
 2. Actionable Steps & Tasks
-This sprint is divided into three key themes: expanding capabilities with online models, improving the new user experience, and adding quality-of-life features for power users.
-Phase 1: Ecosystem Expansion (Online Providers)
-    1. Task: Implement Secure API Key Management
-        ◦ File: src-tauri/src/api.rs (and a new providers.rs module)
-        ◦ Action: Create UI and backend logic for managing provider API keys (e.g., OpenAI, Anthropic).
-        ◦ Logic: Use the keyring crate to securely store user-provided API keys in the OS keychain, associated with a provider ID (e.g., service: "intelexta-providers", username: "openai_api_key").
-    2. Task: Evolve Policy & Governance for Online Models
-        ◦ File: src-tauri/src/governance.rs
-        ◦ Action: Update the Policy struct to include a list of allowed online providers and their models.
-        ◦ Action: Implement a "rate card" system. The governance module must be able to look up the cost-per-token for specific online models to accurately enforce USD budgets.
-    3. Task: Update Orchestrator for Network Calls
-        ◦ File: src-tauri/src/orchestrator.rs
-        ◦ Action: In the execute_llm_run function, add logic to handle online models.
-        ◦ Logic: If a run specifies an online model, the orchestrator will fetch the appropriate API key from the keychain, construct an authenticated HTTPS request, and send the prompt to the provider's API. It must also handle network errors gracefully.
-    4. Task: Before making any network call, the orchestrator must first check policy.allow_network == true and the list of allowed providers. If false, it must immediately create a signed Incident checkpoint (egress_denied) and stop.
-Phase 2: User Onboarding & Experience
-    1. Task: Create a First-Launch Tutorial Project
-        ◦ Problem: New users are currently met with a blank slate, which can be intimidating.
-        ◦ File: src-tauri/src/main.rs (in the setup closure)
-        ◦ Action: On the very first launch (e.g., by checking if the database is empty before migration), pre-populate the application with a "Welcome to Intelexta" tutorial project. This project should contain a simple, pre-completed run and a CAR that users can inspect and replay immediately.
-    2. Task: Build an In-App Documentation Viewer
-        ◦ File: app/src/components/
-        ◦ Action: Create a new "Help" or "Guide" panel/view.
-        ◦ Content: This view should contain a simple, human-readable explanation of Intelexta's core concepts: What is a Checkpoint? What is a CAR? What are the three Proof Modes? This helps users understand the "why" behind the features.
-Phase 3: Quality of Life for Power Users
-    1. Task: Implement Search and Filtering
-        ◦ Problem: As the number of runs grows, finding specific ones becomes difficult.
-        ◦ File: app/src/components/
-        ◦ Action: Add a search bar above the project list that allows users to filter runs by name or content within their prompts.
-    2. Task: Create a Human-Readable CAR Viewer
-        ◦ Problem: Currently, the CAR is a raw JSON file. It's verifiable but not very readable.
-        ◦ File: app/src/components/
-        ◦ Action: Create a new component, CarViewer.tsx. When a user clicks on a CAR receipt in the UI, instead of just showing the file path, open a dedicated view that renders the CAR's contents as a clean, well-formatted report (e.g., "Run Details," "Budget Consumption," "Provenance Chain," "Replay Result").
-    3. Task: Implement intelexta-verify CLI (V1): The goal would be to build a working version of the command-line tool that can perform the Integrity Check and Reproducibility Check for Exact mode runs.
+Phase 1: Artifact Packaging
+    1. Task: Update CAR generation to embed the sealed checkpoint sequence, inspector layout metadata, and project budget ledger summaries.
+    2. Task: Ensure each checkpoint entry within the CAR links to the policy_snapshot_id and includes the budget reconciliation delta for that step.
+    3. Task: Add integrity proofs that confirm the sealed run digest covers the workflow builder draft hash, preventing tampering between authoring and execution.
+Phase 2: Project Portability
+    1. Task: Expand export_project to package project.json, policy history, runs, checkpoints, inspector layouts, and CARs into the .ixp archive.
+    2. Task: Implement import_project with validation that reconciles budgets and replays a sample run to confirm the imported data's integrity.
+    3. Task: Provide UI affordances to preview an IXP's contents before import, highlighting any budget conflicts or missing checkpoints.
+Phase 3: Verification Tooling
+    1. Task: Ship intelexta-verify CLI v1 that can validate CAR signatures, policy linkage, and per-checkpoint budgets offline.
+    2. Task: Add a "Verify Externally" button in the Inspector that exports the relevant CAR and launches the CLI with the selected run.
+    3. Task: Publish documentation describing how auditors can reproduce verification results, including canonical_json expectations.
 3. Acceptance Criteria (Definition of "Done")
-    • ECO-01 (API Keys): A user can navigate to a settings page, enter an OpenAI API key, and have it securely saved in the OS keychain.
-    • ECO-02 (Online Run): A run can be configured and successfully executed using an online model (e.g., gpt-4o-mini), with its accurate USD cost (based on the rate card) and token usage recorded in a checkpoint.
-    • ONBOARD-01 (Tutorial): On first launch, the app correctly creates and displays a pre-populated "Welcome" project, which includes at least one run that can be successfully replayed.
-    • UX-04 (Search): The UI now includes a functional search bar that filters the list of runs in real-time.
-    • CAR-05 (Viewer): Clicking on a generated CAR opens a new, dedicated view within the app that presents the receipt's information in a clear, human-readable format.
+    • PORT-01: Exporting a project produces an .ixp that, when unpacked, contains checkpoint sequences, policies, CARs, and inspector metadata with consistent digests.
+    • PORT-02: Importing an .ixp re-establishes project-wide budgets and successfully replays at least one run without manual fixes.
+    • VERIFY-01: The intelexta-verify CLI validates a CAR's checkpoint chain, policy linkage, and budget compliance, returning actionable errors on mismatch.
