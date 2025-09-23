@@ -219,14 +219,16 @@ fn load_runs_for_export(
             let rows = stmt.query_map(params![&run.id], |row| {
                 let token_budget: i64 = row.get(6)?;
                 let proof_mode_raw: String = row.get(7)?;
-                let proof_mode = orchestrator::RunProofMode::try_from(proof_mode_raw.as_str())
-                    .map_err(|err| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            7,
-                            rusqlite::types::Type::Text,
-                            Box::new(err),
-                        )
-                    })?;
+                let proof_mode = crate::orchestrator::RunProofMode::try_from(
+                    proof_mode_raw.as_str(),
+                )
+                .map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        7,
+                        rusqlite::types::Type::Text,
+                        Box::new(err),
+                    )
+                })?;
                 Ok(crate::orchestrator::RunCheckpointConfig {
                     id: row.get(0)?,
                     run_id: row.get(1)?,

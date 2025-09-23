@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "interactive")]
 use serde_json::Value;
 #[cfg(feature = "interactive")]
-use std::cmp::Ordering;
 #[cfg(feature = "interactive")]
 use std::collections::HashMap;
 #[cfg(feature = "interactive")]
