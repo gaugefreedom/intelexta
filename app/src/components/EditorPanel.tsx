@@ -29,6 +29,7 @@ import {
 import { interactiveFeatureEnabled } from "../lib/featureFlags";
 import CheckpointEditor, { CheckpointFormValue } from "./CheckpointEditor";
 import CheckpointListItem from "./CheckpointListItem";
+import { isCloneRunDisabled } from "./cloneRunHelpers";
 
 type ConversationRoleCategory = "human" | "ai" | "other";
 
@@ -1356,6 +1357,14 @@ export default function EditorPanel({
     runActionPending ||
     checkpointConfigs.length === 0 ||
     epsilonRequirementUnmet;
+  const cloneRunDisabled = isCloneRunDisabled(
+    selectedRunId,
+    runActionPending,
+    checkpointConfigs.length,
+  );
+  const cloneRunDisabledDueToMissingCheckpoints = Boolean(
+    selectedRun && checkpointConfigs.length === 0,
+  );
 
   return (
     <div>
@@ -1549,11 +1558,21 @@ export default function EditorPanel({
                   <button
                     type="button"
                     onClick={handleCloneRun}
-                    disabled={!selectedRunId || runActionPending}
+                    disabled={cloneRunDisabled}
+                    title={
+                      cloneRunDisabledDueToMissingCheckpoints
+                        ? "Add at least one checkpoint before cloning this run."
+                        : undefined
+                    }
                   >
                     {cloningRun ? "Cloning…" : "Clone run"}
                   </button>
                 </div>
+                {cloneRunDisabledDueToMissingCheckpoints && (
+                  <span style={{ fontSize: "0.8rem", color: "#c586c0" }}>
+                    Add at least one checkpoint before cloning this run.
+                  </span>
+                )}
                 {hasInteractiveCheckpoint && interactiveSupport && (
                   <span style={{ fontSize: "0.8rem", color: "#c586c0" }}>
                     This run contains interactive checkpoints. Manage them via the chat controls below.

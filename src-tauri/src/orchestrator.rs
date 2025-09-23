@@ -676,7 +676,12 @@ pub fn update_run_proof_settings(
 
     tx.execute(
         "UPDATE runs SET kind = ?1, epsilon = ?2, spec_json = ?3 WHERE id = ?4",
-        params![proof_mode.as_str(), validated_epsilon, &updated_spec_json, run_id],
+        params![
+            proof_mode.as_str(),
+            validated_epsilon,
+            &updated_spec_json,
+            run_id
+        ],
     )?;
 
     tx.commit()?;
@@ -1464,6 +1469,12 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
         let mut conn = pool.get()?;
         load_stored_run(&conn, source_run_id)?
     };
+
+    if source_run.checkpoints.is_empty() {
+        return Err(anyhow!(
+            "Cannot clone a run with no checkpoints. Add a checkpoint before cloning."
+        ));
+    }
 
     let spec_templates: Vec<RunCheckpointTemplate> = source_run
         .checkpoints

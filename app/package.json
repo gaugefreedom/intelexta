@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:test": "tsc --project tsconfig.tests.json",
-    "test": "npm run build:test && node --test --experimental-specifier-resolution=node dist-tests/components/__tests__/checkpointEditor.test.js"
+    "test": "npm run build:test && node --test --experimental-specifier-resolution=node dist-tests/components/__tests__/*.test.js"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.1",
