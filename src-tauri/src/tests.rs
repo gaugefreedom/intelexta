@@ -341,6 +341,64 @@ fn reopen_run_returns_to_draft_without_execution() -> Result<()> {
 }
 
 #[test]
+fn reorder_checkpoint_configs_swaps_entries() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Reorder Checkpoints".into(), &pool)?;
+
+    let run_id = orchestrator::create_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "reorder-checkpoints".into(),
+            seed: 5,
+            token_budget: 100,
+            model: "stub-model".into(),
+            checkpoints: vec![
+                orchestrator::RunCheckpointTemplate {
+                    model: "stub-model".into(),
+                    prompt: "{\"prompt\":\"first\"}".into(),
+                    token_budget: 100,
+                    order_index: Some(0),
+                    checkpoint_type: "Step".to_string(),
+                    proof_mode: orchestrator::RunProofMode::Exact,
+                },
+                orchestrator::RunCheckpointTemplate {
+                    model: "stub-model".into(),
+                    prompt: "{\"prompt\":\"second\"}".into(),
+                    token_budget: 100,
+                    order_index: Some(1),
+                    checkpoint_type: "Step".to_string(),
+                    proof_mode: orchestrator::RunProofMode::Exact,
+                },
+            ],
+            proof_mode: orchestrator::RunProofMode::Exact,
+            epsilon: None,
+        },
+    )?;
+
+    let configs = api::list_run_checkpoint_configs_with_pool(run_id.clone(), &pool)?;
+    assert_eq!(configs.len(), 2);
+    assert_eq!(configs[0].order_index, 0);
+    assert_eq!(configs[1].order_index, 1);
+
+    let reordered = vec![configs[1].id.clone(), configs[0].id.clone()];
+    let updated = api::reorder_checkpoint_configs_with_pool(run_id.clone(), reordered, &pool)?;
+    assert_eq!(updated.len(), 2);
+    assert_eq!(updated[0].id, configs[1].id);
+    assert_eq!(updated[0].order_index, 0);
+    assert_eq!(updated[1].id, configs[0].id);
+    assert_eq!(updated[1].order_index, 1);
+
+    let persisted = api::list_run_checkpoint_configs_with_pool(run_id, &pool)?;
+    assert_eq!(persisted.len(), 2);
+    assert_eq!(persisted[0].id, updated[0].id);
+    assert_eq!(persisted[1].id, updated[1].id);
+
+    Ok(())
+}
+
+#[test]
 fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
