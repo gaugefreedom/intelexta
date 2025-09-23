@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::convert::TryFrom;
+use std::fmt;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::ops::Deref;
@@ -68,6 +69,27 @@ pub enum RunProofMode {
     Concordant,
 }
 
+#[derive(Debug, Clone)]
+pub struct RunProofModeParseError {
+    mode: String,
+}
+
+impl RunProofModeParseError {
+    fn new(mode: &str) -> Self {
+        Self {
+            mode: mode.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for RunProofModeParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unsupported run proof mode: {}", self.mode)
+    }
+}
+
+impl std::error::Error for RunProofModeParseError {}
+
 impl Default for RunProofMode {
     fn default() -> Self {
         RunProofMode::Exact
@@ -88,14 +110,14 @@ impl RunProofMode {
 }
 
 impl TryFrom<&str> for RunProofMode {
-    type Error = anyhow::Error;
+    type Error = RunProofModeParseError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "exact" => Ok(RunProofMode::Exact),
             "concordant" => Ok(RunProofMode::Concordant),
             "interactive" => Ok(RunProofMode::Exact),
-            other => Err(anyhow!(format!("unsupported run proof mode: {other}"))),
+            other => Err(RunProofModeParseError::new(other)),
         }
     }
 }
