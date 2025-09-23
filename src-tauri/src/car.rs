@@ -307,9 +307,15 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         None
     };
 
+    let has_concordant_checkpoint = stored_run
+        .checkpoints
+        .iter()
+        .filter(|cfg| !cfg.is_interactive_chat())
+        .any(|cfg| matches!(cfg.proof_mode, orchestrator::RunProofMode::Concordant));
+
     let proof_match_kind = if is_interactive {
         "process".to_string()
-    } else if run_kind.eq_ignore_ascii_case("concordant") {
+    } else if has_concordant_checkpoint {
         "semantic".to_string()
     } else {
         "exact".to_string()

@@ -93,6 +93,8 @@ pub struct CheckpointConfigRequest {
     pub checkpoint_type: Option<String>,
     #[serde(default)]
     pub order_index: Option<i64>,
+    #[serde(default)]
+    pub proof_mode: orchestrator::RunProofMode,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +104,7 @@ pub struct UpdateCheckpointConfigRequest {
     pub prompt: Option<String>,
     pub token_budget: Option<u64>,
     pub checkpoint_type: Option<String>,
+    pub proof_mode: Option<orchestrator::RunProofMode>,
 }
 
 #[derive(Deserialize)]
@@ -142,6 +145,7 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
             token_budget: spec.token_budget,
             order_index: Some(0),
             checkpoint_type: "Step".to_string(),
+            proof_mode: spec.proof_mode,
         }],
         proof_mode: spec.proof_mode,
         epsilon: spec.epsilon,
@@ -496,9 +500,9 @@ fn load_checkpoint_config(
     conn: &Connection,
     checkpoint_id: &str,
 ) -> Result<orchestrator::RunCheckpointConfig, Error> {
-    let row: Option<(String, i64, String, String, String, i64)> = conn
+    let row: Option<(String, i64, String, String, String, i64, String)> = conn
         .query_row(
-            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget FROM run_checkpoints WHERE id = ?1",
+            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE id = ?1",
             params![checkpoint_id],
             |row| Ok((
                 row.get(0)?,
@@ -507,12 +511,22 @@ fn load_checkpoint_config(
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
             )),
         )
         .optional()?;
 
-    let (run_id, order_index, checkpoint_type, model, prompt, token_budget_raw) =
+    let (run_id, order_index, checkpoint_type, model, prompt, token_budget_raw, proof_mode_raw) =
         row.ok_or_else(|| Error::Api(format!("checkpoint config {checkpoint_id} not found")))?;
+
+    let proof_mode =
+        orchestrator::RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
+            Error::from(rusqlite::Error::FromSqlConversionFailure(
+                6,
+                rusqlite::types::Type::Text,
+                Box::new(err),
+            ))
+        })?;
 
     Ok(orchestrator::RunCheckpointConfig {
         id: checkpoint_id.to_string(),
@@ -522,6 +536,7 @@ fn load_checkpoint_config(
         model,
         prompt,
         token_budget: token_budget_raw.max(0) as u64,
+        proof_mode,
     })
 }
 
@@ -569,6 +584,15 @@ pub(crate) fn replay_run_with_pool(
 
     let has_interactive = has_interactive_config || has_interactive_turns;
 
+    let has_concordant_config: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM run_checkpoints WHERE run_id = ?1 AND proof_mode = 'concordant')",
+        params![&run_id],
+        |row| {
+            let value: i64 = row.get(0)?;
+            Ok(value != 0)
+        },
+    )?;
+
     if has_interactive {
         #[cfg(feature = "interactive")]
         {
@@ -585,14 +609,8 @@ pub(crate) fn replay_run_with_pool(
         }
     }
 
-    let report = match kind_opt.as_deref() {
-        Some("exact") => replay::replay_exact_run(run_id.clone(), pool),
-        Some("concordant") => replay::replay_concordant_run(run_id.clone(), pool),
-        Some(other) => Err(anyhow::anyhow!(
-            "Replay not implemented for run kind: '{}'",
-            other
-        )),
-        None => Ok(replay::ReplayReport {
+    let Some(_kind) = kind_opt else {
+        return Ok(replay::ReplayReport {
             run_id: run_id.clone(),
             match_status: false,
             original_digest: String::new(),
@@ -602,7 +620,13 @@ pub(crate) fn replay_run_with_pool(
             semantic_replay_digest: None,
             semantic_distance: None,
             epsilon: None,
-        }),
+        });
+    };
+
+    let report = if has_concordant_config {
+        replay::replay_concordant_run(run_id.clone(), pool)
+    } else {
+        replay::replay_exact_run(run_id.clone(), pool)
     }
     .map_err(|err| Error::Api(err.to_string()))?;
 
@@ -616,10 +640,19 @@ pub fn list_run_checkpoint_configs(
 ) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+        "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
     )?;
     let rows = stmt.query_map(params![&run_id], |row| {
         let token_budget: i64 = row.get(6)?;
+        let proof_mode_raw: String = row.get(7)?;
+        let proof_mode =
+            orchestrator::RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    7,
+                    rusqlite::types::Type::Text,
+                    Box::new(err),
+                )
+            })?;
         Ok(orchestrator::RunCheckpointConfig {
             id: row.get(0)?,
             run_id: row.get(1)?,
@@ -628,6 +661,7 @@ pub fn list_run_checkpoint_configs(
             model: row.get(4)?,
             prompt: row.get(5)?,
             token_budget: token_budget.max(0) as u64,
+            proof_mode,
         })
     })?;
 
@@ -677,10 +711,11 @@ pub fn create_checkpoint_config(
         model,
         prompt,
         token_budget,
+        proof_mode,
         ..
     } = config;
     tx.execute(
-        "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             &checkpoint_id,
             &run_id,
@@ -689,6 +724,7 @@ pub fn create_checkpoint_config(
             &model,
             &prompt,
             (token_budget as i64),
+            proof_mode.as_str(),
         ],
     )?;
 
@@ -702,6 +738,7 @@ pub fn create_checkpoint_config(
         model,
         prompt,
         token_budget,
+        proof_mode,
     })
 }
 
@@ -727,14 +764,18 @@ pub fn update_checkpoint_config(
     if let Some(kind) = updates.checkpoint_type {
         config.checkpoint_type = kind;
     }
+    if let Some(mode) = updates.proof_mode {
+        config.proof_mode = mode;
+    }
 
     tx.execute(
-        "UPDATE run_checkpoints SET model = ?1, prompt = ?2, token_budget = ?3, checkpoint_type = ?4, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
+        "UPDATE run_checkpoints SET model = ?1, prompt = ?2, token_budget = ?3, checkpoint_type = ?4, proof_mode = ?5, updated_at = CURRENT_TIMESTAMP WHERE id = ?6",
         params![
             &config.model,
             &config.prompt,
             (config.token_budget as i64),
             &config.checkpoint_type,
+            config.proof_mode.as_str(),
             &checkpoint_id,
         ],
     )?;
@@ -950,13 +991,8 @@ pub fn import_project(
     }
 
     let bytes = bytes.ok_or_else(|| Error::Api("No project archive provided.".into()))?;
-    let temp_path = persist_uploaded_bytes(
-        &base_dir,
-        "imports",
-        file_name.as_deref(),
-        &bytes,
-        "ixp",
-    )?;
+    let temp_path =
+        persist_uploaded_bytes(&base_dir, "imports", file_name.as_deref(), &bytes, "ixp")?;
 
     let result = portability::import_project_archive(pool.inner(), &temp_path, &base_dir);
     if let Err(err) = fs::remove_file(&temp_path) {
@@ -1018,7 +1054,10 @@ fn persist_uploaded_bytes(
 ) -> Result<PathBuf, Error> {
     let import_dir = base_dir.join(subdir);
     fs::create_dir_all(&import_dir).map_err(|err| {
-        Error::Api(format!("failed to create {subdir} directory {}: {err}", import_dir.display()))
+        Error::Api(format!(
+            "failed to create {subdir} directory {}: {err}",
+            import_dir.display()
+        ))
     })?;
 
     let sanitized = suggested_name

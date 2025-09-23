@@ -69,6 +69,9 @@ export default function CheckpointListItem({
         <span>
           <strong>Token Budget:</strong> {config.tokenBudget.toLocaleString()}
         </span>
+        <span>
+          <strong>Proof Mode:</strong> {config.proofMode === "concordant" ? "Concordant" : "Exact"}
+        </span>
       </div>
       <div style={{ fontSize: "0.85rem", color: "#c8c8c8" }}>{promptPreview}</div>
       <div style={{ display: "flex", gap: "8px" }}>

@@ -71,13 +71,19 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
         }
     };
 
-    if !matches!(stored_run.proof_mode, RunProofMode::Exact) {
+    let has_concordant = stored_run
+        .checkpoints
+        .iter()
+        .filter(|cfg| !cfg.is_interactive_chat())
+        .any(|cfg| matches!(cfg.proof_mode, RunProofMode::Concordant));
+
+    if has_concordant {
         return Ok(ReplayReport {
             run_id,
             match_status: false,
             original_digest: String::new(),
             replay_digest: String::new(),
-            error_message: Some("run is not an exact replay".to_string()),
+            error_message: Some("run includes concordant checkpoints".to_string()),
             semantic_original_digest: None,
             semantic_replay_digest: None,
             semantic_distance: None,
@@ -101,6 +107,9 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
 
     let mut replay_digest = String::new();
     for config in &stored_run.checkpoints {
+        if config.is_interactive_chat() {
+            continue;
+        }
         if config.model == "stub-model" {
             let (outputs_hex, _) = simulate_stub_checkpoint(stored_run.seed, config);
             replay_digest = outputs_hex;
@@ -324,13 +333,19 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
         }
     };
 
-    if !matches!(stored_run.proof_mode, RunProofMode::Concordant) {
+    let has_concordant = stored_run
+        .checkpoints
+        .iter()
+        .filter(|cfg| !cfg.is_interactive_chat())
+        .any(|cfg| matches!(cfg.proof_mode, RunProofMode::Concordant));
+
+    if !has_concordant {
         return Ok(ReplayReport {
             run_id,
             match_status: false,
             original_digest: String::new(),
             replay_digest: String::new(),
-            error_message: Some("run is not a concordant replay".to_string()),
+            error_message: Some("run has no concordant checkpoints".to_string()),
             semantic_original_digest: None,
             semantic_replay_digest: None,
             semantic_distance: None,
@@ -359,14 +374,21 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
     let mut replay_digest = String::new();
     let mut replay_semantic_digest = String::new();
     for config in &stored_run.checkpoints {
+        if config.is_interactive_chat() {
+            continue;
+        }
         if config.model == "stub-model" {
             let (digest, semantic) = simulate_stub_checkpoint(stored_run.seed, config);
             replay_digest = digest;
-            replay_semantic_digest = semantic;
+            if matches!(config.proof_mode, RunProofMode::Concordant) {
+                replay_semantic_digest = semantic;
+            }
         } else {
             let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
             replay_digest = provenance::sha256_hex(generation.response.as_bytes());
-            replay_semantic_digest = provenance::semantic_digest(&generation.response);
+            if matches!(config.proof_mode, RunProofMode::Concordant) {
+                replay_semantic_digest = provenance::semantic_digest(&generation.response);
+            }
         }
     }
 

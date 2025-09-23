@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS run_checkpoints (
     model TEXT NOT NULL,
     prompt TEXT NOT NULL,
     token_budget INTEGER NOT NULL,
+    proof_mode TEXT NOT NULL DEFAULT 'exact',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE

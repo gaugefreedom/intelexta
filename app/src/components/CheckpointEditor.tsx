@@ -1,10 +1,12 @@
 import React from "react";
+import type { RunProofMode } from "../lib/api";
 
 export interface CheckpointFormValue {
   checkpointType: string;
   model: string;
   tokenBudget: number;
   prompt: string;
+  proofMode: RunProofMode;
 }
 
 interface CheckpointEditorProps {
@@ -50,6 +52,9 @@ export default function CheckpointEditor({
     initialValue ? String(initialValue.tokenBudget) : "1000",
   );
   const [prompt, setPrompt] = React.useState(initialValue?.prompt ?? "");
+  const [proofMode, setProofMode] = React.useState<RunProofMode>(
+    initialValue?.proofMode ?? "exact",
+  );
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -57,6 +62,7 @@ export default function CheckpointEditor({
     setModel(initialValue?.model ?? defaultModel);
     setTokenBudget(initialValue ? String(initialValue.tokenBudget) : "1000");
     setPrompt(initialValue?.prompt ?? "");
+    setProofMode(initialValue?.proofMode ?? "exact");
     setError(null);
   }, [initialValue, defaultModel]);
 
@@ -90,12 +96,18 @@ export default function CheckpointEditor({
       return;
     }
 
+    if (!proofMode || (proofMode !== "exact" && proofMode !== "concordant")) {
+      setError("Proof mode selection is required.");
+      return;
+    }
+
     setError(null);
     await onSubmit({
       checkpointType: cleanedType,
       model: cleanedModel,
       tokenBudget: parsedBudget,
       prompt: cleanedPrompt,
+      proofMode,
     });
   };
 
@@ -144,6 +156,19 @@ export default function CheckpointEditor({
           value={tokenBudget}
           onChange={(event) => setTokenBudget(event.target.value)}
         />
+      </label>
+      <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+        Proof Mode
+        <select
+          value={proofMode}
+          onChange={(event) => {
+            const nextValue = event.target.value === "concordant" ? "concordant" : "exact";
+            setProofMode(nextValue);
+          }}
+        >
+          <option value="exact">Exact</option>
+          <option value="concordant">Concordant</option>
+        </select>
       </label>
       <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
         Prompt
