@@ -373,9 +373,9 @@ export async function exportProject(projectId: string): Promise<string> {
 }
 
 export async function importProject(payload: FileImportPayload): Promise<ProjectImportSummary> {
-  return await invoke<ProjectImportSummary>('import_project', payload);
+  return await invoke<ProjectImportSummary>('import_project', { args: payload });
 }
 
 export async function importCar(payload: FileImportPayload): Promise<ReplayReport> {
-  return await invoke<ReplayReport>('import_car', payload);
+  return await invoke<ReplayReport>('import_car', { args: payload });
 }
