@@ -16,6 +16,9 @@ interface CheckpointEditorProps {
   onSubmit: (value: CheckpointFormValue) => Promise<void> | void;
   onCancel: () => void;
   submitting?: boolean;
+  runEpsilon?: number | null;
+  epsilonRequired?: boolean;
+  onRequestRunEpsilon?: () => void;
 }
 
 function sanitizeLabel(value: string): string {
@@ -26,6 +29,26 @@ function sanitizePrompt(value: string): string {
   return value.replace(/\u0000/g, "").replace(/\r\n/g, "\n").trim();
 }
 
+export function isValidNormalizedEpsilon(value: number | null | undefined): boolean {
+  if (typeof value !== "number") {
+    return false;
+  }
+  if (!Number.isFinite(value)) {
+    return false;
+  }
+  return value >= 0 && value <= 1;
+}
+
+export function concordantSubmissionAllowed(
+  proofMode: RunProofMode,
+  runEpsilon: number | null | undefined,
+): boolean {
+  if (proofMode !== "concordant") {
+    return true;
+  }
+  return isValidNormalizedEpsilon(runEpsilon);
+}
+
 export default function CheckpointEditor({
   availableModels,
   initialValue,
@@ -33,6 +56,9 @@ export default function CheckpointEditor({
   onSubmit,
   onCancel,
   submitting = false,
+  runEpsilon = null,
+  epsilonRequired = false,
+  onRequestRunEpsilon,
 }: CheckpointEditorProps) {
   const mergedModels = React.useMemo(() => {
     const set = new Set<string>(availableModels);
@@ -56,6 +82,17 @@ export default function CheckpointEditor({
     initialValue?.proofMode ?? "exact",
   );
   const [error, setError] = React.useState<string | null>(null);
+
+  const epsilonIsSatisfied = React.useMemo(() => {
+    return isValidNormalizedEpsilon(runEpsilon);
+  }, [runEpsilon]);
+
+  const canSubmitCurrent = React.useMemo(() => {
+    return concordantSubmissionAllowed(proofMode, runEpsilon);
+  }, [proofMode, runEpsilon]);
+
+  const shouldWarnForRun = epsilonRequired && !epsilonIsSatisfied;
+  const shouldWarnForSelection = proofMode === "concordant" && !canSubmitCurrent;
 
   React.useEffect(() => {
     setCheckpointType(initialValue?.checkpointType ?? "Step");
@@ -98,6 +135,14 @@ export default function CheckpointEditor({
 
     if (!proofMode || (proofMode !== "exact" && proofMode !== "concordant")) {
       setError("Proof mode selection is required.");
+      return;
+    }
+
+    if (!concordantSubmissionAllowed(proofMode, runEpsilon)) {
+      setError(
+        "Concordant checkpoints require a run epsilon between 0 and 1. Update the run settings before saving.",
+      );
+      onRequestRunEpsilon?.();
       return;
     }
 
@@ -164,12 +209,25 @@ export default function CheckpointEditor({
           onChange={(event) => {
             const nextValue = event.target.value === "concordant" ? "concordant" : "exact";
             setProofMode(nextValue);
+            setError(null);
+            if (nextValue === "concordant" && !epsilonIsSatisfied) {
+              onRequestRunEpsilon?.();
+            }
           }}
         >
           <option value="exact">Exact</option>
           <option value="concordant">Concordant</option>
         </select>
       </label>
+      {shouldWarnForSelection ? (
+        <div style={{ color: "#f48771", fontSize: "0.85rem" }}>
+          Concordant checkpoints require a run epsilon between 0 and 1. Update the run settings before saving.
+        </div>
+      ) : shouldWarnForRun ? (
+        <div style={{ color: "#c586c0", fontSize: "0.8rem" }}>
+          This run includes concordant checkpoints. Provide a run epsilon between 0 and 1 in the run settings.
+        </div>
+      ) : null}
       <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
         Prompt
         <textarea

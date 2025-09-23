@@ -14,6 +14,7 @@ export interface RunSummary {
   name: string;
   createdAt: string;
   kind: string;
+  epsilon?: number | null;
   hasPersistedCheckpoint: boolean;
 }
 
@@ -121,8 +122,11 @@ export interface ProjectImportSummary {
 }
 
 export interface FileImportPayload {
-  fileName: string;
-  bytes: number[];
+  fileName?: string;
+  bytes?: number[];
+  archivePath?: string | null;
+  carPath?: string | null;
+  [key: string]: unknown;
 }
 
 export interface Policy {
@@ -206,6 +210,12 @@ export interface CreateRunParams {
   epsilon?: number | null;
 }
 
+export interface UpdateRunSettingsParams {
+  runId: string;
+  proofMode: RunProofMode;
+  epsilon?: number | null;
+}
+
 export async function listLocalModels(): Promise<string[]> {
   return await invoke<string[]>("list_local_models");
 }
@@ -226,6 +236,16 @@ export async function createRun(params: CreateRunParams): Promise<string> {
     seed: params.seed,
     tokenBudget: params.tokenBudget,
     defaultModel: params.defaultModel,
+    epsilon: params.epsilon ?? null,
+  });
+}
+
+export async function updateRunSettings(
+  params: UpdateRunSettingsParams,
+): Promise<RunSummary> {
+  return await invoke<RunSummary>('update_run_settings', {
+    runId: params.runId,
+    proofMode: params.proofMode,
     epsilon: params.epsilon ?? null,
   });
 }

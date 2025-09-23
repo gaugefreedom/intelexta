@@ -171,29 +171,60 @@ pub struct RunSummary {
     pub name: String,
     pub created_at: String,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epsilon: Option<f64>,
     pub has_persisted_checkpoint: bool,
+}
+
+fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
+    Ok(RunSummary {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        created_at: row.get(2)?,
+        kind: row.get(3)?,
+        epsilon: row.get(4)?,
+        has_persisted_checkpoint: row.get(5)?,
+    })
 }
 
 #[tauri::command]
 pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT r.id, r.name, r.created_at, r.kind, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
+        "SELECT r.id, r.name, r.created_at, r.kind, r.epsilon, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
     )?;
-    let runs_iter = stmt.query_map(params![project_id], |row| {
-        Ok(RunSummary {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            created_at: row.get(2)?,
-            kind: row.get(3)?,
-            has_persisted_checkpoint: row.get(4)?,
-        })
-    })?;
+    let runs_iter = stmt.query_map(params![project_id], hydrate_run_summary)?;
     let mut runs = Vec::new();
     for run in runs_iter {
         runs.push(run?);
     }
     Ok(runs)
+}
+
+fn load_run_summary(conn: &Connection, run_id: &str) -> Result<RunSummary, Error> {
+    let summary = conn
+        .query_row(
+            "SELECT r.id, r.name, r.created_at, r.kind, r.epsilon, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.id = ?1",
+            params![run_id],
+            hydrate_run_summary,
+        )
+        .optional()?;
+
+    summary.ok_or_else(|| Error::Api(format!("run {run_id} not found")))
+}
+
+#[tauri::command]
+pub fn update_run_settings(
+    run_id: String,
+    proof_mode: orchestrator::RunProofMode,
+    epsilon: Option<f64>,
+    pool: State<DbPool>,
+) -> Result<RunSummary, Error> {
+    orchestrator::update_run_proof_settings(pool.inner(), &run_id, proof_mode, epsilon)
+        .map_err(|err| Error::Api(err.to_string()))?;
+
+    let conn = pool.get()?;
+    load_run_summary(&conn, &run_id)
 }
 
 #[derive(Debug, Serialize, Deserialize)]

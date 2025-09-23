@@ -628,6 +628,61 @@ pub fn create_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     Ok(run_id)
 }
 
+pub fn update_run_proof_settings(
+    pool: &DbPool,
+    run_id: &str,
+    proof_mode: RunProofMode,
+    epsilon: Option<f64>,
+) -> anyhow::Result<()> {
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
+
+    let stored_run = load_stored_run(tx.deref(), run_id)?;
+    let checkpoints_require_concordant = stored_run
+        .checkpoints
+        .iter()
+        .filter(|config| !config.is_interactive_chat())
+        .any(|config| config.proof_mode.is_concordant());
+    let requires_epsilon = proof_mode.is_concordant() || checkpoints_require_concordant;
+
+    let validated_epsilon = match (requires_epsilon, epsilon) {
+        (true, Some(value)) => {
+            if !value.is_finite() || value < 0.0 {
+                return Err(anyhow!("epsilon must be a finite, non-negative value"));
+            }
+            Some(value)
+        }
+        (true, None) => {
+            return Err(anyhow!("concordant runs require an epsilon"));
+        }
+        (false, Some(value)) => {
+            if !value.is_finite() || value < 0.0 {
+                return Err(anyhow!("epsilon must be a finite, non-negative value"));
+            }
+            Some(value)
+        }
+        (false, None) => None,
+    };
+
+    let spec_json: String = tx.query_row(
+        "SELECT spec_json FROM runs WHERE id = ?1",
+        params![run_id],
+        |row| row.get(0),
+    )?;
+    let mut spec: RunSpec = serde_json::from_str(&spec_json)?;
+    spec.proof_mode = proof_mode;
+    spec.epsilon = validated_epsilon;
+    let updated_spec_json = serde_json::to_string(&spec)?;
+
+    tx.execute(
+        "UPDATE runs SET kind = ?1, epsilon = ?2, spec_json = ?3 WHERE id = ?4",
+        params![proof_mode.as_str(), validated_epsilon, &updated_spec_json, run_id],
+    )?;
+
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
     let client = DefaultOllamaClient::new();
     start_hello_run_with_client(pool, spec, &client)
