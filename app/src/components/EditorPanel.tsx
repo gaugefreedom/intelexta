@@ -76,6 +76,12 @@ function formatTimestampLabel(value: string): string {
   });
 }
 
+const MAX_RUN_NAME_LENGTH = 120;
+
+function sanitizeRunName(value: string): string {
+  return value.replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
+}
+
 function extractMessagesFromCheckpoints(
   checkpoints: CheckpointSummary[],
 ): ConversationMessage[] {
@@ -532,6 +538,8 @@ export default function EditorPanel({
   const [creatingRun, setCreatingRun] = React.useState(false);
   const [reopeningRun, setReopeningRun] = React.useState(false);
   const [cloningRun, setCloningRun] = React.useState(false);
+  const [newRunName, setNewRunName] = React.useState("");
+  const [newRunNameError, setNewRunNameError] = React.useState<string | null>(null);
 
   const [conversationContext, setConversationContext] = React.useState<
     { runId: string; checkpointId: string } | null
@@ -780,17 +788,26 @@ export default function EditorPanel({
     if (creatingRun) {
       return;
     }
+
+    const cleanedName = sanitizeRunName(newRunName);
+    if (cleanedName.length > MAX_RUN_NAME_LENGTH) {
+      setNewRunNameError(`Run name must be ${MAX_RUN_NAME_LENGTH} characters or fewer.`);
+      return;
+    }
+
     setStatusMessage(null);
     setErrorMessage(null);
+    setNewRunNameError(null);
     setCreatingRun(true);
     try {
       const fallbackModel = availableModels[0] ?? "stub-model";
       const timestampLabel = new Date().toLocaleString();
       const generatedName = `New run ${timestampLabel}`;
+      const chosenName = cleanedName.length > 0 ? cleanedName : generatedName;
       const randomSeed = Math.floor(Math.random() * 1_000_000_000);
       const runId = await createRun({
         projectId,
-        name: generatedName,
+        name: chosenName,
         proofMode: "exact",
         seed: randomSeed,
         tokenBudget: 1_000,
@@ -817,7 +834,7 @@ export default function EditorPanel({
           return [
             {
               id: runId,
-              name: generatedName,
+              name: chosenName,
               createdAt: fallbackCreatedAt,
               kind: "exact",
             },
@@ -826,6 +843,7 @@ export default function EditorPanel({
         });
       }
 
+      setNewRunName("");
       onSelectRun(runId);
       setStatusMessage("Run created. Configure checkpoints before execution.");
       onRunsMutated?.();
@@ -842,6 +860,7 @@ export default function EditorPanel({
     projectId,
     onSelectRun,
     onRunsMutated,
+    newRunName,
   ]);
 
   const handleAddCheckpoint = React.useCallback(() => {
@@ -1149,6 +1168,22 @@ export default function EditorPanel({
                   ))}
                 </select>
               </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: "4px", flex: 1 }}>
+                New run name
+                <input
+                  type="text"
+                  value={newRunName}
+                  onChange={(event) => {
+                    setNewRunName(event.target.value);
+                    if (newRunNameError) {
+                      setNewRunNameError(null);
+                    }
+                  }}
+                  placeholder="Optional"
+                  maxLength={MAX_RUN_NAME_LENGTH}
+                  disabled={creatingRun}
+                />
+              </label>
               <button
                 type="button"
                 onClick={handleCreateRun}
@@ -1157,6 +1192,9 @@ export default function EditorPanel({
                 {creatingRun ? "Creating…" : "+ New run"}
               </button>
             </div>
+            {newRunNameError && (
+              <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{newRunNameError}</span>
+            )}
             {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
             {!runsLoading && runs.length === 0 ? (
               <span style={{ fontSize: "0.85rem", color: "#808080" }}>
