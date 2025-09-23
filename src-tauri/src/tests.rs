@@ -257,6 +257,90 @@ fn get_checkpoint_details_includes_payloads() -> Result<()> {
 }
 
 #[test]
+fn reopen_run_returns_to_draft_without_execution() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Reopen Draft".into(), &pool)?;
+
+    let spec = orchestrator::RunSpec {
+        project_id: project.id.clone(),
+        name: "reopen-me".into(),
+        seed: 11,
+        token_budget: 1_000,
+        model: "stub-model".into(),
+        checkpoints: vec![orchestrator::RunCheckpointTemplate {
+            model: "stub-model".into(),
+            prompt: "{\"prompt\":\"hello\"}".into(),
+            token_budget: 1_000,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
+            proof_mode: orchestrator::RunProofMode::Exact,
+        }],
+        proof_mode: orchestrator::RunProofMode::Exact,
+        epsilon: None,
+    };
+
+    let run_id = orchestrator::create_run(&pool, spec)?;
+
+    struct FixedClient;
+
+    impl orchestrator::LlmClient for FixedClient {
+        fn stream_generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+        ) -> anyhow::Result<orchestrator::LlmGeneration> {
+            Ok(orchestrator::LlmGeneration {
+                response: "stub-response".to_string(),
+                usage: orchestrator::TokenUsage {
+                    prompt_tokens: 3,
+                    completion_tokens: 5,
+                },
+            })
+        }
+    }
+
+    let client = FixedClient;
+    orchestrator::start_run_with_client(&pool, &run_id, &client)?;
+
+    {
+        let conn = pool.get()?;
+        let existing: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(existing, 1);
+    }
+
+    orchestrator::reopen_run(&pool, &run_id)?;
+
+    {
+        let conn = pool.get()?;
+        let remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(remaining, 0);
+    }
+
+    orchestrator::start_run_with_client(&pool, &run_id, &client)?;
+
+    {
+        let conn = pool.get()?;
+        let rerun: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(rerun, 1);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;

@@ -1379,7 +1379,7 @@ pub fn reopen_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
         tx.commit()?;
     }
 
-    start_run(pool, run_id)
+    Ok(())
 }
 
 pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
