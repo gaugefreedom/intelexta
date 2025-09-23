@@ -620,7 +620,7 @@ pub fn import_project_archive(
         )));
     }
 
-    let mut tx = conn.transaction()?;
+    let tx = conn.transaction()?;
 
     tx.execute(
         "INSERT INTO projects (id, name, created_at, pubkey) VALUES (?1, ?2, ?3, ?4)",

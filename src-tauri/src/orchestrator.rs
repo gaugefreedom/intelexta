@@ -1212,7 +1212,7 @@ pub fn finalize_interactive_checkpoint(
     run_id: &str,
     checkpoint_config_id: &str,
 ) -> anyhow::Result<()> {
-    let mut conn = pool.get()?;
+    let conn = pool.get()?;
 
     let config = match load_checkpoint_config_by_id(&conn, checkpoint_config_id)? {
         Some(cfg) => {
@@ -1466,7 +1466,7 @@ pub fn reopen_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
 
 pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
     let source_run = {
-        let mut conn = pool.get()?;
+        let conn = pool.get()?;
         load_stored_run(&conn, source_run_id)?
     };
 
