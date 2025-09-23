@@ -14,6 +14,7 @@ export interface RunSummary {
   name: string;
   createdAt: string;
   kind: string;
+  hasPersistedCheckpoint: boolean;
 }
 
 export type RunProofMode = 'exact' | 'concordant';
