@@ -7,6 +7,7 @@ use crate::{
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -101,6 +102,28 @@ pub struct UpdateCheckpointConfigRequest {
     pub prompt: Option<String>,
     pub token_budget: Option<u64>,
     pub checkpoint_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportProjectArgs {
+    #[serde(default)]
+    pub archive_path: Option<String>,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub bytes: Option<Vec<u8>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportCarArgs {
+    #[serde(default)]
+    pub car_path: Option<String>,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub bytes: Option<Vec<u8>>,
 }
 
 // In src-tauri/src/api.rs
@@ -906,28 +929,155 @@ pub fn export_project(
 
 #[tauri::command]
 pub fn import_project(
-    archive_path: String,
+    args: ImportProjectArgs,
     pool: State<DbPool>,
     app_handle: AppHandle,
 ) -> Result<portability::ProjectImportSummary, Error> {
+    let ImportProjectArgs {
+        archive_path,
+        file_name,
+        bytes,
+    } = args;
+
     let base_dir = app_handle
         .path()
         .app_local_data_dir()
         .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
-    let path = PathBuf::from(archive_path);
-    portability::import_project_archive(pool.inner(), &path, &base_dir)
+
+    if let Some(path) = archive_path {
+        let path = PathBuf::from(path);
+        return portability::import_project_archive(pool.inner(), &path, &base_dir);
+    }
+
+    let bytes = bytes.ok_or_else(|| Error::Api("No project archive provided.".into()))?;
+    let temp_path = persist_uploaded_bytes(
+        &base_dir,
+        "imports",
+        file_name.as_deref(),
+        &bytes,
+        "ixp",
+    )?;
+
+    let result = portability::import_project_archive(pool.inner(), &temp_path, &base_dir);
+    if let Err(err) = fs::remove_file(&temp_path) {
+        eprintln!(
+            "failed to remove temporary project archive {}: {err}",
+            temp_path.display()
+        );
+    }
+    result
 }
 
 #[tauri::command]
 pub fn import_car(
-    car_path: String,
+    args: ImportCarArgs,
     pool: State<DbPool>,
     app_handle: AppHandle,
 ) -> Result<replay::ReplayReport, Error> {
+    let ImportCarArgs {
+        car_path,
+        file_name,
+        bytes,
+    } = args;
+
     let base_dir = app_handle
         .path()
         .app_local_data_dir()
         .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
-    let path = PathBuf::from(car_path);
-    portability::import_car_file(pool.inner(), &path, &base_dir)
+
+    if let Some(path) = car_path {
+        let path = PathBuf::from(path);
+        return portability::import_car_file(pool.inner(), &path, &base_dir);
+    }
+
+    let bytes = bytes.ok_or_else(|| Error::Api("No CAR data provided.".into()))?;
+    let temp_path = persist_uploaded_bytes(
+        &base_dir,
+        "imports",
+        file_name.as_deref(),
+        &bytes,
+        "car.json",
+    )?;
+
+    let result = portability::import_car_file(pool.inner(), &temp_path, &base_dir);
+    if let Err(err) = fs::remove_file(&temp_path) {
+        eprintln!(
+            "failed to remove temporary CAR file {}: {err}",
+            temp_path.display()
+        );
+    }
+    result
+}
+
+fn persist_uploaded_bytes(
+    base_dir: &Path,
+    subdir: &str,
+    suggested_name: Option<&str>,
+    bytes: &[u8],
+    fallback_ext: &str,
+) -> Result<PathBuf, Error> {
+    let import_dir = base_dir.join(subdir);
+    fs::create_dir_all(&import_dir).map_err(|err| {
+        Error::Api(format!("failed to create {subdir} directory {}: {err}", import_dir.display()))
+    })?;
+
+    let sanitized = suggested_name
+        .map(|name| sanitize_file_name(name, fallback_ext))
+        .unwrap_or_else(|| sanitize_file_name("", fallback_ext));
+    let unique_name = format!("{}-{}", Uuid::new_v4(), sanitized);
+    let temp_path = import_dir.join(unique_name);
+
+    fs::write(&temp_path, bytes).map_err(|err| {
+        Error::Api(format!(
+            "failed to persist uploaded file {}: {err}",
+            temp_path.display()
+        ))
+    })?;
+
+    Ok(temp_path)
+}
+
+fn sanitize_file_name(name: &str, fallback_ext: &str) -> String {
+    let mut cleaned: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .collect();
+
+    if cleaned.len() > 64 {
+        cleaned.truncate(64);
+    }
+
+    let trimmed = cleaned.trim_matches('.');
+    let mut sanitized = if trimmed.is_empty() {
+        String::new()
+    } else {
+        trimmed.to_string()
+    };
+
+    if !sanitized.chars().any(|c| c.is_ascii_alphanumeric()) {
+        sanitized.clear();
+    }
+
+    if sanitized.is_empty() {
+        return fallback_file_name(fallback_ext);
+    }
+
+    if !sanitized.contains('.') {
+        if fallback_ext.starts_with('.') {
+            sanitized.push_str(fallback_ext);
+        } else {
+            sanitized.push('.');
+            sanitized.push_str(fallback_ext);
+        }
+    }
+
+    sanitized
+}
+
+fn fallback_file_name(fallback_ext: &str) -> String {
+    if fallback_ext.starts_with('.') {
+        format!("upload{}", fallback_ext)
+    } else {
+        format!("upload.{fallback_ext}")
+    }
 }

@@ -1,5 +1,4 @@
 import React from "react";
-import { open } from "@tauri-apps/api/dialog";
 import {
   getPolicy,
   updatePolicy,
@@ -46,6 +45,9 @@ export default function ContextPanel({
   const [carImportError, setCarImportError] = React.useState<string | null>(null);
   const [carReplayReport, setCarReplayReport] = React.useState<ReplayReport | null>(null);
   const [carImportStatus, setCarImportStatus] = React.useState<string | null>(null);
+
+  const projectFileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const carFileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const costOverrunMessages = React.useMemo(() => {
     if (!costEstimates) {
@@ -206,87 +208,107 @@ export default function ContextPanel({
     }
   }, [projectId]);
 
-  const handleImportProjectArchive = React.useCallback(async () => {
+  const handleImportProjectArchive = React.useCallback(() => {
     setProjectImportError(null);
     setProjectImportStatus(null);
     setLastImportSummary(null);
 
-    let filePath: string | null = null;
-    try {
-      const selection = await open({
-        multiple: false,
-        filters: [{ name: "Intelexta Export", extensions: ["ixp"] }],
-      });
-      filePath = Array.isArray(selection) ? selection[0] ?? null : selection;
-    } catch (err) {
-      console.error("Failed to open project archive picker", err);
-      setProjectImportError(
-        `Could not open file picker: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return;
+    const input = projectFileInputRef.current;
+    if (input) {
+      input.value = "";
+      input.click();
+    } else {
+      setProjectImportError("File picker not available.");
     }
+  }, []);
 
-    if (!filePath) {
-      return;
-    }
+  const handleProjectFileSelected = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0] ?? null;
+      event.target.value = "";
 
-    setImportingProjectArchive(true);
-    try {
-      const summary = await importProject(filePath);
-      setLastImportSummary(summary);
-      setProjectImportStatus(
-        `Imported project ${summary.project.name} (${summary.project.id}).`,
-      );
-      onPolicyUpdated?.();
-    } catch (err) {
-      console.error("Failed to import project", err);
-      setProjectImportError(
-        `Failed to import project archive: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    } finally {
-      setImportingProjectArchive(false);
-    }
-  }, [onPolicyUpdated]);
+      if (!file) {
+        return;
+      }
 
-  const handleImportCarReceipt = React.useCallback(async () => {
+      setProjectImportError(null);
+      setProjectImportStatus(null);
+      setLastImportSummary(null);
+      setImportingProjectArchive(true);
+
+      try {
+        const buffer = await file.arrayBuffer();
+        const bytes = Array.from(new Uint8Array(buffer));
+        const summary = await importProject({
+          fileName: file.name,
+          bytes,
+        });
+        setLastImportSummary(summary);
+        setProjectImportStatus(
+          `Imported project ${summary.project.name} (${summary.project.id}).`,
+        );
+        onPolicyUpdated?.();
+      } catch (err) {
+        console.error("Failed to import project", err);
+        setProjectImportError(
+          `Failed to import project archive: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setImportingProjectArchive(false);
+      }
+    },
+    [onPolicyUpdated],
+  );
+
+  const handleImportCarReceipt = React.useCallback(() => {
     setCarImportError(null);
     setCarReplayReport(null);
     setCarImportStatus(null);
 
-    let filePath: string | null = null;
-    try {
-      const selection = await open({
-        multiple: false,
-        filters: [{ name: "CAR Receipt", extensions: ["car.json", "json"] }],
-      });
-      filePath = Array.isArray(selection) ? selection[0] ?? null : selection;
-    } catch (err) {
-      console.error("Failed to open CAR picker", err);
-      setCarImportError(
-        `Could not open file picker: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return;
+    const input = carFileInputRef.current;
+    if (input) {
+      input.value = "";
+      input.click();
+    } else {
+      setCarImportError("File picker not available.");
     }
+  }, []);
 
-    if (!filePath) {
-      return;
-    }
+  const handleCarFileSelected = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0] ?? null;
+      event.target.value = "";
 
-    setImportingCarReceipt(true);
-    try {
-      const report = await importCar(filePath);
-      setCarReplayReport(report);
-      setCarImportStatus(`Imported CAR for run ${report.runId}.`);
-      onPolicyUpdated?.();
-    } catch (err) {
-      console.error("Failed to import CAR", err);
-      setCarImportError(
-        `Failed to import CAR: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    } finally {
-      setImportingCarReceipt(false);
-    }
-  }, [onPolicyUpdated]);
+      if (!file) {
+        return;
+      }
+
+      setCarImportError(null);
+      setCarReplayReport(null);
+      setCarImportStatus(null);
+      setImportingCarReceipt(true);
+
+      try {
+        const buffer = await file.arrayBuffer();
+        const bytes = Array.from(new Uint8Array(buffer));
+        const report = await importCar({
+          fileName: file.name,
+          bytes,
+        });
+        setCarReplayReport(report);
+        setCarImportStatus(`Imported CAR for run ${report.runId}.`);
+        onPolicyUpdated?.();
+      } catch (err) {
+        console.error("Failed to import CAR", err);
+        setCarImportError(
+          `Failed to import CAR: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setImportingCarReceipt(false);
+      }
+    },
+    [onPolicyUpdated],
+  );
 
   const carReplayFeedback = React.useMemo(() => {
     if (!carReplayReport) {
@@ -438,6 +460,20 @@ export default function ContextPanel({
         }}
       >
         <h3 style={{ margin: 0 }}>Portability</h3>
+        <input
+          ref={projectFileInputRef}
+          type="file"
+          accept=".ixp"
+          style={{ display: "none" }}
+          onChange={handleProjectFileSelected}
+        />
+        <input
+          ref={carFileInputRef}
+          type="file"
+          accept=".car.json,.json"
+          style={{ display: "none" }}
+          onChange={handleCarFileSelected}
+        />
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
           <button type="button" onClick={handleExportProject} disabled={exportingProject}>
             {exportingProject ? "Exporting…" : "Export Project"}
