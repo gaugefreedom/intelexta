@@ -214,6 +214,7 @@ impl RunCostEstimates {
 fn sum_token_budgets(configs: &[RunCheckpointConfig]) -> u64 {
     configs
         .iter()
+        .filter(|cfg| !cfg.is_interactive_chat())
         .fold(0u64, |acc, cfg| acc.saturating_add(cfg.token_budget))
 }
 
@@ -254,6 +255,7 @@ fn estimate_costs_with_policy(
 
 #[cfg(feature = "interactive")]
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubmitTurnOutcome {
     pub human_checkpoint_id: String,
     pub ai_checkpoint_id: String,
