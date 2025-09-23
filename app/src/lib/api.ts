@@ -81,6 +81,23 @@ export interface SubmitTurnResult {
   usage: TokenUsage;
 }
 
+export type CheckpointReplayMode = 'exact' | 'concordant' | 'interactive';
+
+export interface CheckpointReplayReport {
+  checkpointConfigId?: string | null;
+  checkpointType?: string | null;
+  orderIndex?: number | null;
+  mode: CheckpointReplayMode;
+  matchStatus: boolean;
+  originalDigest: string;
+  replayDigest: string;
+  errorMessage?: string | null;
+  semanticOriginalDigest?: string | null;
+  semanticReplayDigest?: string | null;
+  semanticDistance?: number | null;
+  epsilon?: number | null;
+}
+
 export interface ReplayReport {
   runId: string;
   matchStatus: boolean;
@@ -91,6 +108,7 @@ export interface ReplayReport {
   semanticReplayDigest?: string | null;
   semanticDistance?: number | null;
   epsilon?: number | null;
+  checkpointReports: CheckpointReplayReport[];
 }
 
 export interface ProjectImportSummary {

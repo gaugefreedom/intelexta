@@ -6,6 +6,8 @@ use crate::{
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "interactive")]
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::ops::Deref;
@@ -556,81 +558,125 @@ pub(crate) fn replay_run_with_pool(
     pool: &DbPool,
 ) -> Result<replay::ReplayReport, Error> {
     let conn = pool.get()?;
-    let kind_opt: Option<String> = conn
-        .query_row(
-            "SELECT kind FROM runs WHERE id = ?1",
-            params![&run_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-
-    let has_interactive_config: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM run_checkpoints WHERE run_id = ?1 AND LOWER(checkpoint_type) = 'interactivechat')",
-        params![&run_id],
-        |row| {
-            let value: i64 = row.get(0)?;
-            Ok(value != 0)
-        },
-    )?;
-
-    let has_interactive_turns: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM checkpoints WHERE run_id = ?1 AND turn_index IS NOT NULL)",
-        params![&run_id],
-        |row| {
-            let value: i64 = row.get(0)?;
-            Ok(value != 0)
-        },
-    )?;
-
-    let has_interactive = has_interactive_config || has_interactive_turns;
-
-    let has_concordant_config: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM run_checkpoints WHERE run_id = ?1 AND proof_mode = 'concordant')",
-        params![&run_id],
-        |row| {
-            let value: i64 = row.get(0)?;
-            Ok(value != 0)
-        },
-    )?;
-
-    if has_interactive {
-        #[cfg(feature = "interactive")]
-        {
-            let report = replay::replay_interactive_run(run_id.clone(), pool)
-                .map_err(|err| Error::Api(err.to_string()))?;
-            return Ok(report);
+    let stored_run = match orchestrator::load_stored_run(&conn, &run_id) {
+        Ok(run) => run,
+        Err(err) => {
+            let message = err.to_string();
+            if message.contains("not found") {
+                return Ok(replay::ReplayReport::from_checkpoint_reports(
+                    run_id,
+                    Vec::new(),
+                    Some("run not found".to_string()),
+                ));
+            }
+            return Err(Error::Api(message));
         }
-
-        #[cfg(not(feature = "interactive"))]
-        {
-            return Err(Error::Api(
-                "Interactive replays are disabled in this build.".to_string(),
-            ));
-        }
-    }
-
-    let Some(_kind) = kind_opt else {
-        return Ok(replay::ReplayReport {
-            run_id: run_id.clone(),
-            match_status: false,
-            original_digest: String::new(),
-            replay_digest: String::new(),
-            error_message: Some("run not found".to_string()),
-            semantic_original_digest: None,
-            semantic_replay_digest: None,
-            semantic_distance: None,
-            epsilon: None,
-        });
     };
 
-    let report = if has_concordant_config {
-        replay::replay_concordant_run(run_id.clone(), pool)
-    } else {
-        replay::replay_exact_run(run_id.clone(), pool)
+    if stored_run.checkpoints.is_empty() {
+        return Ok(replay::ReplayReport::from_checkpoint_reports(
+            run_id,
+            Vec::new(),
+            Some("run has no configured checkpoints".to_string()),
+        ));
     }
-    .map_err(|err| Error::Api(err.to_string()))?;
 
-    Ok(report)
+    let mut checkpoint_reports: Vec<replay::CheckpointReplayReport> = Vec::new();
+
+    #[cfg(feature = "interactive")]
+    let mut interactive_lookup: HashMap<Option<String>, replay::CheckpointReplayReport> =
+        HashMap::new();
+    #[cfg(feature = "interactive")]
+    let mut interactive_default_error: Option<String> = None;
+
+    #[cfg(feature = "interactive")]
+    let has_interactive_configs = stored_run
+        .checkpoints
+        .iter()
+        .any(|cfg| cfg.is_interactive_chat());
+
+    #[cfg(feature = "interactive")]
+    if has_interactive_configs {
+        let interactive_report = replay::replay_interactive_run(run_id.clone(), pool)
+            .map_err(|err| Error::Api(err.to_string()))?;
+        interactive_default_error = interactive_report.error_message.clone();
+        for entry in interactive_report.checkpoint_reports {
+            interactive_lookup.insert(entry.checkpoint_config_id.clone(), entry);
+        }
+    }
+
+    #[cfg(not(feature = "interactive"))]
+    if stored_run
+        .checkpoints
+        .iter()
+        .any(|cfg| cfg.is_interactive_chat())
+    {
+        return Err(Error::Api(
+            "Interactive replays are disabled in this build.".to_string(),
+        ));
+    }
+
+    for config in &stored_run.checkpoints {
+        if config.is_interactive_chat() {
+            #[cfg(feature = "interactive")]
+            {
+                let report = interactive_lookup
+                    .remove(&Some(config.id.clone()))
+                    .unwrap_or_else(|| replay::CheckpointReplayReport {
+                        checkpoint_config_id: Some(config.id.clone()),
+                        checkpoint_type: Some(config.checkpoint_type.clone()),
+                        order_index: Some(config.order_index),
+                        mode: replay::CheckpointReplayMode::Interactive,
+                        match_status: false,
+                        original_digest: String::new(),
+                        replay_digest: String::new(),
+                        error_message: interactive_default_error.clone().or_else(|| {
+                            Some("no interactive checkpoints recorded for config".to_string())
+                        }),
+                        semantic_original_digest: None,
+                        semantic_replay_digest: None,
+                        semantic_distance: None,
+                        epsilon: None,
+                    });
+                checkpoint_reports.push(report);
+            }
+
+            #[cfg(not(feature = "interactive"))]
+            {
+                let _ = config;
+            }
+
+            continue;
+        }
+
+        let report = if matches!(config.proof_mode, orchestrator::RunProofMode::Concordant) {
+            replay::replay_concordant_checkpoint(&stored_run, &conn, config)
+        } else {
+            replay::replay_exact_checkpoint(&stored_run, &conn, config)
+        }
+        .map_err(|err| Error::Api(err.to_string()))?;
+        checkpoint_reports.push(report);
+    }
+
+    #[cfg(feature = "interactive")]
+    {
+        for (_key, report) in interactive_lookup.into_iter() {
+            checkpoint_reports.push(report);
+        }
+    }
+
+    checkpoint_reports.sort_by(|a, b| {
+        let left = a.order_index.unwrap_or(i64::MAX);
+        let right = b.order_index.unwrap_or(i64::MAX);
+        left.cmp(&right)
+            .then_with(|| a.checkpoint_config_id.cmp(&b.checkpoint_config_id))
+    });
+
+    Ok(replay::ReplayReport::from_checkpoint_reports(
+        run_id,
+        checkpoint_reports,
+        None,
+    ))
 }
 
 #[tauri::command]

@@ -15,9 +15,80 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "interactive")]
 use serde_json::Value;
 #[cfg(feature = "interactive")]
+use std::cmp::Ordering;
+#[cfg(feature = "interactive")]
 use std::collections::HashMap;
 #[cfg(feature = "interactive")]
 use std::convert::TryInto;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckpointReplayMode {
+    Exact,
+    Concordant,
+    Interactive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointReplayReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_config_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_index: Option<i64>,
+    pub mode: CheckpointReplayMode,
+    pub match_status: bool,
+    pub original_digest: String,
+    pub replay_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_original_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_replay_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_distance: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epsilon: Option<f64>,
+}
+
+impl CheckpointReplayReport {
+    fn new(config: &orchestrator::RunCheckpointConfig, mode: CheckpointReplayMode) -> Self {
+        Self {
+            checkpoint_config_id: Some(config.id.clone()),
+            checkpoint_type: Some(config.checkpoint_type.clone()),
+            order_index: Some(config.order_index),
+            mode,
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: None,
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: None,
+        }
+    }
+
+    fn for_interactive_config(config: &orchestrator::RunCheckpointConfig) -> Self {
+        Self {
+            checkpoint_config_id: Some(config.id.clone()),
+            checkpoint_type: Some(config.checkpoint_type.clone()),
+            order_index: Some(config.order_index),
+            mode: CheckpointReplayMode::Interactive,
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: None,
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +106,81 @@ pub struct ReplayReport {
     pub semantic_distance: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epsilon: Option<f64>,
+    #[serde(default)]
+    pub checkpoint_reports: Vec<CheckpointReplayReport>,
+}
+
+impl ReplayReport {
+    pub(crate) fn from_checkpoint_reports(
+        run_id: String,
+        checkpoint_reports: Vec<CheckpointReplayReport>,
+        default_error: Option<String>,
+    ) -> Self {
+        if checkpoint_reports.is_empty() {
+            return ReplayReport {
+                run_id,
+                match_status: false,
+                original_digest: String::new(),
+                replay_digest: String::new(),
+                error_message: default_error
+                    .or_else(|| Some("run has no configured checkpoints".to_string())),
+                semantic_original_digest: None,
+                semantic_replay_digest: None,
+                semantic_distance: None,
+                epsilon: None,
+                checkpoint_reports,
+            };
+        }
+
+        let match_status = checkpoint_reports.iter().all(|entry| entry.match_status);
+        let error_message = if match_status {
+            None
+        } else {
+            checkpoint_reports
+                .iter()
+                .find(|entry| !entry.match_status)
+                .and_then(|entry| entry.error_message.clone())
+                .or(default_error)
+        };
+
+        let original_digest = checkpoint_reports
+            .last()
+            .map(|entry| entry.original_digest.clone())
+            .unwrap_or_default();
+        let replay_digest = checkpoint_reports
+            .last()
+            .map(|entry| entry.replay_digest.clone())
+            .unwrap_or_default();
+        let semantic_original_digest = checkpoint_reports
+            .iter()
+            .rev()
+            .find_map(|entry| entry.semantic_original_digest.clone());
+        let semantic_replay_digest = checkpoint_reports
+            .iter()
+            .rev()
+            .find_map(|entry| entry.semantic_replay_digest.clone());
+        let semantic_distance = checkpoint_reports
+            .iter()
+            .rev()
+            .find_map(|entry| entry.semantic_distance);
+        let epsilon = checkpoint_reports
+            .iter()
+            .rev()
+            .find_map(|entry| entry.epsilon);
+
+        ReplayReport {
+            run_id,
+            match_status,
+            original_digest,
+            replay_digest,
+            error_message,
+            semantic_original_digest,
+            semantic_replay_digest,
+            semantic_distance,
+            epsilon,
+            checkpoint_reports,
+        }
+    }
 }
 
 fn simulate_stub_checkpoint(
@@ -52,6 +198,127 @@ fn simulate_stub_checkpoint(
     (outputs_hex, semantic_digest)
 }
 
+fn load_checkpoint_digests(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    config_id: &str,
+) -> Result<Option<(Option<String>, Option<String>)>> {
+    let row = conn
+        .query_row(
+            "SELECT outputs_sha256, semantic_digest FROM checkpoints WHERE run_id = ?1 AND checkpoint_config_id = ?2 AND kind = 'Step' ORDER BY timestamp DESC, id DESC LIMIT 1",
+            params![run_id, config_id],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?;
+    Ok(row)
+}
+
+pub(crate) fn replay_exact_checkpoint(
+    run: &orchestrator::StoredRun,
+    conn: &rusqlite::Connection,
+    config: &orchestrator::RunCheckpointConfig,
+) -> Result<CheckpointReplayReport> {
+    let mut report = CheckpointReplayReport::new(config, CheckpointReplayMode::Exact);
+
+    let digests = load_checkpoint_digests(conn, &run.id, &config.id)?;
+    let Some((original_digest_opt, _semantic_opt)) = digests else {
+        report.error_message = Some("no outputs digest recorded for checkpoint".to_string());
+        return Ok(report);
+    };
+
+    let original_digest = original_digest_opt.unwrap_or_default();
+    if original_digest.is_empty() {
+        report.error_message = Some("no outputs digest recorded for checkpoint".to_string());
+        return Ok(report);
+    }
+    report.original_digest = original_digest.clone();
+
+    let replay_digest = if config.model == "stub-model" {
+        let (outputs_hex, _) = simulate_stub_checkpoint(run.seed, config);
+        outputs_hex
+    } else {
+        let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
+        provenance::sha256_hex(generation.response.as_bytes())
+    };
+
+    report.replay_digest = replay_digest.clone();
+    if replay_digest == original_digest {
+        report.match_status = true;
+    } else {
+        report.error_message = Some("outputs digest mismatch".to_string());
+    }
+
+    Ok(report)
+}
+
+pub(crate) fn replay_concordant_checkpoint(
+    run: &orchestrator::StoredRun,
+    conn: &rusqlite::Connection,
+    config: &orchestrator::RunCheckpointConfig,
+) -> Result<CheckpointReplayReport> {
+    let epsilon = run
+        .epsilon
+        .ok_or_else(|| anyhow!("concordant run missing epsilon"))?;
+
+    let mut report = CheckpointReplayReport::new(config, CheckpointReplayMode::Concordant);
+    report.epsilon = Some(epsilon);
+
+    let digests = load_checkpoint_digests(conn, &run.id, &config.id)?;
+    let Some((original_digest_opt, semantic_digest_opt)) = digests else {
+        report.error_message = Some("no outputs digest recorded for checkpoint".to_string());
+        return Ok(report);
+    };
+
+    let original_digest = original_digest_opt.unwrap_or_default();
+    if original_digest.is_empty() {
+        report.error_message = Some("no outputs digest recorded for checkpoint".to_string());
+        return Ok(report);
+    }
+    report.original_digest = original_digest.clone();
+
+    let original_semantic = match semantic_digest_opt {
+        Some(value) if !value.is_empty() => value,
+        _ => {
+            report.error_message = Some("no semantic digest recorded for checkpoint".to_string());
+            return Ok(report);
+        }
+    };
+    report.semantic_original_digest = Some(original_semantic.clone());
+
+    let (replay_digest, replay_semantic) = if config.model == "stub-model" {
+        simulate_stub_checkpoint(run.seed, config)
+    } else {
+        let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
+        let outputs_hex = provenance::sha256_hex(generation.response.as_bytes());
+        let semantic = provenance::semantic_digest(&generation.response);
+        (outputs_hex, semantic)
+    };
+
+    report.replay_digest = replay_digest.clone();
+    report.semantic_replay_digest = Some(replay_semantic.clone());
+
+    if replay_digest != original_digest {
+        report.error_message = Some("outputs digest mismatch".to_string());
+        return Ok(report);
+    }
+
+    let distance = provenance::semantic_distance(&original_semantic, &replay_semantic)
+        .ok_or_else(|| anyhow!("invalid semantic digest encoding"))?;
+    report.semantic_distance = Some(distance);
+
+    let normalized_distance = distance as f64 / 64.0;
+    if normalized_distance <= epsilon {
+        report.match_status = true;
+    } else {
+        report.error_message = Some(format!(
+            "semantic distance {:.2} exceeded epsilon {:.2}",
+            normalized_distance, epsilon
+        ));
+    }
+
+    Ok(report)
+}
+
 pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
     let conn = pool.get()?;
     let stored_run = match orchestrator::load_stored_run(&conn, &run_id) {
@@ -67,6 +334,7 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
                 semantic_replay_digest: None,
                 semantic_distance: None,
                 epsilon: None,
+                checkpoint_reports: Vec::new(),
             });
         }
     };
@@ -88,67 +356,24 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
             semantic_replay_digest: None,
             semantic_distance: None,
             epsilon: None,
+            checkpoint_reports: Vec::new(),
         });
     }
 
-    if stored_run.checkpoints.is_empty() {
-        return Ok(ReplayReport {
-            run_id,
-            match_status: false,
-            original_digest: String::new(),
-            replay_digest: String::new(),
-            error_message: Some("run has no configured checkpoints".to_string()),
-            semantic_original_digest: None,
-            semantic_replay_digest: None,
-            semantic_distance: None,
-            epsilon: None,
-        });
-    }
-
-    let mut replay_digest = String::new();
+    let mut checkpoint_reports = Vec::new();
     for config in &stored_run.checkpoints {
         if config.is_interactive_chat() {
             continue;
         }
-        if config.model == "stub-model" {
-            let (outputs_hex, _) = simulate_stub_checkpoint(stored_run.seed, config);
-            replay_digest = outputs_hex;
-        } else {
-            let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
-            replay_digest = provenance::sha256_hex(generation.response.as_bytes());
-        }
+        let report = replay_exact_checkpoint(&stored_run, &conn, config)?;
+        checkpoint_reports.push(report);
     }
 
-    let final_digest: Option<String> = conn
-        .query_row(
-            "SELECT outputs_sha256 FROM checkpoints WHERE run_id = ?1 AND kind = 'Step' ORDER BY timestamp DESC LIMIT 1",
-            params![&run_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten();
-
-    let mut report = ReplayReport {
+    Ok(ReplayReport::from_checkpoint_reports(
         run_id,
-        match_status: false,
-        original_digest: final_digest.clone().unwrap_or_default(),
-        replay_digest,
-        error_message: None,
-        semantic_original_digest: None,
-        semantic_replay_digest: None,
-        semantic_distance: None,
-        epsilon: None,
-    };
-
-    if final_digest.is_none() || report.original_digest.is_empty() {
-        report.error_message = Some("no outputs digest recorded for run".to_string());
-    } else if report.original_digest != report.replay_digest {
-        report.error_message = Some("outputs digest mismatch".to_string());
-    } else {
-        report.match_status = true;
-    }
-
-    Ok(report)
+        checkpoint_reports,
+        None,
+    ))
 }
 
 #[cfg(test)]
@@ -329,6 +554,7 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
                 semantic_replay_digest: None,
                 semantic_distance: None,
                 epsilon: None,
+                checkpoint_reports: Vec::new(),
             });
         }
     };
@@ -350,6 +576,7 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
             semantic_replay_digest: None,
             semantic_distance: None,
             epsilon: None,
+            checkpoint_reports: Vec::new(),
         });
     }
 
@@ -357,82 +584,28 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
         .epsilon
         .ok_or_else(|| anyhow!("concordant run missing epsilon"))?;
 
-    if stored_run.checkpoints.is_empty() {
-        return Ok(ReplayReport {
-            run_id,
-            match_status: false,
-            original_digest: String::new(),
-            replay_digest: String::new(),
-            error_message: Some("run has no configured checkpoints".to_string()),
-            semantic_original_digest: None,
-            semantic_replay_digest: None,
-            semantic_distance: None,
-            epsilon: Some(epsilon),
-        });
-    }
-
-    let mut replay_digest = String::new();
-    let mut replay_semantic_digest = String::new();
+    let mut checkpoint_reports = Vec::new();
     for config in &stored_run.checkpoints {
         if config.is_interactive_chat() {
             continue;
         }
-        if config.model == "stub-model" {
-            let (digest, semantic) = simulate_stub_checkpoint(stored_run.seed, config);
-            replay_digest = digest;
-            if matches!(config.proof_mode, RunProofMode::Concordant) {
-                replay_semantic_digest = semantic;
+        let entry = if matches!(config.proof_mode, RunProofMode::Concordant) {
+            let mut report = replay_concordant_checkpoint(&stored_run, &conn, config)?;
+            if report.epsilon.is_none() {
+                report.epsilon = Some(epsilon);
             }
+            report
         } else {
-            let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
-            replay_digest = provenance::sha256_hex(generation.response.as_bytes());
-            if matches!(config.proof_mode, RunProofMode::Concordant) {
-                replay_semantic_digest = provenance::semantic_digest(&generation.response);
-            }
-        }
+            replay_exact_checkpoint(&stored_run, &conn, config)?
+        };
+        checkpoint_reports.push(entry);
     }
 
-    let (original_digest_opt, semantic_digest_opt): (Option<String>, Option<String>) = conn
-        .query_row(
-            "SELECT outputs_sha256, semantic_digest FROM checkpoints WHERE run_id = ?1 AND kind = 'Step' ORDER BY timestamp DESC LIMIT 1",
-            params![&run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?
-        .unwrap_or((None, None));
-
-    let mut report = ReplayReport {
+    Ok(ReplayReport::from_checkpoint_reports(
         run_id,
-        match_status: false,
-        original_digest: original_digest_opt.clone().unwrap_or_default(),
-        replay_digest,
-        error_message: None,
-        semantic_original_digest: semantic_digest_opt.clone(),
-        semantic_replay_digest: Some(replay_semantic_digest.clone()),
-        semantic_distance: None,
-        epsilon: Some(epsilon),
-    };
-
-    if semantic_digest_opt.is_none() {
-        report.error_message = Some("no semantic digest recorded for run".to_string());
-        return Ok(report);
-    }
-
-    let original_semantic = semantic_digest_opt.unwrap();
-    let distance = provenance::semantic_distance(&original_semantic, &replay_semantic_digest)
-        .ok_or_else(|| anyhow!("invalid semantic digest encoding"))?;
-    report.semantic_distance = Some(distance);
-
-    let normalized_distance = distance as f64 / 64.0;
-    if normalized_distance <= epsilon {
-        report.match_status = true;
-    } else {
-        report.error_message = Some(format!(
-            "semantic distance {:.2} exceeded epsilon {:.2}",
-            normalized_distance, epsilon
-        ));
-    }
-    Ok(report)
+        checkpoint_reports,
+        None,
+    ))
 }
 
 #[cfg(feature = "interactive")]
@@ -474,6 +647,8 @@ struct ConversationState {
     expected_turn_index: u32,
     previous_checkpoint_id: Option<String>,
     expected_prev_chain: String,
+    last_stored_curr: Option<String>,
+    last_computed_curr: Option<String>,
 }
 
 #[cfg(feature = "interactive")]
@@ -501,9 +676,33 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 semantic_replay_digest: None,
                 semantic_distance: None,
                 epsilon: None,
+                checkpoint_reports: Vec::new(),
             });
         }
     };
+
+    let stored_run = match orchestrator::load_stored_run(&conn, &run_id) {
+        Ok(run) => run,
+        Err(err) => {
+            return Ok(ReplayReport {
+                run_id,
+                match_status: false,
+                original_digest: String::new(),
+                replay_digest: String::new(),
+                error_message: Some(err.to_string()),
+                semantic_original_digest: None,
+                semantic_replay_digest: None,
+                semantic_distance: None,
+                epsilon: None,
+                checkpoint_reports: Vec::new(),
+            });
+        }
+    };
+    let config_map: HashMap<String, orchestrator::RunCheckpointConfig> = stored_run
+        .checkpoints
+        .iter()
+        .map(|cfg| (cfg.id.clone(), cfg.clone()))
+        .collect();
 
     let pubkey_bytes = STANDARD
         .decode(pubkey_b64.as_bytes())
@@ -560,33 +759,24 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
         checkpoints.push(row?);
     }
 
-    let mut report = ReplayReport {
-        run_id: run_id.clone(),
-        match_status: false,
-        original_digest: String::new(),
-        replay_digest: String::new(),
-        error_message: None,
-        semantic_original_digest: None,
-        semantic_replay_digest: None,
-        semantic_distance: None,
-        epsilon: None,
-    };
-
     if checkpoints.is_empty() {
-        report.error_message = Some("no checkpoints recorded for run".to_string());
-        return Ok(report);
+        return Ok(ReplayReport::from_checkpoint_reports(
+            run_id,
+            Vec::new(),
+            Some("no checkpoints recorded for run".to_string()),
+        ));
     }
 
     let mut conversation_states: HashMap<Option<String>, ConversationState> = HashMap::new();
-    let mut last_stored_curr = String::new();
-    let mut last_computed_curr = String::new();
     let mut failure: Option<String> = None;
+    let mut failure_config: Option<Option<String>> = None;
 
     for ck in &checkpoints {
         let turn_index = match ck.turn_index {
             Some(value) => value,
             None => {
                 failure = Some(format!("checkpoint {} missing turn_index", ck.id));
+                failure_config = Some(ck.checkpoint_config_id.clone());
                 break;
             }
         };
@@ -637,6 +827,7 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 ck.checkpoint_config_id.as_deref(),
                 state.expected_turn_index
             ));
+            failure_config = Some(config_key.clone());
             break;
         }
 
@@ -649,11 +840,13 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 state.previous_checkpoint_id.as_deref(),
                 ck.parent_checkpoint_id.as_deref()
             ));
+            failure_config = Some(config_key.clone());
             break;
         }
 
         if ck.prev_chain != state.expected_prev_chain {
             failure = Some(format!("checkpoint {} prev_chain mismatch", ck.id));
+            failure_config = Some(config_key.clone());
             break;
         }
 
@@ -672,11 +865,10 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
         let canonical = provenance::canonical_json(&body);
         let computed_curr =
             provenance::sha256_hex(&[ck.prev_chain.as_bytes(), &canonical].concat());
-        last_computed_curr = computed_curr.clone();
-        last_stored_curr = ck.curr_chain.clone();
 
         if computed_curr != ck.curr_chain {
             failure = Some(format!("checkpoint {} curr_chain mismatch", ck.id));
+            failure_config = Some(config_key.clone());
             break;
         }
 
@@ -684,6 +876,7 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
             Ok(bytes) => bytes,
             Err(_) => {
                 failure = Some(format!("checkpoint {} signature decoding failed", ck.id));
+                failure_config = Some(config_key.clone());
                 break;
             }
         };
@@ -693,6 +886,7 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 Ok(arr) => arr,
                 Err(_) => {
                     failure = Some(format!("checkpoint {} signature length invalid", ck.id));
+                    failure_config = Some(config_key.clone());
                     break;
                 }
             };
@@ -706,22 +900,93 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 "checkpoint {} signature verification failed",
                 ck.id
             ));
+            failure_config = Some(config_key.clone());
             break;
         }
 
         state.previous_checkpoint_id = Some(ck.id.clone());
         state.expected_prev_chain = ck.curr_chain.clone();
         state.expected_turn_index += 1;
+        state.last_stored_curr = Some(ck.curr_chain.clone());
+        state.last_computed_curr = Some(computed_curr);
     }
 
-    report.original_digest = last_stored_curr;
-    report.replay_digest = last_computed_curr;
+    let mut checkpoint_reports: Vec<CheckpointReplayReport> = Vec::new();
+    for (config_key, state) in conversation_states.into_iter() {
+        let mut entry = if let Some(config_id) = config_key.as_ref() {
+            if let Some(config) = config_map.get(config_id) {
+                CheckpointReplayReport::for_interactive_config(config)
+            } else {
+                CheckpointReplayReport {
+                    checkpoint_config_id: Some(config_id.clone()),
+                    checkpoint_type: None,
+                    order_index: None,
+                    mode: CheckpointReplayMode::Interactive,
+                    match_status: false,
+                    original_digest: String::new(),
+                    replay_digest: String::new(),
+                    error_message: None,
+                    semantic_original_digest: None,
+                    semantic_replay_digest: None,
+                    semantic_distance: None,
+                    epsilon: None,
+                }
+            }
+        } else {
+            CheckpointReplayReport {
+                checkpoint_config_id: None,
+                checkpoint_type: None,
+                order_index: None,
+                mode: CheckpointReplayMode::Interactive,
+                match_status: false,
+                original_digest: String::new(),
+                replay_digest: String::new(),
+                error_message: None,
+                semantic_original_digest: None,
+                semantic_replay_digest: None,
+                semantic_distance: None,
+                epsilon: None,
+            }
+        };
 
-    if let Some(reason) = failure {
-        report.error_message = Some(reason);
-    } else {
-        report.match_status = true;
+        if let Some(value) = state.last_stored_curr {
+            entry.original_digest = value;
+        }
+        if let Some(value) = state.last_computed_curr {
+            entry.replay_digest = value;
+        }
+
+        if let Some(reason) = failure.as_ref() {
+            let failure_matches = failure_config.as_ref().map_or(true, |fc| fc == &config_key);
+            if failure_matches {
+                entry.match_status = false;
+                entry.error_message = Some(reason.clone());
+            } else {
+                entry.match_status = true;
+            }
+        } else if entry.original_digest.is_empty() || entry.replay_digest.is_empty() {
+            entry.match_status = false;
+            entry.error_message = Some("no interactive digest recorded".to_string());
+        } else if entry.original_digest == entry.replay_digest {
+            entry.match_status = true;
+        } else {
+            entry.match_status = false;
+            entry.error_message = Some("interactive digest mismatch".to_string());
+        }
+
+        checkpoint_reports.push(entry);
     }
 
-    Ok(report)
+    checkpoint_reports.sort_by(|a, b| {
+        let left = a.order_index.unwrap_or(i64::MAX);
+        let right = b.order_index.unwrap_or(i64::MAX);
+        left.cmp(&right)
+            .then_with(|| a.checkpoint_config_id.cmp(&b.checkpoint_config_id))
+    });
+
+    Ok(ReplayReport::from_checkpoint_reports(
+        run_id,
+        checkpoint_reports,
+        failure,
+    ))
 }

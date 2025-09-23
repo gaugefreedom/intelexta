@@ -636,6 +636,15 @@ fn replay_exact_run_successfully_matches_digest() -> Result<()> {
     assert!(report.semantic_replay_digest.is_none());
     assert!(report.semantic_distance.is_none());
     assert!(report.epsilon.is_none());
+    assert_eq!(report.checkpoint_reports.len(), 1);
+    let checkpoint = report
+        .checkpoint_reports
+        .first()
+        .expect("checkpoint report present");
+    assert_eq!(checkpoint.mode, replay::CheckpointReplayMode::Exact);
+    assert!(checkpoint.match_status);
+    assert_eq!(checkpoint.original_digest, report.original_digest);
+    assert_eq!(checkpoint.replay_digest, report.replay_digest);
 
     let mut expected_input = b"hello".to_vec();
     expected_input.extend_from_slice(&seed.to_le_bytes());
@@ -696,6 +705,18 @@ fn replay_exact_run_reports_mismatched_digest() -> Result<()> {
     assert!(report.semantic_replay_digest.is_none());
     assert!(report.semantic_distance.is_none());
     assert!(report.epsilon.is_none());
+    assert_eq!(report.checkpoint_reports.len(), 1);
+    let checkpoint = report
+        .checkpoint_reports
+        .first()
+        .expect("checkpoint report present");
+    assert_eq!(checkpoint.mode, replay::CheckpointReplayMode::Exact);
+    assert!(!checkpoint.match_status);
+    assert_eq!(checkpoint.original_digest, "bad-digest");
+    assert_eq!(
+        checkpoint.error_message.as_deref(),
+        Some("outputs digest mismatch")
+    );
 
     Ok(())
 }
@@ -737,6 +758,14 @@ fn replay_concordant_run_successfully_matches_semantics() -> Result<()> {
         report.semantic_original_digest,
         report.semantic_replay_digest
     );
+    assert_eq!(report.checkpoint_reports.len(), 1);
+    let checkpoint = report
+        .checkpoint_reports
+        .first()
+        .expect("checkpoint report present");
+    assert_eq!(checkpoint.mode, replay::CheckpointReplayMode::Concordant);
+    assert!(checkpoint.match_status);
+    assert_eq!(checkpoint.epsilon, Some(epsilon));
 
     let api_report = api::replay_run_with_pool(run_id.clone(), &pool)?;
     assert_eq!(api_report, report);
@@ -789,9 +818,79 @@ fn replay_concordant_run_detects_semantic_mismatch() -> Result<()> {
     assert_eq!(report.epsilon, Some(epsilon));
     let distance = report.semantic_distance.expect("distance recorded");
     assert!(f64::from(distance) > epsilon);
+    assert_eq!(report.checkpoint_reports.len(), 1);
+    let checkpoint = report
+        .checkpoint_reports
+        .first()
+        .expect("checkpoint report present");
+    assert_eq!(checkpoint.mode, replay::CheckpointReplayMode::Concordant);
+    assert!(!checkpoint.match_status);
+    assert_eq!(checkpoint.epsilon, Some(epsilon));
 
     let api_report = api::replay_run_with_pool(run_id.clone(), &pool)?;
     assert_eq!(api_report, report);
+
+    Ok(())
+}
+
+#[test]
+fn replay_mixed_modes_reports_per_checkpoint() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Replay Mixed".into(), &pool)?;
+    let epsilon = 2.5;
+
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        orchestrator::RunSpec {
+            project_id: project.id.clone(),
+            name: "replay-mixed".into(),
+            seed: 42,
+            token_budget: 100,
+            model: "stub-model".into(),
+            checkpoints: vec![
+                orchestrator::RunCheckpointTemplate {
+                    model: "stub-model".into(),
+                    prompt: "{}".into(),
+                    token_budget: 50,
+                    order_index: Some(0),
+                    checkpoint_type: "Step".to_string(),
+                    proof_mode: orchestrator::RunProofMode::Exact,
+                },
+                orchestrator::RunCheckpointTemplate {
+                    model: "stub-model".into(),
+                    prompt: "{\"value\":1}".into(),
+                    token_budget: 50,
+                    order_index: Some(1),
+                    checkpoint_type: "Step".to_string(),
+                    proof_mode: orchestrator::RunProofMode::Concordant,
+                },
+            ],
+            proof_mode: orchestrator::RunProofMode::Concordant,
+            epsilon: Some(epsilon),
+        },
+    )?;
+
+    let report = api::replay_run_with_pool(run_id.clone(), &pool)?;
+    assert!(report.match_status);
+    assert_eq!(report.checkpoint_reports.len(), 2);
+
+    let exact_entry = &report.checkpoint_reports[0];
+    assert_eq!(exact_entry.mode, replay::CheckpointReplayMode::Exact);
+    assert!(exact_entry.match_status);
+
+    let concordant_entry = &report.checkpoint_reports[1];
+    assert_eq!(
+        concordant_entry.mode,
+        replay::CheckpointReplayMode::Concordant
+    );
+    assert!(concordant_entry.match_status);
+    assert_eq!(concordant_entry.epsilon, Some(epsilon));
+    assert!(concordant_entry.semantic_distance.is_some());
+
+    // Ensure the overall report still exposes semantic metrics from the concordant checkpoint.
+    assert_eq!(report.epsilon, Some(epsilon));
+    assert_eq!(report.semantic_distance, concordant_entry.semantic_distance);
 
     Ok(())
 }

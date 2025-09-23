@@ -315,36 +315,107 @@ export default function ContextPanel({
       return null;
     }
 
-    if (
-      typeof carReplayReport.epsilon === "number" &&
-      typeof carReplayReport.semanticDistance === "number"
-    ) {
-      const normalized = carReplayReport.semanticDistance / 64;
-      const comparison = normalized <= carReplayReport.epsilon ? "<=" : ">";
-      const suffix = carReplayReport.errorMessage
-        ? ` — ${carReplayReport.errorMessage}`
-        : "";
+    const checkpoints = carReplayReport.checkpointReports ?? [];
+
+    const buildMessageForCheckpoint = (
+      entry: ReplayReport["checkpointReports"][number],
+      index: number,
+    ) => {
+      const tone = entry.matchStatus ? "success" : "error";
+      const parts: string[] = [];
+      if (typeof entry.orderIndex === "number") {
+        parts.push(`#${entry.orderIndex}`);
+      }
+      if (entry.checkpointType) {
+        parts.push(entry.checkpointType);
+      }
+      const label = parts.length > 0 ? parts.join(" ") : "Checkpoint";
+      let message: string;
+      if (
+        entry.mode === "concordant" &&
+        typeof entry.semanticDistance === "number" &&
+        typeof entry.epsilon === "number"
+      ) {
+        const normalized = entry.semanticDistance / 64;
+        const comparison = normalized <= entry.epsilon ? "<=" : ">";
+        message = `Concordant ${label}: ${entry.matchStatus ? "PASS" : "FAIL"} (distance ${normalized.toFixed(
+          2,
+        )} ${comparison} ε=${entry.epsilon.toFixed(2)})`;
+        if (!entry.matchStatus && entry.errorMessage) {
+          message += ` — ${entry.errorMessage}`;
+        }
+      } else if (entry.mode === "interactive") {
+        message = `Interactive ${label}: ${entry.matchStatus ? "PASS" : "FAIL"}`;
+        if (entry.errorMessage) {
+          message += ` — ${entry.errorMessage}`;
+        }
+      } else if (entry.matchStatus) {
+        message = `Exact ${label}: PASS (digest ${entry.replayDigest || "∅"})`;
+      } else {
+        const expected = entry.originalDigest || "∅";
+        const replayed = entry.replayDigest || "∅";
+        const details = entry.errorMessage ?? "digests differ";
+        message = `Exact ${label}: FAIL — ${details} (expected ${expected}, replayed ${replayed})`;
+      }
       return {
-        tone: carReplayReport.matchStatus ? "success" : "error",
-        message: `Concordant proof ${
-          carReplayReport.matchStatus ? "PASS" : "FAIL"
-        } (distance ${normalized.toFixed(2)} ${comparison} ε=${carReplayReport.epsilon.toFixed(2)})${suffix}`,
+        key: entry.checkpointConfigId ?? `checkpoint-${index}`,
+        tone,
+        message,
+      };
+    };
+
+    if (checkpoints.length === 0) {
+      if (
+        typeof carReplayReport.epsilon === "number" &&
+        typeof carReplayReport.semanticDistance === "number"
+      ) {
+        const normalized = carReplayReport.semanticDistance / 64;
+        const comparison = normalized <= carReplayReport.epsilon ? "<=" : ">";
+        const suffix = carReplayReport.errorMessage
+          ? ` — ${carReplayReport.errorMessage}`
+          : "";
+        return {
+          overallTone: carReplayReport.matchStatus ? "success" : "error",
+          overallMessage: `Concordant proof ${
+            carReplayReport.matchStatus ? "PASS" : "FAIL"
+          } (distance ${normalized.toFixed(2)} ${comparison} ε=${carReplayReport.epsilon.toFixed(2)})${suffix}`,
+          checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
+        };
+      }
+
+      if (carReplayReport.matchStatus) {
+        return {
+          overallTone: "success" as const,
+          overallMessage: `Exact proof PASS (digest ${carReplayReport.replayDigest || "∅"})`,
+          checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
+        };
+      }
+
+      const details = carReplayReport.errorMessage ?? "digests differ";
+      return {
+        overallTone: "error" as const,
+        overallMessage: `Exact proof FAIL — ${details} (expected ${
+          carReplayReport.originalDigest || "∅"
+        }, replayed ${carReplayReport.replayDigest || "∅"})`,
+        checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
       };
     }
 
-    if (carReplayReport.matchStatus) {
-      return {
-        tone: "success" as const,
-        message: `Exact proof PASS (digest ${carReplayReport.replayDigest || "∅"})`,
-      };
-    }
+    const checkpointMessages = checkpoints.map((entry, index) =>
+      buildMessageForCheckpoint(entry, index),
+    );
 
-    const details = carReplayReport.errorMessage ?? "digests differ";
+    const summaryBase = carReplayReport.matchStatus ? "Replay PASS" : "Replay FAIL";
+    const overallMessage = carReplayReport.matchStatus
+      ? summaryBase
+      : carReplayReport.errorMessage
+      ? `${summaryBase} — ${carReplayReport.errorMessage}`
+      : summaryBase;
+
     return {
-      tone: "error" as const,
-      message: `Exact proof FAIL — ${details} (expected ${
-        carReplayReport.originalDigest || "∅"
-      }, replayed ${carReplayReport.replayDigest || "∅"})`,
+      overallTone: carReplayReport.matchStatus ? "success" : "error",
+      overallMessage,
+      checkpoints: checkpointMessages,
     };
   }, [carReplayReport]);
 
@@ -514,14 +585,27 @@ export default function ContextPanel({
           <span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{carImportStatus}</span>
         )}
         {carReplayFeedback && (
-          <span
-            style={{
-              color: carReplayFeedback.tone === "success" ? "#a5d6a7" : "#f48771",
-              fontSize: "0.85rem",
-            }}
-          >
-            {carReplayFeedback.message}
-          </span>
+          <div style={{ fontSize: "0.85rem", display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span
+              style={{
+                color: carReplayFeedback.overallTone === "success" ? "#a5d6a7" : "#f48771",
+              }}
+            >
+              {carReplayFeedback.overallMessage}
+            </span>
+            {carReplayFeedback.checkpoints.length > 0 && (
+              <ul style={{ margin: 0, paddingLeft: "1.2rem", listStyleType: "disc" }}>
+                {carReplayFeedback.checkpoints.map((entry) => (
+                  <li
+                    key={entry.key}
+                    style={{ color: entry.tone === "success" ? "#a5d6a7" : "#f48771" }}
+                  >
+                    {entry.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         {carImportError && (
           <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{carImportError}</span>
