@@ -686,6 +686,13 @@ pub fn list_run_checkpoint_configs(
     run_id: String,
     pool: State<DbPool>,
 ) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
+    list_run_checkpoint_configs_with_pool(run_id, pool.inner())
+}
+
+pub(crate) fn list_run_checkpoint_configs_with_pool(
+    run_id: String,
+    pool: &DbPool,
+) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
@@ -867,45 +874,71 @@ pub fn reorder_checkpoint_configs(
     checkpoint_ids: Vec<String>,
     pool: State<DbPool>,
 ) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
-    let mut conn = pool.get()?;
-    let tx = conn.transaction()?;
+    reorder_checkpoint_configs_with_pool(run_id, checkpoint_ids, pool.inner())
+}
 
-    let existing: Vec<String> = {
-        let mut existing_stmt = tx
-            .prepare("SELECT id FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC")?;
-        let existing_rows =
-            existing_stmt.query_map(params![&run_id], |row| row.get::<_, String>(0))?;
-        let mut existing = Vec::new();
-        for row in existing_rows {
-            existing.push(row?);
+pub(crate) fn reorder_checkpoint_configs_with_pool(
+    run_id: String,
+    checkpoint_ids: Vec<String>,
+    pool: &DbPool,
+) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
+    {
+        let mut conn = pool.get()?;
+        let tx = conn.transaction()?;
+
+        let existing: Vec<(String, i64)> = {
+            let mut existing_stmt = tx.prepare(
+                "SELECT id, order_index FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+            )?;
+            let existing_rows = existing_stmt.query_map(params![&run_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            let mut existing = Vec::new();
+            for row in existing_rows {
+                existing.push(row?);
+            }
+            existing
+        };
+
+        if existing.len() != checkpoint_ids.len() {
+            return Err(Error::Api(
+                "reorder list must include all checkpoint ids".to_string(),
+            ));
         }
-        existing
-    };
 
-    if existing.len() != checkpoint_ids.len() {
-        return Err(Error::Api(
-            "reorder list must include all checkpoint ids".to_string(),
-        ));
+        let existing_set: HashSet<_> = existing.iter().map(|(id, _)| id.clone()).collect();
+        let provided_set: HashSet<_> = checkpoint_ids.iter().cloned().collect();
+        if existing_set != provided_set {
+            return Err(Error::Api(
+                "reorder list does not match stored checkpoint identifiers".to_string(),
+            ));
+        }
+
+        let temporary_offset = existing
+            .iter()
+            .map(|(_, order_index)| *order_index)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+
+        for (index, checkpoint_id) in checkpoint_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE run_checkpoints SET order_index = ?1 WHERE id = ?2",
+                params![temporary_offset + index as i64, checkpoint_id],
+            )?;
+        }
+
+        for (index, checkpoint_id) in checkpoint_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE run_checkpoints SET order_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![index as i64, checkpoint_id],
+            )?;
+        }
+
+        tx.commit()?;
     }
 
-    let existing_set: HashSet<_> = existing.iter().cloned().collect();
-    let provided_set: HashSet<_> = checkpoint_ids.iter().cloned().collect();
-    if existing_set != provided_set {
-        return Err(Error::Api(
-            "reorder list does not match stored checkpoint identifiers".to_string(),
-        ));
-    }
-
-    for (index, checkpoint_id) in checkpoint_ids.iter().enumerate() {
-        tx.execute(
-            "UPDATE run_checkpoints SET order_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![index as i64, checkpoint_id],
-        )?;
-    }
-
-    tx.commit()?;
-
-    list_run_checkpoint_configs(run_id, pool)
+    list_run_checkpoint_configs_with_pool(run_id, pool)
 }
 
 #[tauri::command]
