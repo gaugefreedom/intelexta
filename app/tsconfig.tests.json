@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./dist-tests",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "isolatedModules": false
+  },
+  "include": [
+    "src/components/CheckpointEditor.tsx",
+    "src/components/__tests__/checkpointEditor.test.ts",
+    "src/test/node-shims.d.ts"
+  ]
+}

@@ -341,6 +341,73 @@ fn reopen_run_returns_to_draft_without_execution() -> Result<()> {
 }
 
 #[test]
+fn start_run_with_client_replays_concordant_with_epsilon() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("Concordant Start".into(), &pool)?;
+
+    let run_spec = orchestrator::RunSpec {
+        project_id: project.id.clone(),
+        name: "concordant-start".into(),
+        seed: 99,
+        token_budget: 120,
+        model: "stub-model".into(),
+        checkpoints: vec![orchestrator::RunCheckpointTemplate {
+            model: "stub-model".into(),
+            prompt: "{\"value\":42}".into(),
+            token_budget: 120,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
+            proof_mode: orchestrator::RunProofMode::Concordant,
+        }],
+        proof_mode: orchestrator::RunProofMode::Concordant,
+        epsilon: Some(0.25),
+    };
+
+    let run_id = orchestrator::create_run(&pool, run_spec)?;
+
+    struct NoopClient;
+
+    impl orchestrator::LlmClient for NoopClient {
+        fn stream_generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+        ) -> anyhow::Result<orchestrator::LlmGeneration> {
+            Ok(orchestrator::LlmGeneration {
+                response: String::new(),
+                usage: orchestrator::TokenUsage {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                },
+            })
+        }
+    }
+
+    let client = NoopClient;
+    orchestrator::start_run_with_client(&pool, &run_id, &client)?;
+
+    {
+        let conn = pool.get()?;
+        let (count, semantic_digest): (i64, Option<String>) = conn.query_row(
+            "SELECT COUNT(*), MAX(semantic_digest) FROM checkpoints WHERE run_id = ?1",
+            params![&run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(count, 1);
+        assert!(semantic_digest.is_some());
+    }
+
+    let report = replay::replay_concordant_run(run_id.clone(), &pool)?;
+    assert!(report.match_status);
+    assert_eq!(report.epsilon, Some(0.25));
+    assert_eq!(report.semantic_distance, Some(0));
+    assert_eq!(report.checkpoint_reports.len(), 1);
+
+    Ok(())
+}
+
+#[test]
 fn reorder_checkpoint_configs_swaps_entries() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
@@ -784,7 +851,7 @@ fn replay_concordant_run_successfully_matches_semantics() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
     let project = api::create_project_with_pool("Replay Concordant".into(), &pool)?;
-    let epsilon = 5.0;
+    let epsilon = 0.5;
 
     let run_id = orchestrator::start_hello_run(
         &pool,
@@ -836,7 +903,7 @@ fn replay_concordant_run_detects_semantic_mismatch() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
     let project = api::create_project_with_pool("Replay Concordant Fail".into(), &pool)?;
-    let epsilon = 1.0;
+    let epsilon = 0.1;
 
     let run_id = orchestrator::start_hello_run(
         &pool,
@@ -896,7 +963,7 @@ fn replay_mixed_modes_reports_per_checkpoint() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
     let project = api::create_project_with_pool("Replay Mixed".into(), &pool)?;
-    let epsilon = 2.5;
+    let epsilon = 0.4;
 
     let run_id = orchestrator::start_hello_run(
         &pool,
