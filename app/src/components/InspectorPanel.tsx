@@ -375,18 +375,21 @@ export default function InspectorPanel({
 
   React.useEffect(() => {
     if (persistedRuns.length === 0) {
-      if (selectedRunId !== null) {
-        onSelectRun(null);
-      }
       return;
     }
-    if (!selectedRunId || !persistedRuns.some((run) => run.id === selectedRunId)) {
-      const nextId = persistedRuns[0].id;
-      if (nextId !== selectedRunId) {
-        onSelectRun(nextId);
-      }
+
+    const firstPersistedRunId = persistedRuns[0].id;
+
+    if (!selectedRunId) {
+      onSelectRun(firstPersistedRunId);
+      return;
     }
-  }, [persistedRuns, selectedRunId, onSelectRun]);
+
+    const selectedRunExists = runs.some((run) => run.id === selectedRunId);
+    if (!selectedRunExists && firstPersistedRunId !== selectedRunId) {
+      onSelectRun(firstPersistedRunId);
+    }
+  }, [persistedRuns, runs, selectedRunId, onSelectRun]);
 
   React.useEffect(() => {
     if (!selectedRunIdWithCheckpoint) {
