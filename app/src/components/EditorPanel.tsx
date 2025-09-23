@@ -1029,9 +1029,9 @@ export default function EditorPanel({
     setReopeningRun(true);
     try {
       await reopenRun(selectedRunId);
-      setStatusMessage("Run reopened with a fresh execution.");
+      setStatusMessage("Run reopened—ready to execute again.");
       setConfigsRefreshToken((token) => token + 1);
-      onRunExecuted?.(selectedRunId);
+      setCostsRefreshToken((token) => token + 1);
       onRunsMutated?.();
     } catch (err) {
       console.error("Failed to reopen run", err);
@@ -1040,11 +1040,7 @@ export default function EditorPanel({
     } finally {
       setReopeningRun(false);
     }
-  }, [
-    selectedRunId,
-    onRunExecuted,
-    onRunsMutated,
-  ]);
+  }, [selectedRunId, onRunsMutated]);
 
   const handleCloneRun = React.useCallback(async () => {
     if (!selectedRunId) {
