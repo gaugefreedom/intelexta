@@ -538,41 +538,111 @@ export default function InspectorPanel({
     if (!replayReport) {
       return null;
     }
-    if (
-      typeof replayReport.epsilon === "number" &&
-      typeof replayReport.semanticDistance === "number"
-    ) {
-      const rawDistance = replayReport.semanticDistance;
-      const normalizedDistance = rawDistance / 64;
-      const epsilon = replayReport.epsilon;
-      const comparison = normalizedDistance <= epsilon ? "<=" : ">";
-      const statusLabel = replayReport.matchStatus ? "PASS" : "FAIL";
-      const tone = replayReport.matchStatus ? "success" : "error";
-      const distanceDisplay = normalizedDistance.toFixed(2);
-      const epsilonDisplay = epsilon.toFixed(2);
-      const messageBase = `Concordant Proof: ${statusLabel} (Normalized Distance: ${distanceDisplay} ${comparison} ε: ${epsilonDisplay})`;
-      const suffix =
-        !replayReport.matchStatus && replayReport.errorMessage
-          ? ` — ${replayReport.errorMessage}`
-          : "";
+
+    const checkpoints = replayReport.checkpointReports ?? [];
+
+    const buildMessageForCheckpoint = (
+      entry: ReplayReport["checkpointReports"][number],
+      index: number,
+    ) => {
+      const tone = entry.matchStatus ? "success" : "error";
+      const parts: string[] = [];
+      if (typeof entry.orderIndex === "number") {
+        parts.push(`#${entry.orderIndex}`);
+      }
+      if (entry.checkpointType) {
+        parts.push(entry.checkpointType);
+      }
+      const label = parts.length > 0 ? parts.join(" ") : "Checkpoint";
+      let message: string;
+      if (
+        entry.mode === "concordant" &&
+        typeof entry.semanticDistance === "number" &&
+        typeof entry.epsilon === "number"
+      ) {
+        const normalized = entry.semanticDistance / 64;
+        const comparison = normalized <= entry.epsilon ? "<=" : ">";
+        message = `Concordant ${label}: ${entry.matchStatus ? "PASS" : "FAIL"} (distance ${normalized.toFixed(
+          2,
+        )} ${comparison} ε=${entry.epsilon.toFixed(2)})`;
+        if (!entry.matchStatus && entry.errorMessage) {
+          message += ` — ${entry.errorMessage}`;
+        }
+      } else if (entry.mode === "interactive") {
+        message = `Interactive ${label}: ${entry.matchStatus ? "PASS" : "FAIL"}`;
+        if (entry.errorMessage) {
+          message += ` — ${entry.errorMessage}`;
+        }
+      } else if (entry.matchStatus) {
+        message = `Exact ${label}: PASS (digest ${entry.replayDigest || "∅"})`;
+      } else {
+        const expected = entry.originalDigest || "∅";
+        const replayed = entry.replayDigest || "∅";
+        const details = entry.errorMessage ?? "digests differ";
+        message = `Exact ${label}: FAIL — ${details} (expected ${expected}, replayed ${replayed})`;
+      }
       return {
+        key: entry.checkpointConfigId ?? `checkpoint-${index}`,
         tone,
-        message: `${messageBase}${suffix}`,
+        message,
+      };
+    };
+
+    if (checkpoints.length === 0) {
+      if (
+        typeof replayReport.epsilon === "number" &&
+        typeof replayReport.semanticDistance === "number"
+      ) {
+        const rawDistance = replayReport.semanticDistance;
+        const normalized = rawDistance / 64;
+        const epsilon = replayReport.epsilon;
+        const comparison = normalized <= epsilon ? "<=" : ">";
+        const message = `Concordant Proof: ${
+          replayReport.matchStatus ? "PASS" : "FAIL"
+        } (Normalized Distance: ${normalized.toFixed(2)} ${comparison} ε: ${epsilon.toFixed(2)})${
+          replayReport.matchStatus || !replayReport.errorMessage
+            ? ""
+            : ` — ${replayReport.errorMessage}`
+        }`;
+        return {
+          overallTone: replayReport.matchStatus ? "success" : "error", 
+          overallMessage: message,
+          checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
+        };
+      }
+
+      const expectedDigest = replayReport.originalDigest || "∅";
+      const replayedDigest = replayReport.replayDigest || "∅";
+      if (replayReport.matchStatus) {
+        return {
+          overallTone: "success" as const,
+          overallMessage: `Exact Proof: PASS (Digest: ${replayedDigest})`,
+          checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
+        };
+      }
+      const details = replayReport.errorMessage ?? "digests differ";
+      return {
+        overallTone: "error" as const,
+        overallMessage: `Exact Proof: FAIL — ${details} (expected ${expectedDigest}, replayed ${replayedDigest})`,
+        checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
       };
     }
 
-    const expectedDigest = replayReport.originalDigest || "∅";
-    const replayedDigest = replayReport.replayDigest || "∅";
-    if (replayReport.matchStatus) {
-      return {
-        tone: "success" as const,
-        message: `Exact Proof: PASS (Digest: ${replayedDigest})`,
-      };
-    }
-    const details = replayReport.errorMessage ?? "digests differ";
+    const checkpointMessages = checkpoints.map((entry, index) =>
+      buildMessageForCheckpoint(entry, index),
+    );
+
+    const summaryBase = replayReport.matchStatus ? "Replay PASS" : "Replay FAIL";
+    const overallMessage = replayReport.matchStatus
+      ? summaryBase
+      : replayReport.errorMessage
+      ? `${summaryBase} — ${replayReport.errorMessage}`
+      : summaryBase;
+
     return {
-      tone: "error" as const,
-      message: `Exact Proof: FAIL — ${details} (expected ${expectedDigest}, replayed ${replayedDigest})`,
+      overallTone: replayReport.matchStatus ? "success" : "error",
+      overallMessage,
+      checkpoints: checkpointMessages,
     };
   }, [replayReport]);
 
@@ -660,14 +730,29 @@ export default function InspectorPanel({
         )}
         {emitError && <span style={{ fontSize: "0.8rem", color: "#f48771" }}>{emitError}</span>}
         {replayFeedback && (
-          <span
-            style={{
-              fontSize: "0.8rem",
-              color: replayFeedback.tone === "success" ? "#a5d6a7" : "#f48771",
-            }}
-          >
-            {replayFeedback.message}
-          </span>
+          <div style={{ fontSize: "0.8rem", display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span
+              style={{
+                color: replayFeedback.overallTone === "success" ? "#a5d6a7" : "#f48771",
+              }}
+            >
+              {replayFeedback.overallMessage}
+            </span>
+            {replayFeedback.checkpoints.length > 0 && (
+              <ul style={{ margin: 0, paddingLeft: "1.2rem", listStyleType: "disc" }}>
+                {replayFeedback.checkpoints.map((entry) => (
+                  <li
+                    key={entry.key}
+                    style={{
+                      color: entry.tone === "success" ? "#a5d6a7" : "#f48771",
+                    }}
+                  >
+                    {entry.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         {replayError && (
           <span style={{ fontSize: "0.8rem", color: "#f48771" }}>{replayError}</span>
