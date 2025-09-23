@@ -111,7 +111,7 @@ export default function CheckpointEditor({
 
     const cleanedType = sanitizeLabel(checkpointType || "Step");
     if (!cleanedType) {
-      setError("Checkpoint type is required.");
+      setError("Checkpoint name is required.");
       return;
     }
 
@@ -174,12 +174,12 @@ export default function CheckpointEditor({
     >
       <div style={{ fontSize: "1rem", fontWeight: 600 }}>{headerLabel}</div>
       <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        Checkpoint Type
+        Checkpoint Name
         <input
           type="text"
           value={checkpointType}
           onChange={(event) => setCheckpointType(event.target.value)}
-          placeholder="Step"
+          placeholder="Enter checkpoint name"
         />
       </label>
       <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
