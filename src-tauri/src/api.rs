@@ -171,13 +171,14 @@ pub struct RunSummary {
     pub name: String,
     pub created_at: String,
     pub kind: String,
+    pub has_persisted_checkpoint: bool,
 }
 
 #[tauri::command]
 pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, created_at, kind FROM runs WHERE project_id = ?1 ORDER BY created_at DESC",
+        "SELECT r.id, r.name, r.created_at, r.kind, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
     )?;
     let runs_iter = stmt.query_map(params![project_id], |row| {
         Ok(RunSummary {
@@ -185,6 +186,7 @@ pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSumma
             name: row.get(1)?,
             created_at: row.get(2)?,
             kind: row.get(3)?,
+            has_persisted_checkpoint: row.get(4)?,
         })
     })?;
     let mut runs = Vec::new();

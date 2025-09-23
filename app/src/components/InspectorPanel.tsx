@@ -332,12 +332,19 @@ export default function InspectorPanel({
   const [promptViewMode, setPromptViewMode] = React.useState<PayloadViewMode>("raw");
   const [outputViewMode, setOutputViewMode] = React.useState<PayloadViewMode>("raw");
 
+  const persistedRuns = React.useMemo(
+    () => runs.filter((run) => run.hasPersistedCheckpoint),
+    [runs],
+  );
+
   const selectedRun = React.useMemo(() => {
     if (!selectedRunId) {
       return null;
     }
-    return runs.find((run) => run.id === selectedRunId) ?? null;
-  }, [runs, selectedRunId]);
+    return persistedRuns.find((run) => run.id === selectedRunId) ?? null;
+  }, [persistedRuns, selectedRunId]);
+
+  const selectedRunIdWithCheckpoint = selectedRun?.id ?? null;
 
   React.useEffect(() => {
     if (!projectId) return;
@@ -348,21 +355,13 @@ export default function InspectorPanel({
       .then((runList) => {
         if (cancelled) return;
         setRuns(runList);
-        if (!selectedRunId || !runList.find((r) => r.id === selectedRunId)) {
-          const nextId = runList.length > 0 ? runList[0].id : null;
-          if (nextId !== selectedRunId) {
-            onSelectRun(nextId);
-          }
-        }
       })
       .catch((err) => {
         if (cancelled) return;
         console.error("Failed to load runs", err);
         setRunsError("Could not load runs for this project.");
         setRuns([]);
-        if (selectedRunId !== null) {
-          onSelectRun(null);
-        }
+        onSelectRun(null);
       })
       .finally(() => {
         if (!cancelled) {
@@ -372,10 +371,25 @@ export default function InspectorPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectId, refreshToken, onSelectRun, selectedRunId]);
+  }, [projectId, refreshToken, onSelectRun]);
 
   React.useEffect(() => {
-    if (!selectedRunId) {
+    if (persistedRuns.length === 0) {
+      if (selectedRunId !== null) {
+        onSelectRun(null);
+      }
+      return;
+    }
+    if (!selectedRunId || !persistedRuns.some((run) => run.id === selectedRunId)) {
+      const nextId = persistedRuns[0].id;
+      if (nextId !== selectedRunId) {
+        onSelectRun(nextId);
+      }
+    }
+  }, [persistedRuns, selectedRunId, onSelectRun]);
+
+  React.useEffect(() => {
+    if (!selectedRunIdWithCheckpoint) {
       setCheckpoints([]);
       setCheckpointError(null);
       return;
@@ -383,7 +397,7 @@ export default function InspectorPanel({
     let cancelled = false;
     setLoadingCheckpoints(true);
     setCheckpointError(null);
-    listCheckpoints(selectedRunId)
+    listCheckpoints(selectedRunIdWithCheckpoint)
       .then((items) => {
         if (!cancelled) {
           setCheckpoints(items);
@@ -404,7 +418,7 @@ export default function InspectorPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedRunId, refreshToken]);
+  }, [selectedRunIdWithCheckpoint, refreshToken]);
 
   // MERGED LOGIC: Using the useEffect and useCallback from the `emit_car` branch.
   React.useEffect(() => {
@@ -472,7 +486,7 @@ export default function InspectorPanel({
   }, [detailsOpen, selectedCheckpointId]);
 
   const handleEmitCar = React.useCallback(() => {
-    if (!selectedRunId) {
+    if (!selectedRunIdWithCheckpoint) {
       return;
     }
     setEmittingCar(true);
@@ -480,7 +494,7 @@ export default function InspectorPanel({
     setEmitError(null);
     setReplayReport(null);
     setReplayError(null);
-    emitCar(selectedRunId)
+    emitCar(selectedRunIdWithCheckpoint)
       .then((path) => {
         setEmitSuccess(`CAR file saved to ${path}`);
       })
@@ -492,16 +506,16 @@ export default function InspectorPanel({
       .finally(() => {
         setEmittingCar(false);
       });
-  }, [selectedRunId]);
+  }, [selectedRunIdWithCheckpoint]);
 
   const handleReplayRun = React.useCallback(() => {
-    if (!selectedRunId) {
+    if (!selectedRunIdWithCheckpoint) {
       return;
     }
     setReplayingRun(true);
     setReplayError(null);
     setReplayReport(null);
-    replayRun(selectedRunId)
+    replayRun(selectedRunIdWithCheckpoint)
       .then((report) => {
         setReplayReport(report);
       })
@@ -513,7 +527,7 @@ export default function InspectorPanel({
       .finally(() => {
         setReplayingRun(false);
       });
-  }, [selectedRunId]);
+  }, [selectedRunIdWithCheckpoint]);
 
   const handleOpenDetails = React.useCallback((checkpointId: string) => {
     setSelectedCheckpointId(checkpointId);
@@ -530,7 +544,8 @@ export default function InspectorPanel({
     setOutputViewMode("raw");
   }, []);
 
-  const actionDisabled = !selectedRunId || emittingCar || replayingRun;
+  const actionDisabled =
+    !selectedRunIdWithCheckpoint || emittingCar || replayingRun;
   const replayButtonLabel = selectedRun?.kind === "concordant" ? "Replay (Concordant)" : "Replay Run";
   const selectedRunBadge = selectedRun ? proofBadgeFor(selectedRun.kind) : null;
 
@@ -684,15 +699,19 @@ export default function InspectorPanel({
               </span>
             )}
             <select
-              value={selectedRunId ?? ""}
+              value={selectedRunIdWithCheckpoint ?? ""}
               onChange={(event) => onSelectRun(event.target.value || null)}
-              disabled={loadingRuns || runs.length === 0}
+              disabled={loadingRuns || persistedRuns.length === 0}
               style={{ flex: 1 }}
             >
               <option value="" disabled>
-                {loadingRuns ? "Loading…" : "Select a run"}
+                {loadingRuns
+                  ? "Loading…"
+                  : persistedRuns.length === 0
+                  ? "No checkpointed runs"
+                  : "Select a run"}
               </option>
-              {runs.map((run) => {
+              {persistedRuns.map((run) => {
                 const badge = proofBadgeFor(run.kind);
                 const timestamp = new Date(run.createdAt).toLocaleString();
                 return (
@@ -705,7 +724,13 @@ export default function InspectorPanel({
           </div>
         </label>
         {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
-        
+        {!runsError && !loadingRuns && persistedRuns.length === 0 && (
+          <span style={{ fontSize: "0.8rem", color: "#808080" }}>
+            No runs with persisted checkpoints are available. Execute or import a
+            run that saves checkpoints to inspect it here.
+          </span>
+        )}
+
         {/* MERGED JSX: Using the more detailed button and feedback from the `emit_car` branch. */}
         <div style={{ display: "flex", gap: "8px" }}>
           <button
