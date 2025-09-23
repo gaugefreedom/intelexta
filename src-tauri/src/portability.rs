@@ -213,11 +213,20 @@ fn load_runs_for_export(
 
         let checkpoint_configs = {
             let mut stmt = conn.prepare(
-                "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget
+                "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode
                  FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
             )?;
             let rows = stmt.query_map(params![&run.id], |row| {
                 let token_budget: i64 = row.get(6)?;
+                let proof_mode_raw: String = row.get(7)?;
+                let proof_mode = orchestrator::RunProofMode::try_from(proof_mode_raw.as_str())
+                    .map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            7,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        )
+                    })?;
                 Ok(crate::orchestrator::RunCheckpointConfig {
                     id: row.get(0)?,
                     run_id: row.get(1)?,
@@ -226,6 +235,7 @@ fn load_runs_for_export(
                     model: row.get(4)?,
                     prompt: row.get(5)?,
                     token_budget: token_budget.max(0) as u64,
+                    proof_mode,
                 })
             })?;
             let mut configs = Vec::new();
@@ -663,8 +673,8 @@ pub fn import_project_archive(
 
         for config in &run.checkpoint_configs {
             tx.execute(
-                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     &config.id,
                     &config.run_id,
@@ -673,6 +683,7 @@ pub fn import_project_archive(
                     &config.model,
                     &config.prompt,
                     config.token_budget as i64,
+                    config.proof_mode.as_str(),
                 ],
             )?;
         }

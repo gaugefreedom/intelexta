@@ -471,11 +471,13 @@ function sanitizeCheckpointFormValue(
   const checkpointType = sanitizeLabelForRequest(value.checkpointType, "Step");
   const prompt = sanitizePromptForRequest(value.prompt);
   const tokenBudget = clampTokenBudget(value.tokenBudget);
+  const proofMode = value.proofMode === "concordant" ? "concordant" : "exact";
   return {
     model,
     prompt,
     tokenBudget,
     checkpointType,
+    proofMode,
   };
 }
 
@@ -1364,6 +1366,7 @@ export default function EditorPanel({
                           model: activeEditor.checkpoint.model,
                           tokenBudget: activeEditor.checkpoint.tokenBudget,
                           prompt: activeEditor.checkpoint.prompt,
+                          proofMode: activeEditor.checkpoint.proofMode,
                         }
                       : undefined
                   }

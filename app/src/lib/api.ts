@@ -133,6 +133,7 @@ export interface RunCheckpointConfig {
   model: string;
   prompt: string;
   tokenBudget: number;
+  proofMode: RunProofMode;
 }
 
 export interface InteractiveCheckpointSession {
@@ -162,6 +163,7 @@ export interface CheckpointConfigRequest {
   tokenBudget: number;
   checkpointType?: string;
   orderIndex?: number;
+  proofMode?: RunProofMode;
 }
 
 export interface HelloRunSpec {

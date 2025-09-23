@@ -114,6 +114,8 @@ pub struct RunCheckpointTemplate {
     pub order_index: Option<i64>,
     #[serde(default = "default_checkpoint_type")]
     pub checkpoint_type: String,
+    #[serde(default)]
+    pub proof_mode: RunProofMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,6 +143,7 @@ pub struct RunCheckpointConfig {
     pub model: String,
     pub prompt: String,
     pub token_budget: u64,
+    pub proof_mode: RunProofMode,
 }
 
 impl RunCheckpointConfig {
@@ -537,7 +540,13 @@ fn process_stream_chunk(
 }
 
 pub fn create_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
-    if spec.proof_mode.is_concordant() {
+    let requires_concordant = spec.proof_mode.is_concordant()
+        || spec
+            .checkpoints
+            .iter()
+            .any(|template| template.proof_mode.is_concordant());
+
+    if requires_concordant {
         let epsilon = spec
             .epsilon
             .ok_or_else(|| anyhow!("concordant runs require an epsilon"))?;
@@ -577,7 +586,7 @@ pub fn create_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
             let checkpoint_id = Uuid::new_v4().to_string();
             let order_index = template.order_index.unwrap_or(index as i64);
             tx.execute(
-                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
                     &checkpoint_id,
                     &run_id,
@@ -586,6 +595,7 @@ pub fn create_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
                     &template.model,
                     &template.prompt,
                     (template.token_budget as i64),
+                    template.proof_mode.as_str(),
                 ],
             )?;
         }
@@ -706,10 +716,14 @@ fn load_run_checkpoint_configs(
     run_id: &str,
 ) -> anyhow::Result<Vec<RunCheckpointConfig>> {
     let mut stmt = conn.prepare(
-        "SELECT id, order_index, checkpoint_type, model, prompt, token_budget FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+        "SELECT id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
     )?;
     let rows = stmt.query_map(params![run_id], |row| {
         let token_budget: i64 = row.get(5)?;
+        let proof_mode_str: String = row.get(6)?;
+        let proof_mode = RunProofMode::try_from(proof_mode_str.as_str()).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(err))
+        })?;
         Ok(RunCheckpointConfig {
             id: row.get(0)?,
             run_id: run_id.to_string(),
@@ -718,6 +732,7 @@ fn load_run_checkpoint_configs(
             model: row.get(3)?,
             prompt: row.get(4)?,
             token_budget: token_budget.max(0) as u64,
+            proof_mode,
         })
     })?;
 
@@ -740,9 +755,9 @@ fn load_checkpoint_config_by_id(
     conn: &Connection,
     checkpoint_id: &str,
 ) -> anyhow::Result<Option<RunCheckpointConfig>> {
-    let row: Option<(String, i64, String, String, String, i64)> = conn
+    let row: Option<(String, i64, String, String, String, i64, String)> = conn
         .query_row(
-            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget FROM run_checkpoints WHERE id = ?1",
+            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE id = ?1",
             params![checkpoint_id],
             |row| Ok((
                 row.get(0)?,
@@ -751,13 +766,27 @@ fn load_checkpoint_config_by_id(
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
             )),
         )
         .optional()?;
 
-    let Some((run_id, order_index, checkpoint_type, model, prompt, token_budget_raw)) = row else {
+    let Some((
+        run_id,
+        order_index,
+        checkpoint_type,
+        model,
+        prompt,
+        token_budget_raw,
+        proof_mode_raw,
+    )) = row
+    else {
         return Ok(None);
     };
+
+    let proof_mode = RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(err))
+    })?;
 
     Ok(Some(RunCheckpointConfig {
         id: checkpoint_id.to_string(),
@@ -767,6 +796,7 @@ fn load_checkpoint_config_by_id(
         model,
         prompt,
         token_budget: token_budget_raw.max(0) as u64,
+        proof_mode,
     }))
 }
 
@@ -1175,6 +1205,23 @@ pub(crate) fn start_run_with_client(
         )));
     }
 
+    let requires_concordant = stored_run
+        .checkpoints
+        .iter()
+        .filter(|config| !config.is_interactive_chat())
+        .any(|config| config.proof_mode.is_concordant());
+
+    if requires_concordant {
+        let epsilon = stored_run
+            .epsilon
+            .ok_or_else(|| anyhow!("concordant checkpoints require a run epsilon"))?;
+        if !epsilon.is_finite() || epsilon < 0.0 {
+            return Err(anyhow!(
+                "run epsilon must be a finite, non-negative value for concordant checkpoints"
+            ));
+        }
+    }
+
     let existing_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
         params![run_id],
@@ -1270,29 +1317,27 @@ pub(crate) fn start_run_with_client(
 
         let budget_outcome = governance::enforce_budget(config.token_budget, total_usage);
 
-        let (kind, inputs_sha, outputs_sha, semantic_digest) =
-            match budget_outcome {
-                Ok(_) => {
-                    let semantic =
-                        if stored_run.proof_mode.is_concordant() {
-                            Some(execution.semantic_digest.clone().ok_or_else(|| {
-                                anyhow!("semantic digest missing for concordant run")
-                            })?)
-                        } else {
-                            None
-                        };
-                    (
-                        "Step",
-                        execution.inputs_sha256.as_deref(),
-                        execution.outputs_sha256.as_deref(),
-                        semantic,
-                    )
-                }
-                Err(incident) => {
-                    incident_value = Some(serde_json::to_value(&incident)?);
-                    ("Incident", None, None, None)
-                }
-            };
+        let (kind, inputs_sha, outputs_sha, semantic_digest) = match budget_outcome {
+            Ok(_) => {
+                let semantic = if config.proof_mode.is_concordant() {
+                    Some(execution.semantic_digest.clone().ok_or_else(|| {
+                        anyhow!("semantic digest missing for concordant checkpoint")
+                    })?)
+                } else {
+                    None
+                };
+                (
+                    "Step",
+                    execution.inputs_sha256.as_deref(),
+                    execution.outputs_sha256.as_deref(),
+                    semantic,
+                )
+            }
+            Err(incident) => {
+                incident_value = Some(serde_json::to_value(&incident)?);
+                ("Incident", None, None, None)
+            }
+        };
 
         let checkpoint_insert = CheckpointInsert {
             run_id,
@@ -1352,6 +1397,7 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
             token_budget: cfg.token_budget,
             order_index: Some(cfg.order_index),
             checkpoint_type: cfg.checkpoint_type.clone(),
+            proof_mode: cfg.proof_mode,
         })
         .collect();
 
@@ -1562,6 +1608,7 @@ mod tests {
                 token_budget: 1_000,
                 order_index: Some(0),
                 checkpoint_type: "Step".to_string(),
+                proof_mode: RunProofMode::Exact,
             }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
@@ -1728,6 +1775,7 @@ mod tests {
                 token_budget: 25,
                 order_index: Some(0),
                 checkpoint_type: "Step".to_string(),
+                proof_mode: RunProofMode::Exact,
             }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
@@ -1838,6 +1886,7 @@ mod tests {
                 token_budget: 10_000,
                 order_index: Some(0),
                 checkpoint_type: "Step".to_string(),
+                proof_mode: RunProofMode::Exact,
             }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
@@ -1945,6 +1994,7 @@ mod tests {
                 token_budget: 1_000,
                 order_index: Some(0),
                 checkpoint_type: "InteractiveChat".to_string(),
+                proof_mode: RunProofMode::Exact,
             }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
@@ -2013,6 +2063,7 @@ mod tests {
                 token_budget: 10_000,
                 order_index: Some(0),
                 checkpoint_type: "InteractiveChat".to_string(),
+                proof_mode: RunProofMode::Exact,
             }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
@@ -2177,6 +2228,7 @@ mod tests {
                 token_budget,
                 order_index: Some(0),
                 checkpoint_type: "InteractiveChat".to_string(),
+                proof_mode: RunProofMode::Exact,
             }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
@@ -2292,6 +2344,7 @@ mod tests {
                 token_budget: 5_000,
                 order_index: Some(0),
                 checkpoint_type: "InteractiveChat".to_string(),
+                proof_mode: RunProofMode::Exact,
             }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
