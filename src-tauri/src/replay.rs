@@ -3,7 +3,9 @@ use crate::{
     orchestrator::{self, RunProofMode},
     provenance, DbPool,
 };
-use anyhow::{anyhow, Context, Result};
+#[cfg(feature = "interactive")]
+use anyhow::Context;
+use anyhow::{anyhow, Result};
 #[cfg(feature = "interactive")]
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 #[cfg(feature = "interactive")]
@@ -12,6 +14,8 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "interactive")]
 use serde_json::Value;
+#[cfg(feature = "interactive")]
+use std::collections::HashMap;
 #[cfg(feature = "interactive")]
 use std::convert::TryInto;
 
@@ -426,6 +430,7 @@ struct ReplayCheckpointBody<'a> {
 #[cfg(feature = "interactive")]
 struct InteractiveCheckpointRow {
     id: String,
+    checkpoint_config_id: Option<String>,
     parent_checkpoint_id: Option<String>,
     turn_index: Option<u32>,
     kind: String,
@@ -439,6 +444,14 @@ struct InteractiveCheckpointRow {
     usage_tokens: u64,
     prompt_tokens: u64,
     completion_tokens: u64,
+}
+
+#[cfg(feature = "interactive")]
+#[derive(Default)]
+struct ConversationState {
+    expected_turn_index: u32,
+    previous_checkpoint_id: Option<String>,
+    expected_prev_chain: String,
 }
 
 #[cfg(feature = "interactive")]
@@ -479,40 +492,41 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
     let verifying_key = VerifyingKey::from_bytes(&pubkey_array)?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, parent_checkpoint_id, turn_index, kind, timestamp, inputs_sha256, outputs_sha256, incident_json, prev_chain, curr_chain, signature, usage_tokens, prompt_tokens, completion_tokens
-         FROM checkpoints WHERE run_id = ?1 ORDER BY turn_index ASC, timestamp ASC",
+        "SELECT id, checkpoint_config_id, parent_checkpoint_id, turn_index, kind, timestamp, inputs_sha256, outputs_sha256, incident_json, prev_chain, curr_chain, signature, usage_tokens, prompt_tokens, completion_tokens
+         FROM checkpoints WHERE run_id = ?1 AND turn_index IS NOT NULL ORDER BY timestamp ASC, id ASC",
     )?;
 
     let rows = stmt.query_map(params![&run_id], |row| {
-        let incident_json: Option<String> = row.get(7)?;
+        let incident_json: Option<String> = row.get(8)?;
         let incident = incident_json
             .map(|payload| serde_json::from_str::<Value>(&payload))
             .transpose()
             .map_err(|err| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    7,
+                    8,
                     rusqlite::types::Type::Text,
                     Box::new(err),
                 )
             })?;
         let turn_index = row
-            .get::<_, Option<i64>>(2)?
+            .get::<_, Option<i64>>(3)?
             .map(|value| value.max(0) as u32);
-        let usage_tokens: i64 = row.get(11)?;
-        let prompt_tokens: i64 = row.get(12)?;
-        let completion_tokens: i64 = row.get(13)?;
+        let usage_tokens: i64 = row.get(12)?;
+        let prompt_tokens: i64 = row.get(13)?;
+        let completion_tokens: i64 = row.get(14)?;
         Ok(InteractiveCheckpointRow {
             id: row.get(0)?,
-            parent_checkpoint_id: row.get(1)?,
+            checkpoint_config_id: row.get(1)?,
+            parent_checkpoint_id: row.get(2)?,
             turn_index,
-            kind: row.get(3)?,
-            timestamp: row.get(4)?,
-            inputs_sha256: row.get(5)?,
-            outputs_sha256: row.get(6)?,
+            kind: row.get(4)?,
+            timestamp: row.get(5)?,
+            inputs_sha256: row.get(6)?,
+            outputs_sha256: row.get(7)?,
             incident,
-            prev_chain: row.get(8)?,
-            curr_chain: row.get(9)?,
-            signature: row.get(10)?,
+            prev_chain: row.get(9)?,
+            curr_chain: row.get(10)?,
+            signature: row.get(11)?,
             usage_tokens: usage_tokens.max(0) as u64,
             prompt_tokens: prompt_tokens.max(0) as u64,
             completion_tokens: completion_tokens.max(0) as u64,
@@ -541,9 +555,7 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
         return Ok(report);
     }
 
-    let mut expected_turn_index = 0_u32;
-    let mut expected_prev_chain = String::new();
-    let mut previous_checkpoint_id: Option<String> = None;
+    let mut conversation_states: HashMap<Option<String>, ConversationState> = HashMap::new();
     let mut last_stored_curr = String::new();
     let mut last_computed_curr = String::new();
     let mut failure: Option<String> = None;
@@ -557,33 +569,68 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
             }
         };
 
-        if turn_index != expected_turn_index {
+        let config_key = ck.checkpoint_config_id.clone();
+
+        let mut reset_prev_chain: Option<String> = None;
+        if turn_index == 0 {
+            let expected_prev_chain = if let Some(parent_id) = ck.parent_checkpoint_id.as_ref() {
+                match conn
+                    .query_row(
+                        "SELECT curr_chain FROM checkpoints WHERE id = ?1",
+                        params![parent_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                {
+                    Some(chain) => chain,
+                    None => {
+                        failure = Some(format!(
+                            "checkpoint {} references missing parent {}",
+                            ck.id, parent_id
+                        ));
+                        break;
+                    }
+                }
+            } else {
+                String::new()
+            };
+            reset_prev_chain = Some(expected_prev_chain);
+        }
+
+        let state = conversation_states
+            .entry(config_key.clone())
+            .or_insert_with(ConversationState::default);
+
+        if let Some(expected_prev_chain) = reset_prev_chain {
+            state.expected_turn_index = 0;
+            state.previous_checkpoint_id = None;
+            state.expected_prev_chain = expected_prev_chain;
+        }
+
+        if turn_index != state.expected_turn_index {
             failure = Some(format!(
-                "checkpoint {} turn_index {} out of sequence (expected {})",
-                ck.id, turn_index, expected_turn_index
+                "checkpoint {} turn_index {} out of sequence for config {:?} (expected {})",
+                ck.id,
+                turn_index,
+                ck.checkpoint_config_id.as_deref(),
+                state.expected_turn_index
             ));
             break;
         }
 
-        if turn_index == 0 {
-            if ck.parent_checkpoint_id.is_some() {
-                failure = Some(format!(
-                    "first checkpoint {} unexpectedly has a parent",
-                    ck.id
-                ));
-                break;
-            }
-        } else if ck.parent_checkpoint_id.as_deref() != previous_checkpoint_id.as_deref() {
+        if state.expected_turn_index > 0
+            && ck.parent_checkpoint_id.as_deref() != state.previous_checkpoint_id.as_deref()
+        {
             failure = Some(format!(
                 "checkpoint {} parent mismatch (expected {:?}, found {:?})",
                 ck.id,
-                previous_checkpoint_id.as_deref(),
+                state.previous_checkpoint_id.as_deref(),
                 ck.parent_checkpoint_id.as_deref()
             ));
             break;
         }
 
-        if ck.prev_chain != expected_prev_chain {
+        if ck.prev_chain != state.expected_prev_chain {
             failure = Some(format!("checkpoint {} prev_chain mismatch", ck.id));
             break;
         }
@@ -640,9 +687,9 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
             break;
         }
 
-        expected_prev_chain = ck.curr_chain.clone();
-        previous_checkpoint_id = Some(ck.id.clone());
-        expected_turn_index += 1;
+        state.previous_checkpoint_id = Some(ck.id.clone());
+        state.expected_prev_chain = ck.curr_chain.clone();
+        state.expected_turn_index += 1;
     }
 
     report.original_digest = last_stored_curr;

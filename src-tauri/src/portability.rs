@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rusqlite::{params, types::Type, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use zip::write::FileOptions;
@@ -255,11 +255,7 @@ fn load_runs_for_export(
                     .map(|payload| serde_json::from_str(&payload))
                     .transpose()
                     .map_err(|err| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            6,
-                            rusqlite::types::Type::Text,
-                            Box::new(err),
-                        )
+                        rusqlite::Error::FromSqlConversionFailure(6, Type::Text, Box::new(err))
                     })?;
                 let turn_index = row
                     .get::<_, Option<i64>>(4)?
@@ -596,7 +592,7 @@ pub fn import_project_archive(
         }
     }
 
-    let conn = pool.get()?;
+    let mut conn = pool.get()?;
 
     let project_exists: Option<()> = conn
         .query_row(
@@ -630,6 +626,8 @@ pub fn import_project_archive(
     let mut receipts_imported = 0usize;
     let mut incidents_generated = 0usize;
     let mut file_writes: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+
+    let runs_imported_count = run_exports.len();
 
     for run in run_exports {
         if run.run.project_id != project.id {
@@ -889,9 +887,8 @@ pub fn import_project_archive(
         }
     }
 
-    tx.commit()?;
-
-    for (path, bytes) in file_writes {
+    let mut written_paths: Vec<PathBuf> = Vec::new();
+    for (path, bytes) in &file_writes {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|err| {
                 Error::Api(format!(
@@ -900,13 +897,25 @@ pub fn import_project_archive(
                 ))
             })?;
         }
-        fs::write(&path, &bytes)
-            .map_err(|err| Error::Api(format!("failed to write CAR {}: {err}", path.display())))?;
+
+        if let Err(err) = fs::write(path, bytes) {
+            for written in written_paths {
+                let _ = fs::remove_file(&written);
+            }
+            return Err(Error::Api(format!(
+                "failed to write CAR {}: {err}",
+                path.display()
+            )));
+        }
+
+        written_paths.push(path.clone());
     }
+
+    tx.commit()?;
 
     Ok(ProjectImportSummary {
         project,
-        runs_imported: run_exports.len(),
+        runs_imported: runs_imported_count,
         checkpoints_imported,
         receipts_imported,
         incidents_generated,
