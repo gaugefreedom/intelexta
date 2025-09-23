@@ -615,6 +615,13 @@ export default function EditorPanel({
         }
       : null;
 
+  const selectedRun = React.useMemo(() => {
+    if (!selectedRunId) {
+      return null;
+    }
+    return runs.find((run) => run.id === selectedRunId) ?? null;
+  }, [runs, selectedRunId]);
+
   React.useEffect(() => {
     if (!interactiveSupport) {
       setConversationContext(null);
@@ -668,13 +675,6 @@ export default function EditorPanel({
   );
   const newRunEpsilonValue =
     newRunEpsilonEvaluation.error === null ? newRunEpsilonEvaluation.value : null;
-
-  const selectedRun = React.useMemo(() => {
-    if (!selectedRunId) {
-      return null;
-    }
-    return runs.find((run) => run.id === selectedRunId) ?? null;
-  }, [runs, selectedRunId]);
 
   const hasConcordantCheckpoint = React.useMemo(() => {
     return checkpointConfigs.some((config) => config.proofMode === "concordant");
