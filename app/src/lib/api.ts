@@ -101,6 +101,11 @@ export interface ProjectImportSummary {
   incidentsGenerated: number;
 }
 
+export interface FileImportPayload {
+  fileName: string;
+  bytes: number[];
+}
+
 export interface Policy {
   allowNetwork: boolean;
   budgetTokens: number;
@@ -326,10 +331,10 @@ export async function exportProject(projectId: string): Promise<string> {
   return await invoke<string>('export_project', { projectId });
 }
 
-export async function importProject(archivePath: string): Promise<ProjectImportSummary> {
-  return await invoke<ProjectImportSummary>('import_project', { archivePath });
+export async function importProject(payload: FileImportPayload): Promise<ProjectImportSummary> {
+  return await invoke<ProjectImportSummary>('import_project', payload);
 }
 
-export async function importCar(carPath: string): Promise<ReplayReport> {
-  return await invoke<ReplayReport>('import_car', { carPath });
+export async function importCar(payload: FileImportPayload): Promise<ReplayReport> {
+  return await invoke<ReplayReport>('import_car', payload);
 }
