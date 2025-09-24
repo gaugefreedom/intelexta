@@ -4,13 +4,13 @@ import {
   listLocalModels,
   RunSummary,
   listRuns,
-  listRunCheckpointConfigs,
-  RunCheckpointConfig,
-  createCheckpointConfig,
-  updateCheckpointConfig,
-  deleteCheckpointConfig,
-  reorderCheckpointConfigs,
-  CheckpointConfigRequest,
+  listRunSteps,
+  RunStepConfig,
+  createRunStep,
+  updateRunStep,
+  deleteRunStep,
+  reorderRunSteps,
+  RunStepRequest,
   createRun,
   startRun,
   reopenRun,
@@ -157,7 +157,7 @@ function InteractiveConversationView({
   submitTurn,
   finalizeSession,
 }: InteractiveConversationViewProps) {
-  const [checkpointConfig, setCheckpointConfig] = React.useState<RunCheckpointConfig | null>(
+  const [checkpointConfig, setCheckpointConfig] = React.useState<RunStepConfig | null>(
     null,
   );
   const [messages, setMessages] = React.useState<ConversationMessage[]>([]);
@@ -477,7 +477,7 @@ function proofModeLabel(kind: string): string {
 }
 
 function sanitizeLabelForRequest(value: string, fallback: string): string {
-  const cleaned = value.replace(/\u0000/g, "").replace(/\s+/g, " " ).trim();
+  const cleaned = value.replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
   return cleaned.length > 0 ? cleaned : fallback;
 }
 
@@ -503,19 +503,24 @@ function clampTokenBudget(value: number): number {
 function sanitizeCheckpointFormValue(
   value: CheckpointFormValue,
   modelOptions: string[],
-): CheckpointConfigRequest {
+): RunStepRequest {
   const fallbackModel = modelOptions[0] ?? "stub-model";
   const model = normalizeModelSelection(value.model, modelOptions, fallbackModel);
   const checkpointType = sanitizeLabelForRequest(value.checkpointType, "Step");
   const prompt = sanitizePromptForRequest(value.prompt);
   const tokenBudget = clampTokenBudget(value.tokenBudget);
   const proofMode = value.proofMode === "concordant" ? "concordant" : "exact";
+  const epsilon =
+    proofMode === "concordant" && typeof value.epsilon === "number" && Number.isFinite(value.epsilon)
+      ? Math.min(Math.max(value.epsilon, 0), 1)
+      : null;
   return {
     model,
     prompt,
     tokenBudget,
     checkpointType,
     proofMode,
+    epsilon,
   };
 }
 
@@ -532,7 +537,7 @@ function formatRunTimestamp(value?: string): string {
 
 type EditorState =
   | { mode: "create" }
-  | { mode: "edit"; checkpoint: RunCheckpointConfig };
+  | { mode: "edit"; checkpoint: RunStepConfig };
 
 interface EditorPanelProps {
   projectId: string;
@@ -564,7 +569,7 @@ export default function EditorPanel({
     epsilon: null,
   });
 
-  const [checkpointConfigs, setCheckpointConfigs] = React.useState<RunCheckpointConfig[]>([]);
+  const [checkpointConfigs, setCheckpointConfigs] = React.useState<RunStepConfig[]>([]);
   const [configsLoading, setConfigsLoading] = React.useState(false);
   const [configsError, setConfigsError] = React.useState<string | null>(null);
   const [configsRefreshToken, setConfigsRefreshToken] = React.useState(0);
@@ -790,7 +795,7 @@ export default function EditorPanel({
     let cancelled = false;
     setConfigsLoading(true);
     setConfigsError(null);
-    listRunCheckpointConfigs(selectedRunId)
+    listRunSteps(selectedRunId)
       .then((items) => {
         if (!cancelled) {
           setCheckpointConfigs(items);
@@ -1096,7 +1101,7 @@ export default function EditorPanel({
     setActiveEditor({ mode: "create" });
   }, [selectedRunId]);
 
-  const handleEditCheckpoint = React.useCallback((config: RunCheckpointConfig) => {
+  const handleEditCheckpoint = React.useCallback((config: RunStepConfig) => {
     setStatusMessage(null);
     setErrorMessage(null);
     setActiveEditor({ mode: "edit", checkpoint: config });
@@ -1118,7 +1123,7 @@ export default function EditorPanel({
       const payload = sanitizeCheckpointFormValue(formValue, combinedModelOptions);
       try {
         if (activeEditor.mode === "create") {
-          const created = await createCheckpointConfig(selectedRunId, payload);
+          const created = await createRunStep(selectedRunId, payload);
           setCheckpointConfigs((previous) => {
             const next = [...previous, created];
             next.sort((a, b) => a.orderIndex - b.orderIndex);
@@ -1127,7 +1132,7 @@ export default function EditorPanel({
           setStatusMessage("Checkpoint added.");
           setCostsRefreshToken((token) => token + 1);
         } else {
-          const updated = await updateCheckpointConfig(activeEditor.checkpoint.id, payload);
+          const updated = await updateRunStep(activeEditor.checkpoint.id, payload);
           setCheckpointConfigs((previous) => {
             const next = previous.map((item) => (item.id === updated.id ? updated : item));
             next.sort((a, b) => a.orderIndex - b.orderIndex);
@@ -1150,7 +1155,7 @@ export default function EditorPanel({
   );
 
   const handleDeleteCheckpoint = React.useCallback(
-    async (config: RunCheckpointConfig) => {
+    async (config: RunStepConfig) => {
       if (!selectedRunId) {
         return;
       }
@@ -1168,7 +1173,7 @@ export default function EditorPanel({
         .map((item, index) => ({ ...item, orderIndex: index }));
       setCheckpointConfigs(optimistic);
       try {
-        await deleteCheckpointConfig(config.id);
+        await deleteRunStep(config.id);
         setStatusMessage("Checkpoint deleted.");
         setActiveEditor(null);
         setConfigsRefreshToken((token) => token + 1);
@@ -1202,7 +1207,7 @@ export default function EditorPanel({
       const optimistic = reordered.map((item, position) => ({ ...item, orderIndex: position }));
       setCheckpointConfigs(optimistic);
       try {
-        const updated = await reorderCheckpointConfigs(
+        const updated = await reorderRunSteps(
           selectedRunId,
           optimistic.map((item) => item.id),
         );
@@ -1335,7 +1340,7 @@ export default function EditorPanel({
   ]);
 
   const handleOpenInteractiveCheckpoint = React.useCallback(
-    (config: RunCheckpointConfig) => {
+    (config: RunStepConfig) => {
       if (!selectedRunId || !interactiveSupport) {
         return;
       }
@@ -1685,6 +1690,7 @@ export default function EditorPanel({
                           tokenBudget: activeEditor.checkpoint.tokenBudget,
                           prompt: activeEditor.checkpoint.prompt,
                           proofMode: activeEditor.checkpoint.proofMode,
+                          epsilon: activeEditor.checkpoint.epsilon ?? null,
                         }
                       : undefined
                   }
@@ -1693,8 +1699,6 @@ export default function EditorPanel({
                   onCancel={handleCancelEditor}
                   submitting={editorSubmitting}
                   runEpsilon={runEpsilonValue}
-                  epsilonRequired={epsilonRequired}
-                  onRequestRunEpsilon={() => runEpsilonInputRef.current?.focus()}
                 />
               )}
             </>

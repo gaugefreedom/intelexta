@@ -100,7 +100,7 @@ struct ReceiptExport {
 #[derive(Debug, Serialize, Deserialize)]
 struct RunExport {
     run: RunRecord,
-    checkpoint_configs: Vec<crate::orchestrator::RunCheckpointConfig>,
+    checkpoint_configs: Vec<crate::orchestrator::RunStep>,
     checkpoints: Vec<CheckpointExport>,
     receipts: Vec<ReceiptExport>,
 }
@@ -185,23 +185,37 @@ fn load_runs_for_export(
     project_id: &str,
 ) -> Result<(Vec<RunExport>, Vec<CarAttachment>), Error> {
     let mut runs_stmt = conn.prepare(
-        "SELECT id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model
+        "SELECT id, project_id, name, created_at, spec_json, sampler_json, seed, token_budget, default_model
          FROM runs WHERE project_id = ?1 ORDER BY created_at ASC",
     )?;
 
     let mut runs_iter = runs_stmt.query_map(params![project_id], |row| {
+        let spec_json: String = row.get(4)?;
+        let spec: crate::orchestrator::RunSpec =
+            serde_json::from_str(&spec_json).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err))
+            })?;
+        let has_concordant_step = spec
+            .steps
+            .iter()
+            .any(|template| template.proof_mode.is_concordant());
+        let kind = if spec.proof_mode.is_concordant() || has_concordant_step {
+            "concordant".to_string()
+        } else {
+            "exact".to_string()
+        };
         Ok(RunRecord {
             id: row.get(0)?,
             project_id: row.get(1)?,
             name: row.get(2)?,
             created_at: row.get(3)?,
-            kind: row.get(4)?,
-            spec_json: row.get(5)?,
-            sampler_json: row.get(6)?,
-            seed: row.get(7)?,
-            epsilon: row.get(8)?,
-            token_budget: row.get(9)?,
-            default_model: row.get(10)?,
+            kind,
+            spec_json,
+            sampler_json: row.get(5)?,
+            seed: row.get(6)?,
+            epsilon: spec.epsilon,
+            token_budget: row.get(7)?,
+            default_model: row.get(8)?,
         })
     })?;
 
@@ -213,8 +227,8 @@ fn load_runs_for_export(
 
         let checkpoint_configs = {
             let mut stmt = conn.prepare(
-                "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode
-                 FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+                "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon
+                 FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
             )?;
             let rows = stmt.query_map(params![&run.id], |row| {
                 let token_budget: i64 = row.get(6)?;
@@ -229,7 +243,7 @@ fn load_runs_for_export(
                         Box::new(err),
                     )
                 })?;
-                Ok(crate::orchestrator::RunCheckpointConfig {
+                Ok(crate::orchestrator::RunStep {
                     id: row.get(0)?,
                     run_id: row.get(1)?,
                     order_index: row.get(2)?,
@@ -238,6 +252,7 @@ fn load_runs_for_export(
                     prompt: row.get(5)?,
                     token_budget: token_budget.max(0) as u64,
                     proof_mode,
+                    epsilon: row.get(8)?,
                 })
             })?;
             let mut configs = Vec::new();
@@ -650,18 +665,16 @@ pub fn import_project_archive(
         }
 
         tx.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO runs (id, project_id, name, created_at, spec_json, sampler_json, seed, token_budget, default_model)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &run.run.id,
                 &run.run.project_id,
                 &run.run.name,
                 &run.run.created_at,
-                &run.run.kind,
                 &run.run.spec_json,
                 &run.run.sampler_json,
                 &run.run.seed,
-                &run.run.epsilon,
                 &run.run.token_budget,
                 &run.run.default_model,
             ],
@@ -675,8 +688,8 @@ pub fn import_project_archive(
 
         for config in &run.checkpoint_configs {
             tx.execute(
-                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     &config.id,
                     &config.run_id,
@@ -686,6 +699,7 @@ pub fn import_project_archive(
                     &config.prompt,
                     config.token_budget as i64,
                     config.proof_mode.as_str(),
+                    config.epsilon,
                 ],
             )?;
         }

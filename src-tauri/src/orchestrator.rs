@@ -128,7 +128,7 @@ fn default_checkpoint_type() -> String {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RunCheckpointTemplate {
+pub struct RunStepTemplate {
     pub model: String,
     pub prompt: String,
     pub token_budget: u64,
@@ -138,6 +138,8 @@ pub struct RunCheckpointTemplate {
     pub checkpoint_type: String,
     #[serde(default)]
     pub proof_mode: RunProofMode,
+    #[serde(default)]
+    pub epsilon: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,7 +150,8 @@ pub struct RunSpec {
     pub seed: u64,
     pub token_budget: u64,
     pub model: String,
-    pub checkpoints: Vec<RunCheckpointTemplate>,
+    #[serde(rename = "steps", alias = "checkpoints", default)]
+    pub steps: Vec<RunStepTemplate>,
     #[serde(default)]
     pub proof_mode: RunProofMode,
     #[serde(default)]
@@ -157,7 +160,7 @@ pub struct RunSpec {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RunCheckpointConfig {
+pub struct RunStep {
     pub id: String,
     pub run_id: String,
     pub order_index: i64,
@@ -166,9 +169,11 @@ pub struct RunCheckpointConfig {
     pub prompt: String,
     pub token_budget: u64,
     pub proof_mode: RunProofMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epsilon: Option<f64>,
 }
 
-impl RunCheckpointConfig {
+impl RunStep {
     pub fn is_interactive_chat(&self) -> bool {
         self.checkpoint_type.eq_ignore_ascii_case("InteractiveChat")
     }
@@ -180,13 +185,14 @@ pub struct StoredRun {
     pub id: String,
     pub project_id: String,
     pub name: String,
-    pub proof_mode: RunProofMode,
     pub seed: u64,
     pub token_budget: u64,
     pub default_model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_mode: Option<RunProofMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub epsilon: Option<f64>,
-    pub checkpoints: Vec<RunCheckpointConfig>,
+    pub steps: Vec<RunStep>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -236,7 +242,7 @@ impl RunCostEstimates {
     }
 }
 
-fn sum_token_budgets(configs: &[RunCheckpointConfig]) -> u64 {
+fn sum_token_budgets(configs: &[RunStep]) -> u64 {
     configs
         .iter()
         .filter(|cfg| !cfg.is_interactive_chat())
@@ -561,14 +567,8 @@ fn process_stream_chunk(
     Ok(())
 }
 
-pub fn create_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
-    let requires_concordant = spec.proof_mode.is_concordant()
-        || spec
-            .checkpoints
-            .iter()
-            .any(|template| template.proof_mode.is_concordant());
-
-    if requires_concordant {
+pub fn create_run(pool: &DbPool, mut spec: RunSpec) -> anyhow::Result<String> {
+    if spec.proof_mode.is_concordant() {
         let epsilon = spec
             .epsilon
             .ok_or_else(|| anyhow!("concordant runs require an epsilon"))?;
@@ -577,38 +577,48 @@ pub fn create_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
         }
     }
 
+    for template in &mut spec.steps {
+        if template.proof_mode.is_concordant() {
+            let epsilon = template
+                .epsilon
+                .or(spec.epsilon)
+                .ok_or_else(|| anyhow!("concordant steps require an epsilon"))?;
+            if !epsilon.is_finite() || epsilon < 0.0 {
+                return Err(anyhow!("epsilon must be a finite, non-negative value"));
+            }
+            template.epsilon = Some(epsilon);
+        }
+    }
+
     let mut conn = pool.get()?;
     ensure_project_signing_key(&conn, &spec.project_id)?;
 
     let run_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    let run_kind = spec.proof_mode.as_str();
     let spec_json = serde_json::to_string(&spec)?;
 
     {
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, kind, spec_json, sampler_json, seed, epsilon, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT INTO runs (id, project_id, name, created_at, spec_json, sampler_json, seed, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 &run_id,
                 &spec.project_id,
                 &spec.name,
                 &now,
-                run_kind,
                 &spec_json,
                 Option::<String>::None,
                 (spec.seed as i64),
-                spec.epsilon,
                 (spec.token_budget as i64),
                 &spec.model,
             ],
         )?;
 
-        for (index, template) in spec.checkpoints.iter().enumerate() {
+        for (index, template) in spec.steps.iter().enumerate() {
             let checkpoint_id = Uuid::new_v4().to_string();
             let order_index = template.order_index.unwrap_or(index as i64);
             tx.execute(
-                "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                 params![
                     &checkpoint_id,
                     &run_id,
@@ -618,6 +628,7 @@ pub fn create_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
                     &template.prompt,
                     (template.token_budget as i64),
                     template.proof_mode.as_str(),
+                    template.epsilon,
                 ],
             )?;
         }
@@ -637,15 +648,7 @@ pub fn update_run_proof_settings(
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
 
-    let stored_run = load_stored_run(tx.deref(), run_id)?;
-    let checkpoints_require_concordant = stored_run
-        .checkpoints
-        .iter()
-        .filter(|config| !config.is_interactive_chat())
-        .any(|config| config.proof_mode.is_concordant());
-    let requires_epsilon = proof_mode.is_concordant() || checkpoints_require_concordant;
-
-    let validated_epsilon = match (requires_epsilon, epsilon) {
+    let validated_epsilon = match (proof_mode.is_concordant(), epsilon) {
         (true, Some(value)) => {
             if !value.is_finite() || value < 0.0 {
                 return Err(anyhow!("epsilon must be a finite, non-negative value"));
@@ -675,13 +678,8 @@ pub fn update_run_proof_settings(
     let updated_spec_json = serde_json::to_string(&spec)?;
 
     tx.execute(
-        "UPDATE runs SET kind = ?1, epsilon = ?2, spec_json = ?3 WHERE id = ?4",
-        params![
-            proof_mode.as_str(),
-            validated_epsilon,
-            &updated_spec_json,
-            run_id
-        ],
+        "UPDATE runs SET spec_json = ?1 WHERE id = ?2",
+        params![&updated_spec_json, run_id],
     )?;
 
     tx.commit()?;
@@ -793,12 +791,9 @@ fn sum_checkpoint_token_usage(
     Ok((prompt, completion))
 }
 
-fn load_run_checkpoint_configs(
-    conn: &Connection,
-    run_id: &str,
-) -> anyhow::Result<Vec<RunCheckpointConfig>> {
+fn load_run_steps(conn: &Connection, run_id: &str) -> anyhow::Result<Vec<RunStep>> {
     let mut stmt = conn.prepare(
-        "SELECT id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+        "SELECT id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
     )?;
     let rows = stmt.query_map(params![run_id], |row| {
         let token_budget: i64 = row.get(5)?;
@@ -806,7 +801,7 @@ fn load_run_checkpoint_configs(
         let proof_mode = RunProofMode::try_from(proof_mode_str.as_str()).map_err(|err| {
             rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(err))
         })?;
-        Ok(RunCheckpointConfig {
+        Ok(RunStep {
             id: row.get(0)?,
             run_id: run_id.to_string(),
             order_index: row.get(1)?,
@@ -815,6 +810,7 @@ fn load_run_checkpoint_configs(
             prompt: row.get(4)?,
             token_budget: token_budget.max(0) as u64,
             proof_mode,
+            epsilon: row.get(7)?,
         })
     })?;
 
@@ -829,17 +825,17 @@ fn load_run_checkpoint_configs(
 pub fn estimate_run_cost(conn: &Connection, run_id: &str) -> anyhow::Result<RunCostEstimates> {
     let stored_run = load_stored_run(conn, run_id)?;
     let policy = store::policies::get(conn, &stored_run.project_id)?;
-    let projected_tokens = sum_token_budgets(&stored_run.checkpoints);
+    let projected_tokens = sum_token_budgets(&stored_run.steps);
     Ok(estimate_costs_with_policy(&policy, projected_tokens))
 }
 
 fn load_checkpoint_config_by_id(
     conn: &Connection,
     checkpoint_id: &str,
-) -> anyhow::Result<Option<RunCheckpointConfig>> {
-    let row: Option<(String, i64, String, String, String, i64, String)> = conn
+) -> anyhow::Result<Option<RunStep>> {
+    let row: Option<(String, i64, String, String, String, i64, String, Option<f64>)> = conn
         .query_row(
-            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE id = ?1",
+            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE id = ?1",
             params![checkpoint_id],
             |row| Ok((
                 row.get(0)?,
@@ -849,6 +845,7 @@ fn load_checkpoint_config_by_id(
                 row.get(4)?,
                 row.get(5)?,
                 row.get(6)?,
+                row.get(7)?,
             )),
         )
         .optional()?;
@@ -861,6 +858,7 @@ fn load_checkpoint_config_by_id(
         prompt,
         token_budget_raw,
         proof_mode_raw,
+        epsilon,
     )) = row
     else {
         return Ok(None);
@@ -870,7 +868,7 @@ fn load_checkpoint_config_by_id(
         rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(err))
     })?;
 
-    Ok(Some(RunCheckpointConfig {
+    Ok(Some(RunStep {
         id: checkpoint_id.to_string(),
         run_id,
         order_index,
@@ -879,13 +877,14 @@ fn load_checkpoint_config_by_id(
         prompt,
         token_budget: token_budget_raw.max(0) as u64,
         proof_mode,
+        epsilon,
     }))
 }
 
 pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<StoredRun> {
-    let row: Option<(String, String, String, i64, Option<f64>, i64, String)> = conn
+    let row: Option<(String, String, i64, i64, String, String)> = conn
         .query_row(
-            "SELECT project_id, name, kind, seed, epsilon, token_budget, default_model FROM runs WHERE id = ?1",
+            "SELECT project_id, name, seed, token_budget, default_model, spec_json FROM runs WHERE id = ?1",
             params![run_id],
             |row| Ok((
                 row.get(0)?,
@@ -894,28 +893,27 @@ pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<Stored
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
-                row.get(6)?,
             )),
         )
         .optional()?;
 
-    let (project_id, name, kind, seed_raw, epsilon, token_budget_raw, default_model) =
+    let (project_id, name, seed_raw, token_budget_raw, default_model, spec_json) =
         row.ok_or_else(|| anyhow!(format!("run {run_id} not found")))?;
-    let proof_mode = RunProofMode::try_from(kind.as_str())?;
     let seed = seed_raw.max(0) as u64;
     let token_budget = token_budget_raw.max(0) as u64;
-    let checkpoints = load_run_checkpoint_configs(conn, run_id)?;
+    let steps = load_run_steps(conn, run_id)?;
+    let spec: RunSpec = serde_json::from_str(&spec_json)?;
 
     Ok(StoredRun {
         id: run_id.to_string(),
         project_id,
         name,
-        proof_mode,
         seed,
         token_budget,
         default_model,
-        epsilon,
-        checkpoints,
+        proof_mode: Some(spec.proof_mode),
+        epsilon: spec.epsilon,
+        steps,
     })
 }
 
@@ -1256,7 +1254,7 @@ pub(crate) fn start_hello_run_with_client(
     spec: RunSpec,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<String> {
-    if spec.checkpoints.is_empty() {
+    if spec.steps.is_empty() {
         return Err(anyhow!(
             "run requires at least one checkpoint configuration"
         ));
@@ -1281,25 +1279,25 @@ pub(crate) fn start_run_with_client(
     let mut conn = pool.get()?;
     let stored_run = load_stored_run(&conn, run_id)?;
 
-    if stored_run.checkpoints.is_empty() {
+    if stored_run.steps.is_empty() {
         return Err(anyhow!(format!(
             "run {run_id} has no configured checkpoints"
         )));
     }
 
-    let requires_concordant = stored_run
-        .checkpoints
+    for config in stored_run
+        .steps
         .iter()
         .filter(|config| !config.is_interactive_chat())
-        .any(|config| config.proof_mode.is_concordant());
-
-    if requires_concordant {
-        let epsilon = stored_run
+        .filter(|config| config.proof_mode.is_concordant())
+    {
+        let epsilon = config
             .epsilon
-            .ok_or_else(|| anyhow!("concordant checkpoints require a run epsilon"))?;
+            .or(stored_run.epsilon)
+            .ok_or_else(|| anyhow!("concordant steps require an epsilon"))?;
         if !epsilon.is_finite() || epsilon < 0.0 {
             return Err(anyhow!(
-                "run epsilon must be a finite, non-negative value for concordant checkpoints"
+                "step epsilon must be a finite, non-negative value for concordant checkpoints"
             ));
         }
     }
@@ -1321,14 +1319,14 @@ pub(crate) fn start_run_with_client(
     let mut prev_chain = String::new();
     let mut cumulative_usage_tokens: u64 = 0;
 
-    for (index, config) in stored_run.checkpoints.iter().enumerate() {
+    for (index, config) in stored_run.steps.iter().enumerate() {
         if config.is_interactive_chat() {
             continue;
         }
 
         let timestamp = Utc::now().to_rfc3339();
 
-        let projected_remaining_tokens = sum_token_budgets(&stored_run.checkpoints[index..]);
+        let projected_remaining_tokens = sum_token_budgets(&stored_run.steps[index..]);
         let projected_total_tokens =
             cumulative_usage_tokens.saturating_add(projected_remaining_tokens);
         let projected_costs = estimate_costs_with_policy(&policy, projected_total_tokens);
@@ -1470,22 +1468,23 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
         load_stored_run(&conn, source_run_id)?
     };
 
-    if source_run.checkpoints.is_empty() {
+    if source_run.steps.is_empty() {
         return Err(anyhow!(
             "Cannot clone a run with no checkpoints. Add a checkpoint before cloning."
         ));
     }
 
-    let spec_templates: Vec<RunCheckpointTemplate> = source_run
-        .checkpoints
+    let spec_templates: Vec<RunStepTemplate> = source_run
+        .steps
         .iter()
-        .map(|cfg| RunCheckpointTemplate {
+        .map(|cfg| RunStepTemplate {
             model: cfg.model.clone(),
             prompt: cfg.prompt.clone(),
             token_budget: cfg.token_budget,
             order_index: Some(cfg.order_index),
             checkpoint_type: cfg.checkpoint_type.clone(),
             proof_mode: cfg.proof_mode,
+            epsilon: cfg.epsilon,
         })
         .collect();
 
@@ -1495,8 +1494,8 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
         seed: source_run.seed,
         token_budget: source_run.token_budget,
         model: source_run.default_model.clone(),
-        checkpoints: spec_templates,
-        proof_mode: source_run.proof_mode,
+        steps: spec_templates,
+        proof_mode: source_run.proof_mode.unwrap_or_default(),
         epsilon: source_run.epsilon,
     };
 
@@ -1506,7 +1505,7 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
 }
 
 fn execute_checkpoint(
-    config: &RunCheckpointConfig,
+    config: &RunStep,
     run_seed: u64,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<NodeExecution> {
@@ -1690,7 +1689,7 @@ mod tests {
             seed: 42,
             token_budget: 1_000,
             model: STUB_MODEL_ID.to_string(),
-            checkpoints: vec![RunCheckpointTemplate {
+            steps: vec![RunStepTemplate {
                 model: STUB_MODEL_ID.to_string(),
                 prompt: "{\"nodes\":[]}".to_string(),
                 token_budget: 1_000,
@@ -1857,7 +1856,7 @@ mod tests {
             seed: 99,
             token_budget: 25,
             model: STUB_MODEL_ID.to_string(),
-            checkpoints: vec![RunCheckpointTemplate {
+            steps: vec![RunStepTemplate {
                 model: STUB_MODEL_ID.to_string(),
                 prompt: "{}".to_string(),
                 token_budget: 25,
@@ -1968,7 +1967,7 @@ mod tests {
             seed: 5,
             token_budget: 10_000,
             model: "llama3".to_string(),
-            checkpoints: vec![RunCheckpointTemplate {
+            steps: vec![RunStepTemplate {
                 model: "llama3".to_string(),
                 prompt: prompt_json.clone(),
                 token_budget: 10_000,
@@ -2076,7 +2075,7 @@ mod tests {
             seed: 99,
             token_budget: 5_000,
             model: STUB_MODEL_ID.to_string(),
-            checkpoints: vec![RunCheckpointTemplate {
+            steps: vec![RunStepTemplate {
                 model: STUB_MODEL_ID.to_string(),
                 prompt: "Interact with the operator".to_string(),
                 token_budget: 1_000,
@@ -2114,7 +2113,7 @@ mod tests {
         assert_eq!(checkpoint_count, 0);
 
         let config_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM run_checkpoints WHERE run_id = ?1 AND LOWER(checkpoint_type) = 'interactivechat'",
+            "SELECT COUNT(*) FROM run_steps WHERE run_id = ?1 AND LOWER(checkpoint_type) = 'interactivechat'",
             params![&run_id],
             |row| row.get(0),
         )?;
@@ -2145,7 +2144,7 @@ mod tests {
             seed: 0,
             token_budget: 10_000,
             model: run_model.clone(),
-            checkpoints: vec![RunCheckpointTemplate {
+            steps: vec![RunStepTemplate {
                 model: run_model.clone(),
                 prompt: chat_prompt.clone(),
                 token_budget: 10_000,
@@ -2173,7 +2172,7 @@ mod tests {
         let config_id: String = {
             let conn = pool.get()?;
             conn.query_row(
-                "SELECT id FROM run_checkpoints WHERE run_id = ?1",
+                "SELECT id FROM run_steps WHERE run_id = ?1",
                 params![&run_id],
                 |row| row.get(0),
             )?
@@ -2310,7 +2309,7 @@ mod tests {
             seed: 0,
             token_budget,
             model: run_model.clone(),
-            checkpoints: vec![RunCheckpointTemplate {
+            steps: vec![RunStepTemplate {
                 model: run_model.clone(),
                 prompt: chat_prompt.clone(),
                 token_budget,
@@ -2337,7 +2336,7 @@ mod tests {
         let config_id: String = {
             let conn = pool.get()?;
             conn.query_row(
-                "SELECT id FROM run_checkpoints WHERE run_id = ?1",
+                "SELECT id FROM run_steps WHERE run_id = ?1",
                 params![&run_id],
                 |row| row.get(0),
             )?
@@ -2426,7 +2425,7 @@ mod tests {
             seed: 1,
             token_budget: 5_000,
             model: run_model.clone(),
-            checkpoints: vec![RunCheckpointTemplate {
+            steps: vec![RunStepTemplate {
                 model: run_model.clone(),
                 prompt: chat_prompt.clone(),
                 token_budget: 5_000,
@@ -2453,7 +2452,7 @@ mod tests {
         let config_id: String = {
             let conn = pool.get()?;
             conn.query_row(
-                "SELECT id FROM run_checkpoints WHERE run_id = ?1",
+                "SELECT id FROM run_steps WHERE run_id = ?1",
                 params![&run_id],
                 |row| row.get(0),
             )?

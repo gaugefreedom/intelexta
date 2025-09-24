@@ -24,11 +24,9 @@ CREATE TABLE IF NOT EXISTS runs (
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'exact', -- 'exact' | 'concordant'
     spec_json TEXT NOT NULL, -- Serialized RunSpec (deprecated; retained for compatibility)
     sampler_json TEXT, -- Optional sampler config
     seed INTEGER NOT NULL DEFAULT 0,
-    epsilon REAL,
     token_budget INTEGER NOT NULL DEFAULT 0,
     default_model TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (project_id) REFERENCES projects(id)
@@ -54,7 +52,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     semantic_digest TEXT,
     FOREIGN KEY (run_id) REFERENCES runs(id),
     FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id),
-    FOREIGN KEY (checkpoint_config_id) REFERENCES run_checkpoints(id)
+    FOREIGN KEY (checkpoint_config_id) REFERENCES run_steps(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_checkpoints_config_id
@@ -93,7 +91,7 @@ CREATE TABLE IF NOT EXISTS receipts (
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_ckpt_run ON checkpoints(run_id);
 
-CREATE TABLE IF NOT EXISTS run_checkpoints (
+CREATE TABLE IF NOT EXISTS run_steps (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
     order_index INTEGER NOT NULL,
@@ -102,13 +100,14 @@ CREATE TABLE IF NOT EXISTS run_checkpoints (
     prompt TEXT NOT NULL,
     token_budget INTEGER NOT NULL,
     proof_mode TEXT NOT NULL DEFAULT 'exact',
+    epsilon REAL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_run_checkpoints_order
-    ON run_checkpoints(run_id, order_index);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_steps_order
+    ON run_steps(run_id, order_index);
 
-CREATE INDEX IF NOT EXISTS idx_run_checkpoints_run_id
-    ON run_checkpoints(run_id);
+CREATE INDEX IF NOT EXISTS idx_run_steps_run_id
+    ON run_steps(run_id);

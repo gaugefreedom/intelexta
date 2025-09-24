@@ -180,11 +180,11 @@ struct CheckpointRow {
 }
 
 pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
-    let (project_id, run_created_at, run_kind): (String, String, String) = conn
+    let (project_id, run_created_at): (String, String) = conn
         .query_row(
-            "SELECT project_id, created_at, kind FROM runs WHERE id = ?1",
+            "SELECT project_id, created_at FROM runs WHERE id = ?1",
             params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|err| anyhow!("failed to load run {run_id}: {err}"))?;
 
@@ -251,7 +251,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
     let estimated_g_co2e = co2_per_token * total_usage_tokens as f64;
 
     let mut provenance_claims = Vec::new();
-    let spec_canon = provenance::canonical_json(&stored_run.checkpoints);
+    let spec_canon = provenance::canonical_json(&stored_run.steps);
     let spec_hash = provenance::sha256_hex(&spec_canon);
     provenance_claims.push(ProvenanceClaim {
         claim_type: "config".to_string(),
@@ -274,7 +274,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
     }
 
     let model_identifier = format!("workflow:{}", stored_run.name);
-    let checkpoints_canon = provenance::canonical_json(&stored_run.checkpoints);
+    let checkpoints_canon = provenance::canonical_json(&stored_run.steps);
     let version_digest = provenance::sha256_hex(&checkpoints_canon);
     let had_incident = checkpoints
         .iter()
@@ -307,11 +307,17 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         None
     };
 
+    let default_mode = stored_run.proof_mode.unwrap_or_default();
     let has_concordant_checkpoint = stored_run
-        .checkpoints
+        .steps
         .iter()
         .filter(|cfg| !cfg.is_interactive_chat())
         .any(|cfg| matches!(cfg.proof_mode, orchestrator::RunProofMode::Concordant));
+    let run_kind = if has_concordant_checkpoint || default_mode.is_concordant() {
+        "concordant".to_string()
+    } else {
+        "exact".to_string()
+    };
 
     let proof_match_kind = if is_interactive {
         "process".to_string()
