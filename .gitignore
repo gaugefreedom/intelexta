@@ -37,3 +37,7 @@ build/
 
 # OS
 Thumbs.db
+
+# Logs
+snapshot.txt
+snapshot-quick.txt
