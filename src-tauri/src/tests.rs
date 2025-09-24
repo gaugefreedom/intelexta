@@ -66,24 +66,22 @@ fn orchestrator_writes_incident_checkpoint_when_budget_fails() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "low-budget".into(),
-            seed: 1,
-            token_budget: 5,
+        &project.id,
+        "low-budget",
+        orchestrator::RunProofMode::Exact,
+        None,
+        1,
+        5,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 5,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Exact,
-                epsilon: None,
-            }],
+            prompt: "{}".into(),
+            token_budget: 5,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
-        },
+        }],
     )?;
 
     let conn = pool.get()?;
@@ -109,24 +107,22 @@ fn list_checkpoints_includes_incident_payload() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "budget-api".into(),
-            seed: 7,
-            token_budget: 5,
+        &project.id,
+        "budget-api",
+        orchestrator::RunProofMode::Exact,
+        None,
+        7,
+        5,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 5,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Exact,
-                epsilon: None,
-            }],
+            prompt: "{}".into(),
+            token_budget: 5,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
-        },
+        }],
     )?;
 
     let checkpoints = api::list_checkpoints_with_pool(run_id, None, &pool)?;
@@ -152,24 +148,22 @@ fn list_checkpoints_includes_message_payload() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "message-run".into(),
-            seed: 3,
-            token_budget: 50,
+        &project.id,
+        "message-run",
+        orchestrator::RunProofMode::Exact,
+        None,
+        3,
+        50,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 50,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Exact,
-                epsilon: None,
-            }],
+            prompt: "{}".into(),
+            token_budget: 50,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
-        },
+        }],
     )?;
 
     let checkpoint_id: String = {
@@ -216,24 +210,22 @@ fn get_checkpoint_details_includes_payloads() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "details-run".into(),
-            seed: 11,
-            token_budget: 100,
+        &project.id,
+        "details-run",
+        orchestrator::RunProofMode::Exact,
+        None,
+        11,
+        100,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 100,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Exact,
-                epsilon: None,
-            }],
+            prompt: "{}".into(),
+            token_budget: 100,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
-        },
+        }],
     )?;
 
     let checkpoint_id: String = {
@@ -266,13 +258,16 @@ fn start_run_creates_new_execution_without_truncating_history() -> Result<()> {
     let pool = setup_pool()?;
     let project = api::create_project_with_pool("Execution History".into(), &pool)?;
 
-    let spec = orchestrator::RunSpec {
-        project_id: project.id.clone(),
-        name: "history-test".into(),
-        seed: 7,
-        token_budget: 1_000,
-        model: "stub-model".into(),
-        steps: vec![orchestrator::RunStepTemplate {
+    let run_id = orchestrator::create_run(
+        &pool,
+        &project.id,
+        "history-test",
+        orchestrator::RunProofMode::Exact,
+        None,
+        7,
+        1_000,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
             prompt: "{\"prompt\":\"hello\"}".into(),
             token_budget: 1_000,
@@ -281,11 +276,7 @@ fn start_run_creates_new_execution_without_truncating_history() -> Result<()> {
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
         }],
-        proof_mode: orchestrator::RunProofMode::Exact,
-        epsilon: None,
-    };
-
-    let run_id = orchestrator::create_run(&pool, spec)?;
+    )?;
 
     struct FixedClient;
 
@@ -366,13 +357,16 @@ fn start_run_with_client_replays_concordant_with_epsilon() -> Result<()> {
     let pool = setup_pool()?;
     let project = api::create_project_with_pool("Concordant Start".into(), &pool)?;
 
-    let run_spec = orchestrator::RunSpec {
-        project_id: project.id.clone(),
-        name: "concordant-start".into(),
-        seed: 99,
-        token_budget: 120,
-        model: "stub-model".into(),
-        steps: vec![orchestrator::RunStepTemplate {
+    let run_id = orchestrator::create_run(
+        &pool,
+        &project.id,
+        "concordant-start",
+        orchestrator::RunProofMode::Concordant,
+        Some(0.25),
+        99,
+        120,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
             prompt: "{\"value\":42}".into(),
             token_budget: 120,
@@ -381,11 +375,7 @@ fn start_run_with_client_replays_concordant_with_epsilon() -> Result<()> {
             proof_mode: orchestrator::RunProofMode::Concordant,
             epsilon: None,
         }],
-        proof_mode: orchestrator::RunProofMode::Concordant,
-        epsilon: Some(0.25),
-    };
-
-    let run_id = orchestrator::create_run(&pool, run_spec)?;
+    )?;
 
     struct NoopClient;
 
@@ -446,35 +436,33 @@ fn reorder_run_steps_swaps_entries() -> Result<()> {
 
     let run_id = orchestrator::create_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "reorder-checkpoints".into(),
-            seed: 5,
-            token_budget: 100,
-            model: "stub-model".into(),
-            steps: vec![
-                orchestrator::RunStepTemplate {
-                    model: "stub-model".into(),
-                    prompt: "{\"prompt\":\"first\"}".into(),
-                    token_budget: 100,
-                    order_index: Some(0),
-                    checkpoint_type: "Step".to_string(),
-                    proof_mode: orchestrator::RunProofMode::Exact,
-                    epsilon: None,
-                },
-                orchestrator::RunStepTemplate {
-                    model: "stub-model".into(),
-                    prompt: "{\"prompt\":\"second\"}".into(),
-                    token_budget: 100,
-                    order_index: Some(1),
-                    checkpoint_type: "Step".to_string(),
-                    proof_mode: orchestrator::RunProofMode::Exact,
-                    epsilon: None,
-                },
-            ],
-            proof_mode: orchestrator::RunProofMode::Exact,
-            epsilon: None,
-        },
+        &project.id,
+        "reorder-checkpoints",
+        orchestrator::RunProofMode::Exact,
+        None,
+        5,
+        100,
+        "stub-model",
+        vec![
+            orchestrator::RunStepTemplate {
+                model: "stub-model".into(),
+                prompt: "{\"prompt\":\"first\"}".into(),
+                token_budget: 100,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+                proof_mode: orchestrator::RunProofMode::Exact,
+                epsilon: None,
+            },
+            orchestrator::RunStepTemplate {
+                model: "stub-model".into(),
+                prompt: "{\"prompt\":\"second\"}".into(),
+                token_budget: 100,
+                order_index: Some(1),
+                checkpoint_type: "Step".to_string(),
+                proof_mode: orchestrator::RunProofMode::Exact,
+                epsilon: None,
+            },
+        ],
     )?;
 
     let configs = api::list_run_steps_with_pool(run_id.clone(), &pool)?;
@@ -507,24 +495,22 @@ fn orchestrator_emits_signed_step_checkpoint_on_success() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "happy-path".into(),
-            seed,
-            token_budget: 50,
+        &project.id,
+        "happy-path",
+        orchestrator::RunProofMode::Exact,
+        None,
+        seed,
+        50,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{\"hello\":true}".into(),
-                token_budget: 50,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Exact,
-                epsilon: None,
-            }],
+            prompt: "{\"hello\":true}".into(),
+            token_budget: 50,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
-        },
+        }],
     )?;
 
     let conn = pool.get()?;
@@ -626,26 +612,31 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
         policies::upsert(&conn, &project.id, &custom_policy)?;
     }
 
-    let run_spec = orchestrator::RunSpec {
-        project_id: project.id.clone(),
-        name: "car-builder-run".into(),
-        seed: 31415,
-        token_budget: 5_000,
-        model: "stub-model".into(),
-        steps: vec![orchestrator::RunStepTemplate {
-            model: "stub-model".into(),
-            prompt: "{\"nodes\":[]}".into(),
-            token_budget: 5_000,
-            order_index: Some(0),
-            checkpoint_type: "Step".to_string(),
-            proof_mode: orchestrator::RunProofMode::Exact,
-            epsilon: None,
-        }],
+    let seed = 31_415_u64;
+    let token_budget = 5_000_u64;
+    let run_name = "car-builder-run";
+    let default_model = "stub-model";
+    let steps = vec![orchestrator::RunStepTemplate {
+        model: default_model.into(),
+        prompt: "{\"nodes\":[]}".into(),
+        token_budget,
+        order_index: Some(0),
+        checkpoint_type: "Step".to_string(),
         proof_mode: orchestrator::RunProofMode::Exact,
         epsilon: None,
-    };
+    }];
 
-    let run_id = orchestrator::start_hello_run(&pool, run_spec.clone())?;
+    let run_id = orchestrator::start_hello_run(
+        &pool,
+        &project.id,
+        run_name,
+        orchestrator::RunProofMode::Exact,
+        None,
+        seed,
+        token_budget,
+        default_model,
+        steps.clone(),
+    )?;
 
     let first_car = {
         let conn = pool.get()?;
@@ -677,11 +668,11 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
     let canonical_second = provenance::canonical_json(&body_value_second);
     assert_eq!(canonical_first, canonical_second);
 
-    let expected_version = provenance::sha256_hex(&provenance::canonical_json(&run_spec.steps));
+    let expected_version = provenance::sha256_hex(&provenance::canonical_json(&steps));
     assert_eq!(first_car.run.kind, "exact");
-    assert_eq!(first_car.run.seed, run_spec.seed);
+    assert_eq!(first_car.run.seed, seed);
     assert_eq!(first_car.run.version, expected_version);
-    assert!(first_car.run.model.contains(&run_spec.name));
+    assert!(first_car.run.model.contains(run_name));
     assert!(first_car.proof.process.is_none());
 
     let expected_policy_hash = format!(
@@ -713,15 +704,15 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
         .max(0) as u64;
     assert_eq!(first_car.budgets.tokens, total_usage);
 
-    let expected_input_sha = provenance::sha256_hex(run_spec.steps[0].prompt.as_bytes());
+    let expected_input_sha = provenance::sha256_hex(steps[0].prompt.as_bytes());
     assert!(first_car.provenance.iter().any(|claim| {
         claim.claim_type == "input" && claim.sha256 == format!("sha256:{expected_input_sha}")
     }));
 
     let mut expected_output_input = b"hello".to_vec();
-    expected_output_input.extend_from_slice(&run_spec.seed.to_le_bytes());
+    expected_output_input.extend_from_slice(&seed.to_le_bytes());
     expected_output_input.extend_from_slice(&0_i64.to_le_bytes());
-    let prompt_hash = provenance::sha256_hex(run_spec.steps[0].prompt.as_bytes());
+    let prompt_hash = provenance::sha256_hex(steps[0].prompt.as_bytes());
     expected_output_input.extend_from_slice(prompt_hash.as_bytes());
     let expected_output_sha = provenance::sha256_hex(&expected_output_input);
     assert!(first_car.provenance.iter().any(|claim| {
@@ -730,7 +721,7 @@ fn build_car_is_deterministic_and_signed() -> Result<()> {
 
     let spec_hash = format!(
         "sha256:{}",
-        provenance::sha256_hex(&provenance::canonical_json(&run_spec.steps))
+        provenance::sha256_hex(&provenance::canonical_json(&steps))
     );
     assert!(first_car
         .provenance
@@ -766,24 +757,22 @@ fn replay_exact_run_successfully_matches_digest() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "replay-happy".into(),
-            seed,
-            token_budget: 50,
+        &project.id,
+        "replay-happy",
+        orchestrator::RunProofMode::Exact,
+        None,
+        seed,
+        50,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 50,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Exact,
-                epsilon: None,
-            }],
+            prompt: "{}".into(),
+            token_budget: 50,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
-        },
+        }],
     )?;
 
     let report = replay::replay_exact_run(run_id.clone(), &pool)?;
@@ -825,24 +814,22 @@ fn replay_exact_run_reports_mismatched_digest() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "replay-tamper".into(),
-            seed: 7,
-            token_budget: 50,
+        &project.id,
+        "replay-tamper",
+        orchestrator::RunProofMode::Exact,
+        None,
+        7,
+        50,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 50,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Concordant,
-                epsilon: None,
-            }],
-            proof_mode: orchestrator::RunProofMode::Exact,
+            prompt: "{}".into(),
+            token_budget: 50,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
+            proof_mode: orchestrator::RunProofMode::Concordant,
             epsilon: None,
-        },
+        }],
     )?;
 
     {
@@ -895,25 +882,22 @@ fn replay_concordant_run_successfully_matches_semantics() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "replay-concordant".into(),
-            seed: 11,
-            token_budget: 50,
+        &project.id,
+        "replay-concordant",
+        orchestrator::RunProofMode::Concordant,
+        Some(epsilon),
+        11,
+        50,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 50,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Concordant,
-                epsilon: None,
-            }],
+            prompt: "{}".into(),
+            token_budget: 50,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Concordant,
             epsilon: None,
-            epsilon: Some(epsilon),
-        },
+        }],
     )?;
 
     let report = replay::replay_concordant_run(run_id.clone(), &pool)?;
@@ -954,25 +938,22 @@ fn replay_concordant_run_detects_semantic_mismatch() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "replay-concordant-fail".into(),
-            seed: 12,
-            token_budget: 50,
+        &project.id,
+        "replay-concordant-fail",
+        orchestrator::RunProofMode::Concordant,
+        Some(epsilon),
+        12,
+        50,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 50,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Concordant,
-                epsilon: None,
-            }],
+            prompt: "{}".into(),
+            token_budget: 50,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Concordant,
             epsilon: None,
-            epsilon: Some(epsilon),
-        },
+        }],
     )?;
 
     {
@@ -1022,36 +1003,33 @@ fn replay_mixed_modes_reports_per_checkpoint() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "replay-mixed".into(),
-            seed: 42,
-            token_budget: 100,
-            model: "stub-model".into(),
-            steps: vec![
-                orchestrator::RunStepTemplate {
-                    model: "stub-model".into(),
-                    prompt: "{}".into(),
-                    token_budget: 50,
-                    order_index: Some(0),
-                    checkpoint_type: "Step".to_string(),
-                    proof_mode: orchestrator::RunProofMode::Exact,
-                    epsilon: None,
-                },
-                orchestrator::RunStepTemplate {
-                    model: "stub-model".into(),
-                    prompt: "{\"value\":1}".into(),
-                    token_budget: 50,
-                    order_index: Some(1),
-                    checkpoint_type: "Step".to_string(),
-                    proof_mode: orchestrator::RunProofMode::Concordant,
-                    epsilon: None,
-                },
-            ],
-            proof_mode: orchestrator::RunProofMode::Concordant,
-            epsilon: None,
-            epsilon: Some(epsilon),
-        },
+        &project.id,
+        "replay-mixed",
+        orchestrator::RunProofMode::Concordant,
+        Some(epsilon),
+        42,
+        100,
+        "stub-model",
+        vec![
+            orchestrator::RunStepTemplate {
+                model: "stub-model".into(),
+                prompt: "{}".into(),
+                token_budget: 50,
+                order_index: Some(0),
+                checkpoint_type: "Step".to_string(),
+                proof_mode: orchestrator::RunProofMode::Exact,
+                epsilon: None,
+            },
+            orchestrator::RunStepTemplate {
+                model: "stub-model".into(),
+                prompt: "{\"value\":1}".into(),
+                token_budget: 50,
+                order_index: Some(1),
+                checkpoint_type: "Step".to_string(),
+                proof_mode: orchestrator::RunProofMode::Concordant,
+                epsilon: None,
+            },
+        ],
     )?;
 
     let report = api::replay_run_with_pool(run_id.clone(), &pool)?;
@@ -1085,34 +1063,23 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
     let pool = setup_pool()?;
     let project = api::create_project_with_pool("Interactive Proof".into(), &pool)?;
 
-    let run_spec = orchestrator::RunSpec {
-        project_id: project.id.clone(),
-        name: "interactive-sequential".into(),
-        seed: 123,
-        token_budget: 10_000,
-        model: "stub-model".into(),
-        steps: Vec::new(),
-        proof_mode: orchestrator::RunProofMode::Exact,
-        epsilon: None,
-    };
-
     let run_id = Uuid::new_v4().to_string();
     let created_at = Utc::now();
-    let spec_json = serde_json::to_string(&run_spec)?;
 
     {
         let conn = pool.get()?;
         conn.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, spec_json, sampler_json, seed, token_budget, default_model) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
+            "INSERT INTO runs (id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6, ?7, ?8)",
             params![
                 &run_id,
-                &run_spec.project_id,
-                &run_spec.name,
+                &project.id,
+                "interactive-sequential",
                 &created_at.to_rfc3339(),
-                &spec_json,
-                (run_spec.seed as i64),
-                (run_spec.token_budget as i64),
-                &run_spec.model,
+                123_i64,
+                10_000_i64,
+                "stub-model",
+                orchestrator::RunProofMode::Exact.as_str(),
             ],
         )?;
     }
@@ -1251,24 +1218,22 @@ fn emit_car_command_writes_receipt_and_file() -> Result<()> {
 
     let run_id = orchestrator::start_hello_run(
         &pool,
-        orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "emit-car-run".into(),
-            seed: 7,
-            token_budget: 100,
+        &project.id,
+        "emit-car-run",
+        orchestrator::RunProofMode::Exact,
+        None,
+        7,
+        100,
+        "stub-model",
+        vec![orchestrator::RunStepTemplate {
             model: "stub-model".into(),
-            steps: vec![orchestrator::RunStepTemplate {
-                model: "stub-model".into(),
-                prompt: "{}".into(),
-                token_budget: 100,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: orchestrator::RunProofMode::Exact,
-                epsilon: None,
-            }],
+            prompt: "{}".into(),
+            token_budget: 100,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: orchestrator::RunProofMode::Exact,
             epsilon: None,
-        },
+        }],
     )?;
 
     let base_dir = std::env::temp_dir().join(format!("intelexta-tests-{}", Uuid::new_v4()));

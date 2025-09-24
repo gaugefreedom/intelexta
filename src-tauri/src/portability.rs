@@ -39,12 +39,12 @@ struct RunRecord {
     name: String,
     created_at: String,
     kind: String,
-    spec_json: String,
     sampler_json: Option<String>,
     seed: i64,
     epsilon: Option<f64>,
     token_budget: i64,
     default_model: String,
+    proof_mode: crate::orchestrator::RunProofMode,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -185,21 +185,17 @@ fn load_runs_for_export(
     project_id: &str,
 ) -> Result<(Vec<RunExport>, Vec<CarAttachment>), Error> {
     let mut runs_stmt = conn.prepare(
-        "SELECT id, project_id, name, created_at, spec_json, sampler_json, seed, token_budget, default_model
+        "SELECT id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode
          FROM runs WHERE project_id = ?1 ORDER BY created_at ASC",
     )?;
 
     let mut runs_iter = runs_stmt.query_map(params![project_id], |row| {
-        let spec_json: String = row.get(4)?;
-        let spec: crate::orchestrator::RunSpec =
-            serde_json::from_str(&spec_json).map_err(|err| {
-                rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err))
+        let proof_mode_raw: String = row.get(9)?;
+        let proof_mode = crate::orchestrator::RunProofMode::try_from(proof_mode_raw.as_str())
+            .map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(9, Type::Text, Box::new(err))
             })?;
-        let has_concordant_step = spec
-            .steps
-            .iter()
-            .any(|template| template.proof_mode.is_concordant());
-        let kind = if spec.proof_mode.is_concordant() || has_concordant_step {
+        let kind = if proof_mode.is_concordant() {
             "concordant".to_string()
         } else {
             "exact".to_string()
@@ -210,12 +206,12 @@ fn load_runs_for_export(
             name: row.get(2)?,
             created_at: row.get(3)?,
             kind,
-            spec_json,
-            sampler_json: row.get(5)?,
-            seed: row.get(6)?,
-            epsilon: spec.epsilon,
+            sampler_json: row.get(4)?,
+            seed: row.get(5)?,
+            epsilon: row.get(6)?,
             token_budget: row.get(7)?,
             default_model: row.get(8)?,
+            proof_mode,
         })
     })?;
 
@@ -223,7 +219,7 @@ fn load_runs_for_export(
     let mut attachments = Vec::new();
 
     while let Some(run) = runs_iter.next() {
-        let run = run?;
+        let mut run = run?;
 
         let checkpoint_configs = {
             let mut stmt = conn.prepare(
@@ -260,6 +256,15 @@ fn load_runs_for_export(
                 configs.push(entry?);
             }
             configs
+        };
+
+        let has_concordant_step = checkpoint_configs
+            .iter()
+            .any(|cfg| cfg.proof_mode.is_concordant());
+        run.kind = if run.proof_mode.is_concordant() || has_concordant_step {
+            "concordant".to_string()
+        } else {
+            "exact".to_string()
         };
 
         let checkpoints = {
@@ -665,18 +670,19 @@ pub fn import_project_archive(
         }
 
         tx.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, spec_json, sampler_json, seed, token_budget, default_model)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO runs (id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 &run.run.id,
                 &run.run.project_id,
                 &run.run.name,
                 &run.run.created_at,
-                &run.run.spec_json,
                 &run.run.sampler_json,
                 &run.run.seed,
+                &run.run.epsilon,
                 &run.run.token_budget,
                 &run.run.default_model,
+                run.run.proof_mode.as_str(),
             ],
         )?;
 

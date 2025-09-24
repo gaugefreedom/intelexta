@@ -24,11 +24,12 @@ CREATE TABLE IF NOT EXISTS runs (
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    spec_json TEXT NOT NULL, -- Serialized RunSpec (deprecated; retained for compatibility)
     sampler_json TEXT, -- Optional sampler config
     seed INTEGER NOT NULL DEFAULT 0,
+    epsilon REAL,
     token_budget INTEGER NOT NULL DEFAULT 0,
     default_model TEXT NOT NULL DEFAULT '',
+    proof_mode TEXT NOT NULL DEFAULT 'exact',
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
