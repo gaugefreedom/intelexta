@@ -7,6 +7,7 @@ import {
   RunSummary,
   type RunProofMode,
   type ExecutionStepProofSummary,
+  ProofBadgeKind,
 } from "../lib/api";
 
 interface ProjectTreeProps {
@@ -32,8 +33,6 @@ function formatExecutionTimestamp(value?: string | null): string {
   }
   return parsed.toLocaleString();
 }
-
-type ProofBadgeKind = RunProofMode | "interactive" | "unknown";
 
 function proofBadgeFor(mode: ProofBadgeKind): {
   label: string;

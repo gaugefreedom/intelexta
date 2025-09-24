@@ -36,6 +36,8 @@ export interface RunSummary {
 
 export type RunProofMode = 'exact' | 'concordant';
 
+export type ProofBadgeKind = RunProofMode | 'interactive' | 'unknown';
+
 export interface CheckpointSummary {
   id: string;
   runExecutionId: string;
@@ -262,27 +264,15 @@ export async function createRun(params: CreateRunParams): Promise<string> {
   });
 }
 
-export async function updateRunSettings(
-  params: UpdateRunSettingsParams,
-): Promise<RunSummary> {
-  return await invoke<RunSummary>('update_run_settings', {
-    runId: params.runId,
-    proofMode: params.proofMode,
-    epsilon: params.epsilon ?? null,
-  });
-}
-
 export async function listRuns(projectId: string): Promise<RunSummary[]> {
   return await invoke<RunSummary[]>('list_runs', { projectId });
 }
 
 export async function listCheckpoints(
-  runId: string,
   runExecutionId?: string | null,
 ): Promise<CheckpointSummary[]> {
   return await invoke<CheckpointSummary[]>('list_checkpoints', {
-    runId,
-    runExecutionId: runExecutionId ?? null,
+    args: { runExecutionId: runExecutionId ?? null },
   });
 }
 
@@ -390,9 +380,6 @@ export async function updatePolicy(projectId: string, policy: Policy): Promise<v
   await invoke('update_policy', { projectId, policy });
 }
 
-export async function startHelloRun(spec: HelloRunSpec): Promise<string> {
-  return await invoke<string>('start_hello_run', { spec });
-}
 
 export async function emitCar(runId: string): Promise<string> {
   return await invoke<string>('emit_car', { runId });

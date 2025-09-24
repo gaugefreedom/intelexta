@@ -11,9 +11,8 @@ import {
   type ProjectImportSummary,
   type ReplayReport,
   type RunProofMode,
+  ProofBadgeKind,
 } from "../lib/api";
-
-type ProofBadgeKind = RunProofMode | "interactive" | "unknown";
 
 interface ContextPanelProps {
   projectId: string;

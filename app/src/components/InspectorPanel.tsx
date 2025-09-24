@@ -14,6 +14,7 @@ import {
   ReplayReport,
   ExecutionStepProofSummary,
   RunProofMode,
+  ProofBadgeKind,
 } from "../lib/api";
 
 function formatIncidentMessage(incident?: IncidentSummary | null): string {
@@ -46,8 +47,6 @@ function incidentSeverityColor(incident?: IncidentSummary | null): string {
       return "#f48771";
   }
 }
-
-type ProofBadgeKind = RunProofMode | "interactive" | "unknown";
 
 function proofBadgeFor(mode: ProofBadgeKind): {
   label: string;
@@ -500,7 +499,7 @@ export default function InspectorPanel({
     let cancelled = false;
     setLoadingCheckpoints(true);
     setCheckpointError(null);
-    listCheckpoints(selectedRunIdWithCheckpoint, activeExecutionId)
+    listCheckpoints(activeExecutionId)
       .then((items) => {
         if (!cancelled) {
           setCheckpoints(items);
@@ -508,12 +507,13 @@ export default function InspectorPanel({
       })
       .catch((err) => {
         if (!cancelled) {
-          console.error("Failed to load checkpoints", err);
-          setCheckpointError("Could not load checkpoints for the selected run.");
+          console.error("Failed to load steps", err);
+          // This now displays the EXACT error message from the backend
+          setCheckpointError(`Could not load steps: ${err as string}`);
           setCheckpoints([]);
         }
       })
-      .finally(() => {
+            .finally(() => {
         if (!cancelled) {
           setLoadingCheckpoints(false);
         }

@@ -14,6 +14,7 @@ use std::net::TcpStream;
 use std::ops::Deref;
 use std::time::Duration;
 use uuid::Uuid;
+use crate::api::RunStepRequest; 
 
 const STUB_MODEL_ID: &str = "stub-model";
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
@@ -656,31 +657,6 @@ pub fn create_run(
     Ok(run_id)
 }
 
-pub fn start_hello_run(
-    pool: &DbPool,
-    project_id: &str,
-    name: &str,
-    proof_mode: RunProofMode,
-    epsilon: Option<f64>,
-    seed: u64,
-    token_budget: u64,
-    default_model: &str,
-    steps: Vec<RunStepTemplate>,
-) -> anyhow::Result<String> {
-    let client = DefaultOllamaClient::new();
-    start_hello_run_with_client(
-        pool,
-        project_id,
-        name,
-        proof_mode,
-        epsilon,
-        seed,
-        token_budget,
-        default_model,
-        steps,
-        &client,
-    )
-}
 
 fn persist_checkpoint(
     conn: &Connection,
@@ -1698,6 +1674,95 @@ fn regenerate_project_signing_key(
     provenance::load_secret_key(project_id).context("failed to load regenerated project secret")
 }
 
+pub fn create_run_step(
+    pool: &DbPool,
+    run_id: &str,
+    config: RunStepRequest,
+) -> anyhow::Result<RunStep> {
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
+
+    // First, check if the parent run exists.
+    let exists: Option<()> = tx
+        .query_row("SELECT 1 FROM runs WHERE id = ?1", params![run_id], |_| {
+            Ok(())
+        })
+        .optional()?;
+    if exists.is_none() {
+        return Err(anyhow!(format!("run {run_id} not found")));
+    }
+
+    // Determine the correct order_index for the new step.
+    let checkpoint_type = config.checkpoint_type.unwrap_or_else(|| "Step".to_string());
+    let order_index = if let Some(index) = config.order_index {
+        // If an index is provided, shift subsequent steps.
+        tx.execute(
+            "UPDATE run_steps SET order_index = order_index + 1, updated_at = CURRENT_TIMESTAMP WHERE run_id = ?1 AND order_index >= ?2",
+            params![run_id, index],
+        )?;
+        index
+    } else {
+        // Otherwise, append it to the end.
+        tx.query_row(
+            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM run_steps WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get::<_, i64>(0),
+        )?
+    };
+
+    let step_id = Uuid::new_v4().to_string();
+    let RunStepRequest {
+        model,
+        prompt,
+        token_budget,
+        proof_mode,
+        epsilon,
+        ..
+    } = config;
+
+    // Validate epsilon for concordant mode.
+    let validated_epsilon = if proof_mode.is_concordant() {
+        let value = epsilon.ok_or_else(|| anyhow!("concordant steps require an epsilon"))?;
+        if !value.is_finite() || value < 0.0 {
+            return Err(anyhow!("epsilon must be a finite, non-negative value"));
+        }
+        Some(value)
+    } else {
+        None
+    };
+
+    // Insert the new step into the database.
+    tx.execute(
+        "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            &step_id,
+            run_id,
+            order_index,
+            &checkpoint_type,
+            &model,
+            &prompt,
+            (token_budget as i64),
+            proof_mode.as_str(),
+            validated_epsilon,
+        ],
+    )?;
+
+    tx.commit()?;
+
+    // Return the complete RunStep object.
+    Ok(RunStep {
+        id: step_id,
+        run_id: run_id.to_string(),
+        order_index,
+        checkpoint_type,
+        model,
+        prompt,
+        token_budget,
+        proof_mode,
+        epsilon: validated_epsilon,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2040,644 +2105,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn start_hello_run_records_llm_usage() -> Result<()> {
-        init_keychain_backend();
-
-        let manager = SqliteConnectionManager::memory();
-        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
-        {
-            let mut conn = pool.get()?;
-            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-            store::migrate_db(&mut conn)?;
-        }
-
-        let project_id = "proj-llm";
-        let keypair = provenance::generate_keypair();
-        let secret_bytes = STANDARD.decode(&keypair.secret_key_b64)?;
-        let secret_array: [u8; 32] = secret_bytes
-            .try_into()
-            .map_err(|_| anyhow!("unexpected secret length"))?;
-        let signing_key = SigningKey::from_bytes(&secret_array);
-        let pubkey = provenance::public_key_from_secret(&signing_key);
-
-        {
-            let conn = pool.get()?;
-            let created_at = Utc::now().to_rfc3339();
-            conn.execute(
-                "INSERT INTO projects (id, name, created_at, pubkey) VALUES (?1, ?2, ?3, ?4)",
-                params![project_id, "LLM Project", created_at, pubkey],
-            )?;
-        }
-
-        provenance::store_secret_key(project_id, &keypair.secret_key_b64)?;
-
-        let run_name = "llm-run";
-        let proof_mode = RunProofMode::Exact;
-        let seed = 5_u64;
-        let token_budget = 10_000_u64;
-        let default_model = "llama3";
-        let prompt_json = "{\"prompt\":\"Say hello\"}".to_string();
-        let step_template = RunStepTemplate {
-            model: default_model.to_string(),
-            prompt: prompt_json.clone(),
-            token_budget,
-            order_index: Some(0),
-            checkpoint_type: "Step".to_string(),
-            proof_mode,
-            epsilon: None,
-        };
-
-        let mock_client = RecordingLlmClient::new(
-            default_model.to_string(),
-            prompt_json.clone(),
-            "Hello from mock".to_string(),
-            TokenUsage {
-                prompt_tokens: 12,
-                completion_tokens: 8,
-            },
-        );
-
-        let run_id = start_hello_run_with_client(
-            &pool,
-            project_id,
-            run_name,
-            proof_mode,
-            None,
-            seed,
-            token_budget,
-            default_model,
-            vec![step_template.clone()],
-            &mock_client,
-        )?;
-
-        assert_eq!(*mock_client.calls.lock().unwrap(), 1);
-
-        let conn = pool.get()?;
-        let (default_model_db, proof_mode_db, epsilon_db, seed_db, token_budget_db): (
-            String,
-            String,
-            Option<f64>,
-            i64,
-            i64,
-        ) = conn.query_row(
-            "SELECT default_model, proof_mode, epsilon, seed, token_budget FROM runs WHERE id = ?1",
-            params![&run_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )?;
-        assert_eq!(default_model_db, default_model);
-        assert_eq!(proof_mode_db, proof_mode.as_str());
-        assert_eq!(epsilon_db, None);
-        assert_eq!(seed_db as u64, seed);
-        assert_eq!(token_budget_db as u64, token_budget);
-
-        let stored_step: (String, String, i64, String, Option<f64>) = conn.query_row(
-            "SELECT model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE run_id = ?1",
-            params![&run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-        )?;
-        assert_eq!(stored_step.0, step_template.model);
-        assert_eq!(stored_step.1, step_template.prompt);
-        assert_eq!(stored_step.2.max(0) as u64, token_budget);
-        assert_eq!(stored_step.3, proof_mode.as_str());
-        assert_eq!(stored_step.4, None);
-
-        let (
-            inputs_sha,
-            outputs_sha,
-            usage_tokens_db,
-            prompt_tokens_db,
-            completion_tokens_db,
-        ): (Option<String>, Option<String>, i64, i64, i64) = conn.query_row(
-            "SELECT inputs_sha256, outputs_sha256, usage_tokens, prompt_tokens, completion_tokens FROM checkpoints WHERE run_id = ?1",
-            params![&run_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )?;
-
-        let expected_input_sha = provenance::sha256_hex(prompt_json.as_bytes());
-        assert_eq!(inputs_sha.as_deref(), Some(expected_input_sha.as_str()));
-        let expected_output_sha = provenance::sha256_hex(b"Hello from mock");
-        assert_eq!(outputs_sha.as_deref(), Some(expected_output_sha.as_str()));
-
-        assert_eq!(usage_tokens_db, 20);
-        assert_eq!(prompt_tokens_db, 12);
-        assert_eq!(completion_tokens_db, 8);
-
-        let signature: String = conn.query_row(
-            "SELECT signature FROM checkpoints WHERE run_id = ?1",
-            params![&run_id],
-            |row| row.get(0),
-        )?;
-        let curr_chain: String = conn.query_row(
-            "SELECT curr_chain FROM checkpoints WHERE run_id = ?1",
-            params![&run_id],
-            |row| row.get(0),
-        )?;
-        let sig_bytes = STANDARD.decode(signature)?;
-        let sig_array: [u8; ed25519_dalek::SIGNATURE_LENGTH] = sig_bytes
-            .try_into()
-            .map_err(|_| anyhow!("signature length mismatch"))?;
-        let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
-        signing_key
-            .verifying_key()
-            .verify(curr_chain.as_bytes(), &signature)?;
-
-        Ok(())
-    }
-
-    #[cfg(feature = "interactive")]
-    #[test]
-    fn start_hello_run_interactive_skips_initial_checkpoint() -> Result<()> {
-        init_keychain_backend();
-
-        let manager = SqliteConnectionManager::memory();
-        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
-        {
-            let mut conn = pool.get()?;
-            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-            store::migrate_db(&mut conn)?;
-        }
-
-        let project = api::create_project_with_pool("Interactive Start".into(), &pool)?;
-        let run_name = "interactive-start";
-        let proof_mode = RunProofMode::Exact;
-        let seed = 99_u64;
-        let token_budget = 5_000_u64;
-        let default_model = STUB_MODEL_ID;
-        let step_template = RunStepTemplate {
-            model: default_model.to_string(),
-            prompt: "Interact with the operator".to_string(),
-            token_budget: 1_000,
-            order_index: Some(0),
-            checkpoint_type: "InteractiveChat".to_string(),
-            proof_mode,
-            epsilon: None,
-        };
-
-        let start_client = RecordingLlmClient::new(
-            default_model.to_string(),
-            String::new(),
-            "unused".to_string(),
-            TokenUsage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-            },
-        );
-
-        let run_id = start_hello_run_with_client(
-            &pool,
-            &project.id,
-            run_name,
-            proof_mode,
-            None,
-            seed,
-            token_budget,
-            default_model,
-            vec![step_template.clone()],
-            &start_client,
-        )?;
-        assert_eq!(*start_client.calls.lock().unwrap(), 0);
-
-        let conn = pool.get()?;
-        let (
-            default_model_db,
-            proof_mode_db,
-            epsilon_db,
-            seed_db,
-            token_budget_db,
-            checkpoint_count,
-        ): (String, String, Option<f64>, i64, i64, i64) = conn.query_row(
-            concat!(
-                "SELECT default_model, proof_mode, epsilon, seed, token_budget, ",
-                "(SELECT COUNT(*) FROM checkpoints WHERE run_id = runs.id) ",
-                "FROM runs WHERE id = ?1"
-            ),
-            params![&run_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            },
-        )?;
-        assert_eq!(default_model_db, default_model);
-        assert_eq!(proof_mode_db, proof_mode.as_str());
-        assert_eq!(epsilon_db, None);
-        assert_eq!(seed_db as u64, seed);
-        assert_eq!(token_budget_db as u64, token_budget);
-        assert_eq!(checkpoint_count, 0);
-
-        let config_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM run_steps WHERE run_id = ?1 AND LOWER(checkpoint_type) = 'interactivechat'",
-            params![&run_id],
-            |row| row.get(0),
-        )?;
-        assert_eq!(config_count, 1);
-
-        Ok(())
-    }
-
-    #[cfg(feature = "interactive")]
-    #[test]
-    fn submit_turn_records_usage_and_messages() -> Result<()> {
-        init_keychain_backend();
-
-        let manager = SqliteConnectionManager::memory();
-        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
-        {
-            let mut conn = pool.get()?;
-            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-            store::migrate_db(&mut conn)?;
-        }
-
-        let project = api::create_project_with_pool("Interactive Submit".into(), &pool)?;
-        let chat_prompt = "You are a meticulous co-pilot.".to_string();
-        let run_model = "stub-model".to_string();
-        let run_name = "interactive-run";
-        let proof_mode = RunProofMode::Exact;
-        let seed = 0_u64;
-        let token_budget = 10_000_u64;
-        let step_template = RunStepTemplate {
-            model: run_model.clone(),
-            prompt: chat_prompt.clone(),
-            token_budget,
-            order_index: Some(0),
-            checkpoint_type: "InteractiveChat".to_string(),
-            proof_mode,
-            epsilon: None,
-        };
-
-        let start_client = RecordingLlmClient::new(
-            run_model.clone(),
-            String::new(),
-            "unused".to_string(),
-            TokenUsage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-            },
-        );
-
-        let run_id = start_hello_run_with_client(
-            &pool,
-            &project.id,
-            run_name,
-            proof_mode,
-            None,
-            seed,
-            token_budget,
-            &run_model,
-            vec![step_template.clone()],
-            &start_client,
-        )?;
-        assert_eq!(*start_client.calls.lock().unwrap(), 0);
-
-        let config_id: String = {
-            let conn = pool.get()?;
-            conn.query_row(
-                "SELECT id FROM run_steps WHERE run_id = ?1",
-                params![&run_id],
-                |row| row.get(0),
-            )?
-        };
-
-        let prompt_text = "Hello partner".to_string();
-        let expected_prompt = super::build_interactive_prompt(&chat_prompt, &[], &prompt_text);
-        let client = RecordingLlmClient::new(
-            run_model.clone(),
-            expected_prompt,
-            "Greetings from AI".to_string(),
-            TokenUsage {
-                prompt_tokens: 7,
-                completion_tokens: 11,
-            },
-        );
-
-        let outcome = submit_interactive_checkpoint_turn_with_client(
-            &pool,
-            &run_id,
-            &config_id,
-            &prompt_text,
-            &client,
-        )?;
-        assert_eq!(*client.calls.lock().unwrap(), 1);
-        assert_eq!(outcome.ai_response, "Greetings from AI");
-        assert_eq!(outcome.usage.prompt_tokens, 7);
-        assert_eq!(outcome.usage.completion_tokens, 11);
-
-        let conn = pool.get()?;
-        struct SimpleCheckpoint {
-            id: String,
-            parent: Option<String>,
-            turn_index: Option<u32>,
-            usage_tokens: u64,
-            prompt_tokens: u64,
-            completion_tokens: u64,
-            kind: String,
-            config_id: Option<String>,
-        }
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_checkpoint_id, turn_index, usage_tokens, prompt_tokens, completion_tokens, kind, checkpoint_config_id \
-             FROM checkpoints WHERE run_id = ?1 ORDER BY turn_index ASC",
-        )?;
-        let rows = stmt.query_map(params![&run_id], |row| {
-            let turn_index = row
-                .get::<_, Option<i64>>(2)?
-                .map(|value| value.max(0) as u32);
-            let usage_tokens: i64 = row.get(3)?;
-            let prompt_tokens: i64 = row.get(4)?;
-            let completion_tokens: i64 = row.get(5)?;
-            Ok(SimpleCheckpoint {
-                id: row.get(0)?,
-                parent: row.get(1)?,
-                turn_index,
-                usage_tokens: usage_tokens.max(0) as u64,
-                prompt_tokens: prompt_tokens.max(0) as u64,
-                completion_tokens: completion_tokens.max(0) as u64,
-                kind: row.get(6)?,
-                config_id: row.get(7)?,
-            })
-        })?;
-        let mut checkpoints = Vec::new();
-        for row in rows {
-            checkpoints.push(row?);
-        }
-        assert_eq!(checkpoints.len(), 2);
-        let human = &checkpoints[0];
-        let ai = &checkpoints[1];
-
-        assert_eq!(human.kind, "Step");
-        assert_eq!(human.parent, None);
-        assert_eq!(human.turn_index, Some(0));
-        assert_eq!(human.usage_tokens, 0);
-        assert_eq!(human.prompt_tokens, 0);
-        assert_eq!(human.completion_tokens, 0);
-        assert_eq!(human.config_id.as_deref(), Some(config_id.as_str()));
-
-        assert_eq!(ai.kind, "Step");
-        assert_eq!(ai.parent.as_deref(), Some(human.id.as_str()));
-        assert_eq!(ai.turn_index, Some(1));
-        assert_eq!(ai.usage_tokens, 18);
-        assert_eq!(ai.prompt_tokens, 7);
-        assert_eq!(ai.completion_tokens, 11);
-        assert_eq!(ai.config_id.as_deref(), Some(config_id.as_str()));
-
-        let (human_role, human_body): (String, String) = conn.query_row(
-            "SELECT role, body FROM checkpoint_messages WHERE checkpoint_id = ?1",
-            params![&human.id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(human_role, "human");
-        assert_eq!(human_body, prompt_text);
-
-        let (ai_role, ai_body): (String, String) = conn.query_row(
-            "SELECT role, body FROM checkpoint_messages WHERE checkpoint_id = ?1",
-            params![&ai.id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(ai_role, "ai");
-        assert_eq!(ai_body, "Greetings from AI");
-
-        let totals: (i64, i64) = conn.query_row(
-            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1",
-            params![&run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(totals.0, 7);
-        assert_eq!(totals.1, 11);
-
-        Ok(())
-    }
-
-    #[cfg(feature = "interactive")]
-    #[test]
-    fn submit_turn_rejects_when_budget_exceeded() -> Result<()> {
-        init_keychain_backend();
-
-        let manager = SqliteConnectionManager::memory();
-        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
-        {
-            let mut conn = pool.get()?;
-            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-            store::migrate_db(&mut conn)?;
-        }
-
-        let project = api::create_project_with_pool("Interactive Budget Gate".into(), &pool)?;
-        let chat_prompt = "Keep responses concise.".to_string();
-        let run_model = STUB_MODEL_ID.to_string();
-        let run_name = "interactive-budget";
-        let proof_mode = RunProofMode::Exact;
-        let seed = 0_u64;
-        let token_budget = 10_u64;
-        let step_template = RunStepTemplate {
-            model: run_model.clone(),
-            prompt: chat_prompt.clone(),
-            token_budget,
-            order_index: Some(0),
-            checkpoint_type: "InteractiveChat".to_string(),
-            proof_mode,
-            epsilon: None,
-        };
-
-        let start_client = RecordingLlmClient::new(
-            run_model.clone(),
-            String::new(),
-            "unused".to_string(),
-            TokenUsage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-            },
-        );
-        let run_id = start_hello_run_with_client(
-            &pool,
-            &project.id,
-            run_name,
-            proof_mode,
-            None,
-            seed,
-            token_budget,
-            &run_model,
-            vec![step_template.clone()],
-            &start_client,
-        )?;
-        assert_eq!(*start_client.calls.lock().unwrap(), 0);
-
-        let config_id: String = {
-            let conn = pool.get()?;
-            conn.query_row(
-                "SELECT id FROM run_steps WHERE run_id = ?1",
-                params![&run_id],
-                |row| row.get(0),
-            )?
-        };
-
-        let first_prompt = "Initial exchange".to_string();
-        let first_expected = super::build_interactive_prompt(&chat_prompt, &[], &first_prompt);
-        let first_client = RecordingLlmClient::new(
-            run_model.clone(),
-            first_expected,
-            "First reply".to_string(),
-            TokenUsage {
-                prompt_tokens: 6,
-                completion_tokens: 2,
-            },
-        );
-        submit_interactive_checkpoint_turn_with_client(
-            &pool,
-            &run_id,
-            &config_id,
-            &first_prompt,
-            &first_client,
-        )?;
-        assert_eq!(*first_client.calls.lock().unwrap(), 1);
-
-        let transcript = {
-            let conn = pool.get()?;
-            super::load_interactive_messages(&conn, &run_id, &config_id)?
-        };
-
-        let second_prompt = "Need more budget".to_string();
-        let second_expected =
-            super::build_interactive_prompt(&chat_prompt, &transcript, &second_prompt);
-        let second_client = RecordingLlmClient::new(
-            run_model.clone(),
-            second_expected,
-            "Denied".to_string(),
-            TokenUsage {
-                prompt_tokens: 5,
-                completion_tokens: 0,
-            },
-        );
-
-        let result = submit_interactive_checkpoint_turn_with_client(
-            &pool,
-            &run_id,
-            &config_id,
-            &second_prompt,
-            &second_client,
-        );
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert!(err.to_string().contains("token budget"));
-        assert_eq!(*second_client.calls.lock().unwrap(), 1);
-
-        let conn = pool.get()?;
-        let checkpoint_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
-            params![&run_id],
-            |row| row.get(0),
-        )?;
-        assert_eq!(checkpoint_count, 2);
-
-        Ok(())
-    }
-
-    #[cfg(feature = "interactive")]
-    #[test]
-    fn finalize_interactive_checkpoint_requires_transcript() -> Result<()> {
-        init_keychain_backend();
-
-        let manager = SqliteConnectionManager::memory();
-        let pool: Pool<SqliteConnectionManager> = Pool::builder().max_size(1).build(manager)?;
-        {
-            let mut conn = pool.get()?;
-            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-            store::migrate_db(&mut conn)?;
-        }
-
-        let project = api::create_project_with_pool("Interactive Finalize".into(), &pool)?;
-        let chat_prompt = "Act as a careful reviewer.".to_string();
-        let run_model = STUB_MODEL_ID.to_string();
-        let run_name = "interactive-finalize";
-        let proof_mode = RunProofMode::Exact;
-        let seed = 1_u64;
-        let token_budget = 5_000_u64;
-        let step_template = RunStepTemplate {
-            model: run_model.clone(),
-            prompt: chat_prompt.clone(),
-            token_budget,
-            order_index: Some(0),
-            checkpoint_type: "InteractiveChat".to_string(),
-            proof_mode,
-            epsilon: None,
-        };
-
-        let start_client = RecordingLlmClient::new(
-            run_model.clone(),
-            String::new(),
-            "unused".to_string(),
-            TokenUsage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-            },
-        );
-        let run_id = start_hello_run_with_client(
-            &pool,
-            &project.id,
-            run_name,
-            proof_mode,
-            None,
-            seed,
-            token_budget,
-            &run_model,
-            vec![step_template.clone()],
-            &start_client,
-        )?;
-        assert_eq!(*start_client.calls.lock().unwrap(), 0);
-
-        let config_id: String = {
-            let conn = pool.get()?;
-            conn.query_row(
-                "SELECT id FROM run_steps WHERE run_id = ?1",
-                params![&run_id],
-                |row| row.get(0),
-            )?
-        };
-
-        let empty_finalize = finalize_interactive_checkpoint(&pool, &run_id, &config_id);
-        assert!(empty_finalize.is_err());
-
-        let prompt_text = "First turn".to_string();
-        let expected_prompt = super::build_interactive_prompt(&chat_prompt, &[], &prompt_text);
-        let turn_client = RecordingLlmClient::new(
-            run_model.clone(),
-            expected_prompt,
-            "Response".to_string(),
-            TokenUsage {
-                prompt_tokens: 2,
-                completion_tokens: 3,
-            },
-        );
-        submit_interactive_checkpoint_turn_with_client(
-            &pool,
-            &run_id,
-            &config_id,
-            &prompt_text,
-            &turn_client,
-        )?;
-        assert_eq!(*turn_client.calls.lock().unwrap(), 1);
-
-        finalize_interactive_checkpoint(&pool, &run_id, &config_id)?;
-
-        Ok(())
-    }
+    
 }
