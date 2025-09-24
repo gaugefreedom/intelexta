@@ -738,7 +738,7 @@ pub(crate) fn replay_run_with_pool(
         }
     };
 
-    if stored_run.checkpoints.is_empty() {
+    if stored_run.steps.is_empty() {
         return Ok(replay::ReplayReport::from_checkpoint_reports(
             run_id,
             Vec::new(),
@@ -755,10 +755,7 @@ pub(crate) fn replay_run_with_pool(
     let mut interactive_default_error: Option<String> = None;
 
     #[cfg(feature = "interactive")]
-    let has_interactive_configs = stored_run
-        .checkpoints
-        .iter()
-        .any(|cfg| cfg.is_interactive_chat());
+    let has_interactive_configs = stored_run.steps.iter().any(|cfg| cfg.is_interactive_chat());
 
     #[cfg(feature = "interactive")]
     if has_interactive_configs {
@@ -771,17 +768,13 @@ pub(crate) fn replay_run_with_pool(
     }
 
     #[cfg(not(feature = "interactive"))]
-    if stored_run
-        .checkpoints
-        .iter()
-        .any(|cfg| cfg.is_interactive_chat())
-    {
+    if stored_run.steps.iter().any(|cfg| cfg.is_interactive_chat()) {
         return Err(Error::Api(
             "Interactive replays are disabled in this build.".to_string(),
         ));
     }
 
-    for config in &stored_run.checkpoints {
+    for config in &stored_run.steps {
         if config.is_interactive_chat() {
             #[cfg(feature = "interactive")]
             {

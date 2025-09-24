@@ -925,10 +925,12 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                     original_digest: String::new(),
                     replay_digest: String::new(),
                     error_message: None,
+                    proof_mode: None,
                     semantic_original_digest: None,
                     semantic_replay_digest: None,
                     semantic_distance: None,
                     epsilon: None,
+                    configured_epsilon: None,
                 }
             }
         } else {
@@ -941,10 +943,12 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 original_digest: String::new(),
                 replay_digest: String::new(),
                 error_message: None,
+                proof_mode: None,
                 semantic_original_digest: None,
                 semantic_replay_digest: None,
                 semantic_distance: None,
                 epsilon: None,
+                configured_epsilon: None,
             }
         };
 
