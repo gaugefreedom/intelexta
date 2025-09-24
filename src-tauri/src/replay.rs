@@ -472,13 +472,17 @@ mod tests {
         let project = api::create_project_with_pool("Replay Interactive".into(), &pool)?;
         let chat_prompt = "Keep the conversation brief.".to_string();
         let run_model = "stub-model".to_string();
-        let spec = orchestrator::RunSpec {
-            project_id: project.id.clone(),
-            name: "interactive-replay".into(),
-            seed: 0,
-            token_budget: 10_000,
-            model: run_model.clone(),
-            steps: vec![orchestrator::RunStepTemplate {
+        let panic_client = PanicLlmClient;
+        let run_id = orchestrator::start_hello_run_with_client(
+            &pool,
+            &project.id,
+            "interactive-replay",
+            RunProofMode::Exact,
+            None,
+            0,
+            10_000,
+            &run_model,
+            vec![orchestrator::RunStepTemplate {
                 model: run_model.clone(),
                 prompt: chat_prompt.clone(),
                 token_budget: 10_000,
@@ -487,12 +491,8 @@ mod tests {
                 proof_mode: RunProofMode::Exact,
                 epsilon: None,
             }],
-            proof_mode: RunProofMode::Exact,
-            epsilon: None,
-        };
-
-        let panic_client = PanicLlmClient;
-        let run_id = orchestrator::start_hello_run_with_client(&pool, spec.clone(), &panic_client)?;
+            &panic_client,
+        )?;
 
         let config_id: String = {
             let conn = pool.get()?;

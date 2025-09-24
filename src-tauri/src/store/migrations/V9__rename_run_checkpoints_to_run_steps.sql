@@ -18,11 +18,12 @@ CREATE TABLE runs_new (
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    spec_json TEXT NOT NULL,
     sampler_json TEXT,
     seed INTEGER NOT NULL DEFAULT 0,
+    epsilon REAL,
     token_budget INTEGER NOT NULL DEFAULT 0,
     default_model TEXT NOT NULL DEFAULT '',
+    proof_mode TEXT NOT NULL DEFAULT 'exact',
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
@@ -31,22 +32,24 @@ INSERT INTO runs_new (
     project_id,
     name,
     created_at,
-    spec_json,
     sampler_json,
     seed,
+    epsilon,
     token_budget,
-    default_model
+    default_model,
+    proof_mode
 )
 SELECT
     id,
     project_id,
     name,
     created_at,
-    spec_json,
     sampler_json,
     seed,
+    epsilon,
     token_budget,
-    default_model
+    default_model,
+    COALESCE(json_extract(spec_json, '$.proofMode'), 'exact')
 FROM runs;
 
 DROP TABLE runs;

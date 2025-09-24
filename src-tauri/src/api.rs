@@ -71,18 +71,18 @@ pub fn create_run(
     epsilon: Option<f64>,
     pool: State<DbPool>,
 ) -> Result<String, Error> {
-    let spec = orchestrator::RunSpec {
-        project_id,
-        name,
-        seed,
-        token_budget,
-        model: default_model,
-        steps: Vec::new(),
+    orchestrator::create_run(
+        pool.inner(),
+        &project_id,
+        &name,
         proof_mode,
         epsilon,
-    };
-
-    orchestrator::create_run(pool.inner(), spec).map_err(|err| Error::Api(err.to_string()))
+        seed,
+        token_budget,
+        &default_model,
+        Vec::new(),
+    )
+    .map_err(|err| Error::Api(err.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -134,31 +134,51 @@ pub struct ImportCarArgs {
     pub bytes: Option<Vec<u8>>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListCheckpointsArgs {
+    pub run_id: String,
+    #[serde(default)]
+    pub run_execution_id: Option<String>,
+}
+
 // In src-tauri/src/api.rs
 
 #[tauri::command]
 pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String, Error> {
-    let rs = orchestrator::RunSpec {
-        project_id: spec.project_id,
-        name: spec.name,
-        seed: spec.seed,
-        token_budget: spec.token_budget,
-        model: spec.model.clone(),
-        steps: vec![orchestrator::RunStepTemplate {
-            model: spec.model,
-            prompt: spec.dag_json,
-            token_budget: spec.token_budget,
-            order_index: Some(0),
-            checkpoint_type: "Step".to_string(),
-            proof_mode: spec.proof_mode,
-            epsilon: spec.epsilon,
-        }],
-        proof_mode: spec.proof_mode,
-        epsilon: spec.epsilon,
+    let HelloRunSpec {
+        project_id,
+        name,
+        seed,
+        dag_json,
+        token_budget,
+        model,
+        proof_mode,
+        epsilon,
+    } = spec;
+
+    let step_template = orchestrator::RunStepTemplate {
+        model: model.clone(),
+        prompt: dag_json,
+        token_budget,
+        order_index: Some(0),
+        checkpoint_type: "Step".to_string(),
+        proof_mode,
+        epsilon,
     };
 
     // --- FIX: The debugging code now lives INSIDE the function ---
-    let result = orchestrator::start_hello_run(&pool, rs);
+    let result = orchestrator::start_hello_run(
+        pool.inner(),
+        &project_id,
+        &name,
+        proof_mode,
+        epsilon,
+        seed,
+        token_budget,
+        &model,
+        vec![step_template],
+    );
 
     // If the result is an error, print the detailed reason to the terminal.
     if let Err(e) = &result {
@@ -197,6 +217,8 @@ pub struct RunSummary {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epsilon: Option<f64>,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub proof_mode: orchestrator::RunProofMode,
     pub has_persisted_checkpoint: bool,
     #[serde(default)]
     pub executions: Vec<RunExecutionSummary>,
@@ -205,14 +227,11 @@ pub struct RunSummary {
 }
 
 fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
-    let spec_json: String = row.get(3)?;
-    let spec: orchestrator::RunSpec = serde_json::from_str(&spec_json)
+    let proof_mode_raw: String = row.get(3)?;
+    let proof_mode = orchestrator::RunProofMode::try_from(proof_mode_raw.as_str())
         .map_err(|err| rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err)))?;
-    let has_concordant_step = spec
-        .steps
-        .iter()
-        .any(|template| template.proof_mode.is_concordant());
-    let kind = if spec.proof_mode.is_concordant() || has_concordant_step {
+    let epsilon: Option<f64> = row.get(4)?;
+    let kind = if proof_mode.is_concordant() {
         "concordant".to_string()
     } else {
         "exact".to_string()
@@ -222,8 +241,9 @@ fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> 
         name: row.get(1)?,
         created_at: row.get(2)?,
         kind,
-        epsilon: spec.epsilon,
-        has_persisted_checkpoint: row.get(4)?,
+        epsilon,
+        proof_mode,
+        has_persisted_checkpoint: row.get(5)?,
         executions: Vec::new(),
         step_proofs: Vec::new(),
     })
@@ -264,13 +284,21 @@ fn load_step_proof_summaries(
 pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT r.id, r.name, r.created_at, r.spec_json, EXISTS (SELECT 1 FROM run_executions e WHERE e.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
+        "SELECT r.id, r.name, r.created_at, r.proof_mode, r.epsilon, EXISTS (SELECT 1 FROM run_executions e WHERE e.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
     )?;
     let runs_iter = stmt.query_map(params![project_id], hydrate_run_summary)?;
     let mut runs = Vec::new();
     for run in runs_iter {
         let mut summary = run?;
         let step_proofs = load_step_proof_summaries(&conn, &summary.id)?;
+        let has_concordant_step = step_proofs
+            .iter()
+            .any(|template| template.proof_mode.is_concordant());
+        summary.kind = if summary.proof_mode.is_concordant() || has_concordant_step {
+            "concordant".to_string()
+        } else {
+            "exact".to_string()
+        };
         summary.step_proofs = step_proofs.clone();
 
         let executions = orchestrator::list_run_executions(&conn, &summary.id)
@@ -294,7 +322,7 @@ pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSumma
 fn load_run_summary(conn: &Connection, run_id: &str) -> Result<RunSummary, Error> {
     let summary = conn
         .query_row(
-            "SELECT r.id, r.name, r.created_at, r.spec_json, EXISTS (SELECT 1 FROM run_executions e WHERE e.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.id = ?1",
+            "SELECT r.id, r.name, r.created_at, r.proof_mode, r.epsilon, EXISTS (SELECT 1 FROM run_executions e WHERE e.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.id = ?1",
             params![run_id],
             hydrate_run_summary,
         )
@@ -302,6 +330,14 @@ fn load_run_summary(conn: &Connection, run_id: &str) -> Result<RunSummary, Error
 
     let mut summary = summary.ok_or_else(|| Error::Api(format!("run {run_id} not found")))?;
     let step_proofs = load_step_proof_summaries(conn, &summary.id)?;
+    let has_concordant_step = step_proofs
+        .iter()
+        .any(|template| template.proof_mode.is_concordant());
+    summary.kind = if summary.proof_mode.is_concordant() || has_concordant_step {
+        "concordant".to_string()
+    } else {
+        "exact".to_string()
+    };
     summary.step_proofs = step_proofs.clone();
 
     let executions = orchestrator::list_run_executions(conn, &summary.id)
@@ -328,8 +364,39 @@ pub fn update_run_settings(
     epsilon: Option<f64>,
     pool: State<DbPool>,
 ) -> Result<RunSummary, Error> {
-    orchestrator::update_run_proof_settings(pool.inner(), &run_id, proof_mode, epsilon)
-        .map_err(|err| Error::Api(err.to_string()))?;
+    let validated_epsilon = match (proof_mode.is_concordant(), epsilon) {
+        (true, Some(value)) => {
+            if !value.is_finite() || value < 0.0 {
+                return Err(Error::Api(
+                    "epsilon must be a finite, non-negative value".to_string(),
+                ));
+            }
+            Some(value)
+        }
+        (true, None) => {
+            return Err(Error::Api("concordant runs require an epsilon".to_string()));
+        }
+        (false, Some(value)) => {
+            if !value.is_finite() || value < 0.0 {
+                return Err(Error::Api(
+                    "epsilon must be a finite, non-negative value".to_string(),
+                ));
+            }
+            Some(value)
+        }
+        (false, None) => None,
+    };
+
+    {
+        let mut conn = pool.get()?;
+        let updated = conn.execute(
+            "UPDATE runs SET proof_mode = ?1, epsilon = ?2 WHERE id = ?3",
+            params![proof_mode.as_str(), validated_epsilon, &run_id],
+        )?;
+        if updated == 0 {
+            return Err(Error::Api(format!("run {run_id} not found")));
+        }
+    }
 
     let conn = pool.get()?;
     load_run_summary(&conn, &run_id)
@@ -407,11 +474,10 @@ pub struct CheckpointMessageSummary {
 
 #[tauri::command]
 pub fn list_checkpoints(
-    run_id: String,
-    run_execution_id: Option<String>,
+    args: ListCheckpointsArgs,
     pool: State<DbPool>,
 ) -> Result<Vec<CheckpointSummary>, Error> {
-    list_checkpoints_with_pool(run_id, run_execution_id, pool.inner())
+    list_checkpoints_with_pool(&args.run_id, args.run_execution_id.as_deref(), pool.inner())
 }
 
 #[tauri::command]
@@ -446,7 +512,7 @@ pub fn open_interactive_checkpoint_session(
 
     drop(conn);
 
-    let mut messages = list_checkpoints_with_pool(run_id.clone(), None, pool.inner())?;
+    let mut messages = list_checkpoints_with_pool(&run_id, None, pool.inner())?;
     let checkpoint_id_ref = checkpoint_id.as_str();
     messages.retain(|entry| {
         entry
@@ -463,14 +529,14 @@ pub fn open_interactive_checkpoint_session(
 }
 
 pub(crate) fn list_checkpoints_with_pool(
-    run_id: String,
-    run_execution_id: Option<String>,
+    run_id: &str,
+    run_execution_id: Option<&str>,
     pool: &DbPool,
 ) -> Result<Vec<CheckpointSummary>, Error> {
     let conn = pool.get()?;
     let execution_id = match run_execution_id {
-        Some(id) => Some(id),
-        None => orchestrator::load_latest_run_execution(&conn, &run_id)
+        Some(id) => Some(id.to_string()),
+        None => orchestrator::load_latest_run_execution(&conn, run_id)
             .map_err(|err| Error::Api(err.to_string()))?
             .map(|record| record.id),
     };
@@ -486,7 +552,7 @@ pub(crate) fn list_checkpoints_with_pool(
          WHERE c.run_id = ?1 AND c.run_execution_id = ?2
          ORDER BY c.timestamp ASC",
     )?;
-    let rows = stmt.query_map(params![run_id, execution_id.clone()], |row| {
+    let rows = stmt.query_map(params![run_id, &execution_id], |row| {
         let incident_json: Option<String> = row.get(3)?;
         let incident = incident_json
             .map(|payload| serde_json::from_str::<IncidentSummary>(&payload))

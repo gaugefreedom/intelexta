@@ -145,22 +145,6 @@ pub struct RunStepTemplate {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RunSpec {
-    pub project_id: String,
-    pub name: String,
-    pub seed: u64,
-    pub token_budget: u64,
-    pub model: String,
-    #[serde(rename = "steps", alias = "checkpoints", default)]
-    pub steps: Vec<RunStepTemplate>,
-    #[serde(default)]
-    pub proof_mode: RunProofMode,
-    #[serde(default)]
-    pub epsilon: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RunStep {
     pub id: String,
     pub run_id: String,
@@ -576,54 +560,78 @@ fn process_stream_chunk(
     Ok(())
 }
 
-pub fn create_run(pool: &DbPool, mut spec: RunSpec) -> anyhow::Result<String> {
-    if spec.proof_mode.is_concordant() {
-        let epsilon = spec
-            .epsilon
-            .ok_or_else(|| anyhow!("concordant runs require an epsilon"))?;
-        if !epsilon.is_finite() || epsilon < 0.0 {
-            return Err(anyhow!("epsilon must be a finite, non-negative value"));
+pub fn create_run(
+    pool: &DbPool,
+    project_id: &str,
+    name: &str,
+    proof_mode: RunProofMode,
+    epsilon: Option<f64>,
+    seed: u64,
+    token_budget: u64,
+    default_model: &str,
+    mut steps: Vec<RunStepTemplate>,
+) -> anyhow::Result<String> {
+    let run_epsilon = match (proof_mode.is_concordant(), epsilon) {
+        (true, Some(value)) => {
+            if !value.is_finite() || value < 0.0 {
+                return Err(anyhow!("epsilon must be a finite, non-negative value"));
+            }
+            Some(value)
         }
-    }
+        (true, None) => {
+            return Err(anyhow!("concordant runs require an epsilon"));
+        }
+        (false, Some(value)) => {
+            if !value.is_finite() || value < 0.0 {
+                return Err(anyhow!("epsilon must be a finite, non-negative value"));
+            }
+            Some(value)
+        }
+        (false, None) => None,
+    };
 
-    for template in &mut spec.steps {
+    for template in &mut steps {
         if template.proof_mode.is_concordant() {
             let epsilon = template
                 .epsilon
-                .or(spec.epsilon)
+                .or(run_epsilon)
                 .ok_or_else(|| anyhow!("concordant steps require an epsilon"))?;
             if !epsilon.is_finite() || epsilon < 0.0 {
                 return Err(anyhow!("epsilon must be a finite, non-negative value"));
             }
             template.epsilon = Some(epsilon);
+        } else if let Some(value) = template.epsilon {
+            if !value.is_finite() || value < 0.0 {
+                return Err(anyhow!("epsilon must be a finite, non-negative value"));
+            }
         }
     }
 
     let mut conn = pool.get()?;
-    ensure_project_signing_key(&conn, &spec.project_id)?;
+    ensure_project_signing_key(&conn, project_id)?;
 
     let run_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    let spec_json = serde_json::to_string(&spec)?;
 
     {
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, spec_json, sampler_json, seed, token_budget, default_model) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO runs (id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 &run_id,
-                &spec.project_id,
-                &spec.name,
+                project_id,
+                name,
                 &now,
-                &spec_json,
                 Option::<String>::None,
-                (spec.seed as i64),
-                (spec.token_budget as i64),
-                &spec.model,
+                (seed as i64),
+                run_epsilon,
+                (token_budget as i64),
+                default_model,
+                proof_mode.as_str(),
             ],
         )?;
 
-        for (index, template) in spec.steps.iter().enumerate() {
+        for (index, template) in steps.iter().enumerate() {
             let checkpoint_id = Uuid::new_v4().to_string();
             let order_index = template.order_index.unwrap_or(index as i64);
             tx.execute(
@@ -648,56 +656,30 @@ pub fn create_run(pool: &DbPool, mut spec: RunSpec) -> anyhow::Result<String> {
     Ok(run_id)
 }
 
-pub fn update_run_proof_settings(
+pub fn start_hello_run(
     pool: &DbPool,
-    run_id: &str,
+    project_id: &str,
+    name: &str,
     proof_mode: RunProofMode,
     epsilon: Option<f64>,
-) -> anyhow::Result<()> {
-    let mut conn = pool.get()?;
-    let tx = conn.transaction()?;
-
-    let validated_epsilon = match (proof_mode.is_concordant(), epsilon) {
-        (true, Some(value)) => {
-            if !value.is_finite() || value < 0.0 {
-                return Err(anyhow!("epsilon must be a finite, non-negative value"));
-            }
-            Some(value)
-        }
-        (true, None) => {
-            return Err(anyhow!("concordant runs require an epsilon"));
-        }
-        (false, Some(value)) => {
-            if !value.is_finite() || value < 0.0 {
-                return Err(anyhow!("epsilon must be a finite, non-negative value"));
-            }
-            Some(value)
-        }
-        (false, None) => None,
-    };
-
-    let spec_json: String = tx.query_row(
-        "SELECT spec_json FROM runs WHERE id = ?1",
-        params![run_id],
-        |row| row.get(0),
-    )?;
-    let mut spec: RunSpec = serde_json::from_str(&spec_json)?;
-    spec.proof_mode = proof_mode;
-    spec.epsilon = validated_epsilon;
-    let updated_spec_json = serde_json::to_string(&spec)?;
-
-    tx.execute(
-        "UPDATE runs SET spec_json = ?1 WHERE id = ?2",
-        params![&updated_spec_json, run_id],
-    )?;
-
-    tx.commit()?;
-    Ok(())
-}
-
-pub fn start_hello_run(pool: &DbPool, spec: RunSpec) -> anyhow::Result<String> {
+    seed: u64,
+    token_budget: u64,
+    default_model: &str,
+    steps: Vec<RunStepTemplate>,
+) -> anyhow::Result<String> {
     let client = DefaultOllamaClient::new();
-    start_hello_run_with_client(pool, spec, &client)
+    start_hello_run_with_client(
+        pool,
+        project_id,
+        name,
+        proof_mode,
+        epsilon,
+        seed,
+        token_budget,
+        default_model,
+        steps,
+        &client,
+    )
 }
 
 fn persist_checkpoint(
@@ -893,9 +875,9 @@ fn load_checkpoint_config_by_id(
 }
 
 pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<StoredRun> {
-    let row: Option<(String, String, i64, i64, String, String)> = conn
+    let row: Option<(String, String, i64, Option<f64>, i64, String, String)> = conn
         .query_row(
-            "SELECT project_id, name, seed, token_budget, default_model, spec_json FROM runs WHERE id = ?1",
+            "SELECT project_id, name, seed, epsilon, token_budget, default_model, proof_mode FROM runs WHERE id = ?1",
             params![run_id],
             |row| Ok((
                 row.get(0)?,
@@ -904,16 +886,19 @@ pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<Stored
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
             )),
         )
         .optional()?;
 
-    let (project_id, name, seed_raw, token_budget_raw, default_model, spec_json) =
+    let (project_id, name, seed_raw, epsilon, token_budget_raw, default_model, proof_mode_raw) =
         row.ok_or_else(|| anyhow!(format!("run {run_id} not found")))?;
     let seed = seed_raw.max(0) as u64;
     let token_budget = token_budget_raw.max(0) as u64;
     let steps = load_run_steps(conn, run_id)?;
-    let spec: RunSpec = serde_json::from_str(&spec_json)?;
+    let proof_mode = RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(err))
+    })?;
 
     Ok(StoredRun {
         id: run_id.to_string(),
@@ -922,8 +907,8 @@ pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<Stored
         seed,
         token_budget,
         default_model,
-        proof_mode: Some(spec.proof_mode),
-        epsilon: spec.epsilon,
+        proof_mode: Some(proof_mode),
+        epsilon,
         steps,
     })
 }
@@ -1344,16 +1329,33 @@ pub fn finalize_interactive_checkpoint(
 
 pub(crate) fn start_hello_run_with_client(
     pool: &DbPool,
-    spec: RunSpec,
+    project_id: &str,
+    name: &str,
+    proof_mode: RunProofMode,
+    epsilon: Option<f64>,
+    seed: u64,
+    token_budget: u64,
+    default_model: &str,
+    steps: Vec<RunStepTemplate>,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<String> {
-    if spec.steps.is_empty() {
+    if steps.is_empty() {
         return Err(anyhow!(
             "run requires at least one checkpoint configuration"
         ));
     }
 
-    let run_id = create_run(pool, spec)?;
+    let run_id = create_run(
+        pool,
+        project_id,
+        name,
+        proof_mode,
+        epsilon,
+        seed,
+        token_budget,
+        default_model,
+        steps,
+    )?;
     let _ = start_run_with_client(pool, &run_id, llm_client)?;
 
     Ok(run_id)
@@ -1562,18 +1564,18 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
         })
         .collect();
 
-    let spec_snapshot = RunSpec {
-        project_id: source_run.project_id.clone(),
-        name: format!("{} (clone)", source_run.name),
-        seed: source_run.seed,
-        token_budget: source_run.token_budget,
-        model: source_run.default_model.clone(),
-        steps: spec_templates,
-        proof_mode: source_run.proof_mode.unwrap_or_default(),
-        epsilon: source_run.epsilon,
-    };
-
-    create_run(pool, spec_snapshot)
+    let clone_name = format!("{} (clone)", source_run.name);
+    create_run(
+        pool,
+        &source_run.project_id,
+        &clone_name,
+        source_run.proof_mode.unwrap_or_default(),
+        source_run.epsilon,
+        source_run.seed,
+        source_run.token_budget,
+        &source_run.default_model,
+        spec_templates,
+    )
 }
 
 fn execute_checkpoint(
@@ -1755,35 +1757,42 @@ mod tests {
 
         provenance::store_secret_key(project_id, &keypair.secret_key_b64)?;
 
-        let spec = RunSpec {
-            project_id: project_id.to_string(),
-            name: "hello-run".to_string(),
-            seed: 42,
-            token_budget: 1_000,
+        let run_name = "hello-run";
+        let seed = 42_u64;
+        let token_budget = 1_000_u64;
+        let step_template = RunStepTemplate {
             model: STUB_MODEL_ID.to_string(),
-            steps: vec![RunStepTemplate {
-                model: STUB_MODEL_ID.to_string(),
-                prompt: "{\"nodes\":[]}".to_string(),
-                token_budget: 1_000,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: RunProofMode::Exact,
-            }],
+            prompt: "{\"nodes\":[]}".to_string(),
+            token_budget,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
             proof_mode: RunProofMode::Exact,
             epsilon: None,
         };
-        let spec_clone = spec.clone();
-        let run_id = start_hello_run(&pool, spec)?;
+        let run_id = start_hello_run(
+            &pool,
+            project_id,
+            run_name,
+            RunProofMode::Exact,
+            None,
+            seed,
+            token_budget,
+            STUB_MODEL_ID,
+            vec![step_template.clone()],
+        )?;
 
         let conn = pool.get()?;
-        let (project_id_db, name_db, kind_db, spec_json_db, created_at_db): (
-            String,
-            String,
-            String,
-            String,
-            String,
-        ) = conn.query_row(
-            "SELECT project_id, name, kind, spec_json, created_at FROM runs WHERE id = ?1",
+        let (
+            project_id_db,
+            name_db,
+            proof_mode_db,
+            epsilon_db,
+            seed_db,
+            token_budget_db,
+            default_model_db,
+            created_at_db,
+        ): (String, String, String, Option<f64>, i64, i64, String, String) = conn.query_row(
+            "SELECT project_id, name, proof_mode, epsilon, seed, token_budget, default_model, created_at FROM runs WHERE id = ?1",
             params![&run_id],
             |row| {
                 Ok((
@@ -1792,17 +1801,42 @@ mod tests {
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )?;
 
-        assert_eq!(project_id_db, spec_clone.project_id);
-        assert_eq!(name_db, spec_clone.name);
-        assert_eq!(kind_db, "exact");
+        assert_eq!(project_id_db, project_id);
+        assert_eq!(name_db, run_name);
+        assert_eq!(proof_mode_db, RunProofMode::Exact.as_str());
+        assert_eq!(epsilon_db, None);
+        assert_eq!(seed_db as u64, seed);
+        assert_eq!(token_budget_db as u64, token_budget);
+        assert_eq!(default_model_db, STUB_MODEL_ID);
         assert!(!created_at_db.is_empty());
 
-        let stored_spec: RunSpec = serde_json::from_str(&spec_json_db)?;
-        assert_eq!(stored_spec, spec_clone);
+        let stored_step: (String, String, i64, i64, String, String, Option<f64>) = conn.query_row(
+            "SELECT model, prompt, token_budget, order_index, checkpoint_type, proof_mode, epsilon FROM run_steps WHERE run_id = ?1",
+            params![&run_id],
+            |row| Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            )),
+        )?;
+        assert_eq!(stored_step.0, STUB_MODEL_ID);
+        assert_eq!(stored_step.1, step_template.prompt);
+        assert_eq!(stored_step.2.max(0) as u64, token_budget);
+        assert_eq!(stored_step.3, 0);
+        assert_eq!(stored_step.4, "Step");
+        assert_eq!(stored_step.5, RunProofMode::Exact.as_str());
+        assert!(stored_step.6.is_none());
 
         let (
             kind,
@@ -1861,7 +1895,7 @@ mod tests {
         assert_eq!(inputs_sha.as_deref(), Some(expected_inputs.as_str()));
 
         let mut input_bytes = b"hello".to_vec();
-        input_bytes.extend_from_slice(&spec_clone.seed.to_le_bytes());
+        input_bytes.extend_from_slice(&seed.to_le_bytes());
         let expected_outputs = provenance::sha256_hex(&input_bytes);
         assert_eq!(outputs_sha.as_deref(), Some(expected_outputs.as_str()));
 
@@ -1922,25 +1956,31 @@ mod tests {
 
         // Intentionally skip storing a secret for this project to simulate a missing key entry.
 
-        let spec = RunSpec {
-            project_id: project_id.to_string(),
-            name: "recover-secret".to_string(),
-            seed: 99,
-            token_budget: 25,
+        let run_name = "recover-secret";
+        let proof_mode = RunProofMode::Exact;
+        let seed = 99_u64;
+        let token_budget = 25_u64;
+        let step_template = RunStepTemplate {
             model: STUB_MODEL_ID.to_string(),
-            steps: vec![RunStepTemplate {
-                model: STUB_MODEL_ID.to_string(),
-                prompt: "{}".to_string(),
-                token_budget: 25,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: RunProofMode::Exact,
-            }],
-            proof_mode: RunProofMode::Exact,
+            prompt: "{}".to_string(),
+            token_budget,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
+            proof_mode,
             epsilon: None,
         };
 
-        let run_id = start_hello_run(&pool, spec)?;
+        let run_id = start_hello_run(
+            &pool,
+            project_id,
+            run_name,
+            proof_mode,
+            None,
+            seed,
+            token_budget,
+            STUB_MODEL_ID,
+            vec![step_template],
+        )?;
         assert!(!run_id.is_empty());
 
         let conn = pool.get()?;
@@ -2032,27 +2072,24 @@ mod tests {
 
         provenance::store_secret_key(project_id, &keypair.secret_key_b64)?;
 
+        let run_name = "llm-run";
+        let proof_mode = RunProofMode::Exact;
+        let seed = 5_u64;
+        let token_budget = 10_000_u64;
+        let default_model = "llama3";
         let prompt_json = "{\"prompt\":\"Say hello\"}".to_string();
-        let spec = RunSpec {
-            project_id: project_id.to_string(),
-            name: "llm-run".to_string(),
-            seed: 5,
-            token_budget: 10_000,
-            model: "llama3".to_string(),
-            steps: vec![RunStepTemplate {
-                model: "llama3".to_string(),
-                prompt: prompt_json.clone(),
-                token_budget: 10_000,
-                order_index: Some(0),
-                checkpoint_type: "Step".to_string(),
-                proof_mode: RunProofMode::Exact,
-            }],
-            proof_mode: RunProofMode::Exact,
+        let step_template = RunStepTemplate {
+            model: default_model.to_string(),
+            prompt: prompt_json.clone(),
+            token_budget,
+            order_index: Some(0),
+            checkpoint_type: "Step".to_string(),
+            proof_mode,
             epsilon: None,
         };
 
         let mock_client = RecordingLlmClient::new(
-            spec.model.clone(),
+            default_model.to_string(),
             prompt_json.clone(),
             "Hello from mock".to_string(),
             TokenUsage {
@@ -2061,20 +2098,57 @@ mod tests {
             },
         );
 
-        let run_id = start_hello_run_with_client(&pool, spec.clone(), &mock_client)?;
+        let run_id = start_hello_run_with_client(
+            &pool,
+            project_id,
+            run_name,
+            proof_mode,
+            None,
+            seed,
+            token_budget,
+            default_model,
+            vec![step_template.clone()],
+            &mock_client,
+        )?;
 
         assert_eq!(*mock_client.calls.lock().unwrap(), 1);
 
         let conn = pool.get()?;
-        let stored_spec: RunSpec = conn.query_row(
-            "SELECT spec_json FROM runs WHERE id = ?1",
+        let (default_model_db, proof_mode_db, epsilon_db, seed_db, token_budget_db): (
+            String,
+            String,
+            Option<f64>,
+            i64,
+            i64,
+        ) = conn.query_row(
+            "SELECT default_model, proof_mode, epsilon, seed, token_budget FROM runs WHERE id = ?1",
             params![&run_id],
             |row| {
-                let payload: String = row.get(0)?;
-                Ok(serde_json::from_str(&payload)?)
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             },
         )?;
-        assert_eq!(stored_spec.model, "llama3");
+        assert_eq!(default_model_db, default_model);
+        assert_eq!(proof_mode_db, proof_mode.as_str());
+        assert_eq!(epsilon_db, None);
+        assert_eq!(seed_db as u64, seed);
+        assert_eq!(token_budget_db as u64, token_budget);
+
+        let stored_step: (String, String, i64, String, Option<f64>) = conn.query_row(
+            "SELECT model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE run_id = ?1",
+            params![&run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )?;
+        assert_eq!(stored_step.0, step_template.model);
+        assert_eq!(stored_step.1, step_template.prompt);
+        assert_eq!(stored_step.2.max(0) as u64, token_budget);
+        assert_eq!(stored_step.3, proof_mode.as_str());
+        assert_eq!(stored_step.4, None);
 
         let (
             inputs_sha,
@@ -2141,27 +2215,23 @@ mod tests {
         }
 
         let project = api::create_project_with_pool("Interactive Start".into(), &pool)?;
-        let spec = RunSpec {
-            project_id: project.id.clone(),
-            name: "interactive-start".to_string(),
-            seed: 99,
-            token_budget: 5_000,
-            model: STUB_MODEL_ID.to_string(),
-            steps: vec![RunStepTemplate {
-                model: STUB_MODEL_ID.to_string(),
-                prompt: "Interact with the operator".to_string(),
-                token_budget: 1_000,
-                order_index: Some(0),
-                checkpoint_type: "InteractiveChat".to_string(),
-                proof_mode: RunProofMode::Exact,
-            }],
-            proof_mode: RunProofMode::Exact,
+        let run_name = "interactive-start";
+        let proof_mode = RunProofMode::Exact;
+        let seed = 99_u64;
+        let token_budget = 5_000_u64;
+        let default_model = STUB_MODEL_ID;
+        let step_template = RunStepTemplate {
+            model: default_model.to_string(),
+            prompt: "Interact with the operator".to_string(),
+            token_budget: 1_000,
+            order_index: Some(0),
+            checkpoint_type: "InteractiveChat".to_string(),
+            proof_mode,
             epsilon: None,
         };
-        let spec_clone = spec.clone();
 
         let start_client = RecordingLlmClient::new(
-            spec.model.clone(),
+            default_model.to_string(),
             String::new(),
             "unused".to_string(),
             TokenUsage {
@@ -2170,18 +2240,51 @@ mod tests {
             },
         );
 
-        let run_id = start_hello_run_with_client(&pool, spec, &start_client)?;
+        let run_id = start_hello_run_with_client(
+            &pool,
+            &project.id,
+            run_name,
+            proof_mode,
+            None,
+            seed,
+            token_budget,
+            default_model,
+            vec![step_template.clone()],
+            &start_client,
+        )?;
         assert_eq!(*start_client.calls.lock().unwrap(), 0);
 
         let conn = pool.get()?;
-        let (kind, stored_spec_json, checkpoint_count): (String, String, i64) = conn.query_row(
-            "SELECT kind, spec_json, (SELECT COUNT(*) FROM checkpoints WHERE run_id = runs.id) FROM runs WHERE id = ?1",
+        let (
+            default_model_db,
+            proof_mode_db,
+            epsilon_db,
+            seed_db,
+            token_budget_db,
+            checkpoint_count,
+        ): (String, String, Option<f64>, i64, i64, i64) = conn.query_row(
+            concat!(
+                "SELECT default_model, proof_mode, epsilon, seed, token_budget, ",
+                "(SELECT COUNT(*) FROM checkpoints WHERE run_id = runs.id) ",
+                "FROM runs WHERE id = ?1"
+            ),
             params![&run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )?;
-        assert_eq!(kind, "exact");
-        let stored_spec: RunSpec = serde_json::from_str(&stored_spec_json)?;
-        assert_eq!(stored_spec, spec_clone);
+        assert_eq!(default_model_db, default_model);
+        assert_eq!(proof_mode_db, proof_mode.as_str());
+        assert_eq!(epsilon_db, None);
+        assert_eq!(seed_db as u64, seed);
+        assert_eq!(token_budget_db as u64, token_budget);
         assert_eq!(checkpoint_count, 0);
 
         let config_count: i64 = conn.query_row(
@@ -2210,21 +2313,17 @@ mod tests {
         let project = api::create_project_with_pool("Interactive Submit".into(), &pool)?;
         let chat_prompt = "You are a meticulous co-pilot.".to_string();
         let run_model = "stub-model".to_string();
-        let run_spec = RunSpec {
-            project_id: project.id.clone(),
-            name: "interactive-run".into(),
-            seed: 0,
-            token_budget: 10_000,
+        let run_name = "interactive-run";
+        let proof_mode = RunProofMode::Exact;
+        let seed = 0_u64;
+        let token_budget = 10_000_u64;
+        let step_template = RunStepTemplate {
             model: run_model.clone(),
-            steps: vec![RunStepTemplate {
-                model: run_model.clone(),
-                prompt: chat_prompt.clone(),
-                token_budget: 10_000,
-                order_index: Some(0),
-                checkpoint_type: "InteractiveChat".to_string(),
-                proof_mode: RunProofMode::Exact,
-            }],
-            proof_mode: RunProofMode::Exact,
+            prompt: chat_prompt.clone(),
+            token_budget,
+            order_index: Some(0),
+            checkpoint_type: "InteractiveChat".to_string(),
+            proof_mode,
             epsilon: None,
         };
 
@@ -2238,7 +2337,18 @@ mod tests {
             },
         );
 
-        let run_id = start_hello_run_with_client(&pool, run_spec.clone(), &start_client)?;
+        let run_id = start_hello_run_with_client(
+            &pool,
+            &project.id,
+            run_name,
+            proof_mode,
+            None,
+            seed,
+            token_budget,
+            &run_model,
+            vec![step_template.clone()],
+            &start_client,
+        )?;
         assert_eq!(*start_client.calls.lock().unwrap(), 0);
 
         let config_id: String = {
@@ -2374,22 +2484,17 @@ mod tests {
         let project = api::create_project_with_pool("Interactive Budget Gate".into(), &pool)?;
         let chat_prompt = "Keep responses concise.".to_string();
         let run_model = STUB_MODEL_ID.to_string();
-        let token_budget = 10;
-        let run_spec = RunSpec {
-            project_id: project.id.clone(),
-            name: "interactive-budget".into(),
-            seed: 0,
-            token_budget,
+        let run_name = "interactive-budget";
+        let proof_mode = RunProofMode::Exact;
+        let seed = 0_u64;
+        let token_budget = 10_u64;
+        let step_template = RunStepTemplate {
             model: run_model.clone(),
-            steps: vec![RunStepTemplate {
-                model: run_model.clone(),
-                prompt: chat_prompt.clone(),
-                token_budget,
-                order_index: Some(0),
-                checkpoint_type: "InteractiveChat".to_string(),
-                proof_mode: RunProofMode::Exact,
-            }],
-            proof_mode: RunProofMode::Exact,
+            prompt: chat_prompt.clone(),
+            token_budget,
+            order_index: Some(0),
+            checkpoint_type: "InteractiveChat".to_string(),
+            proof_mode,
             epsilon: None,
         };
 
@@ -2402,7 +2507,18 @@ mod tests {
                 completion_tokens: 0,
             },
         );
-        let run_id = start_hello_run_with_client(&pool, run_spec, &start_client)?;
+        let run_id = start_hello_run_with_client(
+            &pool,
+            &project.id,
+            run_name,
+            proof_mode,
+            None,
+            seed,
+            token_budget,
+            &run_model,
+            vec![step_template.clone()],
+            &start_client,
+        )?;
         assert_eq!(*start_client.calls.lock().unwrap(), 0);
 
         let config_id: String = {
@@ -2491,21 +2607,17 @@ mod tests {
         let project = api::create_project_with_pool("Interactive Finalize".into(), &pool)?;
         let chat_prompt = "Act as a careful reviewer.".to_string();
         let run_model = STUB_MODEL_ID.to_string();
-        let run_spec = RunSpec {
-            project_id: project.id.clone(),
-            name: "interactive-finalize".into(),
-            seed: 1,
-            token_budget: 5_000,
+        let run_name = "interactive-finalize";
+        let proof_mode = RunProofMode::Exact;
+        let seed = 1_u64;
+        let token_budget = 5_000_u64;
+        let step_template = RunStepTemplate {
             model: run_model.clone(),
-            steps: vec![RunStepTemplate {
-                model: run_model.clone(),
-                prompt: chat_prompt.clone(),
-                token_budget: 5_000,
-                order_index: Some(0),
-                checkpoint_type: "InteractiveChat".to_string(),
-                proof_mode: RunProofMode::Exact,
-            }],
-            proof_mode: RunProofMode::Exact,
+            prompt: chat_prompt.clone(),
+            token_budget,
+            order_index: Some(0),
+            checkpoint_type: "InteractiveChat".to_string(),
+            proof_mode,
             epsilon: None,
         };
 
@@ -2518,7 +2630,18 @@ mod tests {
                 completion_tokens: 0,
             },
         );
-        let run_id = start_hello_run_with_client(&pool, run_spec, &start_client)?;
+        let run_id = start_hello_run_with_client(
+            &pool,
+            &project.id,
+            run_name,
+            proof_mode,
+            None,
+            seed,
+            token_budget,
+            &run_model,
+            vec![step_template.clone()],
+            &start_client,
+        )?;
         assert_eq!(*start_client.calls.lock().unwrap(), 0);
 
         let config_id: String = {
