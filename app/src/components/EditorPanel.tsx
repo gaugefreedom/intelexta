@@ -1337,7 +1337,13 @@ export default function EditorPanel({
                 {configsLoading ? (
                   <div style={{ color: "#9cdcfe" }}>Loading checkpoint configurations…</div>
                 ) : checkpointConfigs.length > 0 ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "10px",
+                    maxHeight: '40vh', // Limit the height
+                    overflowY: 'auto', // Add scrollbar when needed
+                  }}>
                     {checkpointConfigs.map((config, index) => (
                       <CheckpointListItem
                         key={config.id}
