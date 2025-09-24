@@ -1,3 +1,4 @@
+-- V9__rename_run_checkpoints_to_run_steps.sql
 PRAGMA foreign_keys=OFF;
 
 DROP INDEX IF EXISTS idx_run_checkpoints_order;
