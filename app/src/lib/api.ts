@@ -148,7 +148,7 @@ export interface RunCostEstimates {
   exceedsGCo2e: boolean;
 }
 
-export interface RunCheckpointConfig {
+export interface RunStepConfig {
   id: string;
   runId: string;
   orderIndex: number;
@@ -157,10 +157,11 @@ export interface RunCheckpointConfig {
   prompt: string;
   tokenBudget: number;
   proofMode: RunProofMode;
+  epsilon?: number | null;
 }
 
 export interface InteractiveCheckpointSession {
-  checkpoint: RunCheckpointConfig;
+  checkpoint: RunStepConfig;
   messages: CheckpointSummary[];
 }
 
@@ -180,13 +181,14 @@ export type FinalizeInteractiveCheckpoint = (
   checkpointId: string,
 ) => Promise<void>;
 
-export interface CheckpointConfigRequest {
+export interface RunStepRequest {
   model: string;
   prompt: string;
   tokenBudget: number;
   checkpointType?: string;
   orderIndex?: number;
   proofMode?: RunProofMode;
+  epsilon?: number | null;
 }
 
 export interface HelloRunSpec {
@@ -266,41 +268,41 @@ export async function getCheckpointDetails(
   });
 }
 
-export async function listRunCheckpointConfigs(
+export async function listRunSteps(
   runId: string,
-): Promise<RunCheckpointConfig[]> {
-  return await invoke<RunCheckpointConfig[]>('list_run_checkpoint_configs', { runId });
+): Promise<RunStepConfig[]> {
+  return await invoke<RunStepConfig[]>('list_run_steps', { runId });
 }
 
-export async function createCheckpointConfig(
+export async function createRunStep(
   runId: string,
-  config: CheckpointConfigRequest,
-): Promise<RunCheckpointConfig> {
-  return await invoke<RunCheckpointConfig>('create_checkpoint_config', {
+  config: RunStepRequest,
+): Promise<RunStepConfig> {
+  return await invoke<RunStepConfig>('create_run_step', {
     runId,
     config,
   });
 }
 
-export async function updateCheckpointConfig(
+export async function updateRunStep(
   checkpointId: string,
-  updates: Partial<CheckpointConfigRequest> & { checkpointType?: string },
-): Promise<RunCheckpointConfig> {
-  return await invoke<RunCheckpointConfig>('update_checkpoint_config', {
+  updates: Partial<RunStepRequest> & { checkpointType?: string },
+): Promise<RunStepConfig> {
+  return await invoke<RunStepConfig>('update_run_step', {
     checkpointId,
     updates,
   });
 }
 
-export async function deleteCheckpointConfig(checkpointId: string): Promise<void> {
-  await invoke('delete_checkpoint_config', { checkpointId });
+export async function deleteRunStep(checkpointId: string): Promise<void> {
+  await invoke('delete_run_step', { checkpointId });
 }
 
-export async function reorderCheckpointConfigs(
+export async function reorderRunSteps(
   runId: string,
   checkpointIds: string[],
-): Promise<RunCheckpointConfig[]> {
-  return await invoke<RunCheckpointConfig[]>('reorder_checkpoint_configs', {
+): Promise<RunStepConfig[]> {
+  return await invoke<RunStepConfig[]>('reorder_run_steps', {
     runId,
     checkpointIds,
   });

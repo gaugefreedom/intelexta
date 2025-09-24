@@ -54,7 +54,7 @@ pub struct CheckpointReplayReport {
 }
 
 impl CheckpointReplayReport {
-    fn new(config: &orchestrator::RunCheckpointConfig, mode: CheckpointReplayMode) -> Self {
+    fn new(config: &orchestrator::RunStep, mode: CheckpointReplayMode) -> Self {
         Self {
             checkpoint_config_id: Some(config.id.clone()),
             checkpoint_type: Some(config.checkpoint_type.clone()),
@@ -71,7 +71,7 @@ impl CheckpointReplayReport {
         }
     }
 
-    fn for_interactive_config(config: &orchestrator::RunCheckpointConfig) -> Self {
+    fn for_interactive_config(config: &orchestrator::RunStep) -> Self {
         Self {
             checkpoint_config_id: Some(config.id.clone()),
             checkpoint_type: Some(config.checkpoint_type.clone()),
@@ -182,10 +182,7 @@ impl ReplayReport {
     }
 }
 
-fn simulate_stub_checkpoint(
-    run_seed: u64,
-    config: &orchestrator::RunCheckpointConfig,
-) -> (String, String) {
+fn simulate_stub_checkpoint(run_seed: u64, config: &orchestrator::RunStep) -> (String, String) {
     let mut output = b"hello".to_vec();
     output.extend_from_slice(&run_seed.to_le_bytes());
     output.extend_from_slice(&config.order_index.to_le_bytes());
@@ -215,7 +212,7 @@ fn load_checkpoint_digests(
 pub(crate) fn replay_exact_checkpoint(
     run: &orchestrator::StoredRun,
     conn: &rusqlite::Connection,
-    config: &orchestrator::RunCheckpointConfig,
+    config: &orchestrator::RunStep,
 ) -> Result<CheckpointReplayReport> {
     let mut report = CheckpointReplayReport::new(config, CheckpointReplayMode::Exact);
 
@@ -253,11 +250,12 @@ pub(crate) fn replay_exact_checkpoint(
 pub(crate) fn replay_concordant_checkpoint(
     run: &orchestrator::StoredRun,
     conn: &rusqlite::Connection,
-    config: &orchestrator::RunCheckpointConfig,
+    config: &orchestrator::RunStep,
 ) -> Result<CheckpointReplayReport> {
-    let epsilon = run
+    let epsilon = config
         .epsilon
-        .ok_or_else(|| anyhow!("concordant run missing epsilon"))?;
+        .or(run.epsilon)
+        .ok_or_else(|| anyhow!("concordant step missing epsilon"))?;
 
     let mut report = CheckpointReplayReport::new(config, CheckpointReplayMode::Concordant);
     report.epsilon = Some(epsilon);
@@ -339,7 +337,7 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
     };
 
     let has_concordant = stored_run
-        .checkpoints
+        .steps
         .iter()
         .filter(|cfg| !cfg.is_interactive_chat())
         .any(|cfg| matches!(cfg.proof_mode, RunProofMode::Concordant));
@@ -360,7 +358,7 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
     }
 
     let mut checkpoint_reports = Vec::new();
-    for config in &stored_run.checkpoints {
+    for config in &stored_run.steps {
         if config.is_interactive_chat() {
             continue;
         }
@@ -466,18 +464,20 @@ mod tests {
         let project = api::create_project_with_pool("Replay Interactive".into(), &pool)?;
         let chat_prompt = "Keep the conversation brief.".to_string();
         let run_model = "stub-model".to_string();
-        let spec = RunSpec {
+        let spec = orchestrator::RunSpec {
             project_id: project.id.clone(),
             name: "interactive-replay".into(),
             seed: 0,
             token_budget: 10_000,
             model: run_model.clone(),
-            checkpoints: vec![orchestrator::RunCheckpointTemplate {
+            steps: vec![orchestrator::RunStepTemplate {
                 model: run_model.clone(),
                 prompt: chat_prompt.clone(),
                 token_budget: 10_000,
                 order_index: Some(0),
                 checkpoint_type: "InteractiveChat".to_string(),
+                proof_mode: RunProofMode::Exact,
+                epsilon: None,
             }],
             proof_mode: RunProofMode::Exact,
             epsilon: None,
@@ -489,7 +489,7 @@ mod tests {
         let config_id: String = {
             let conn = pool.get()?;
             conn.query_row(
-                "SELECT id FROM run_checkpoints WHERE run_id = ?1",
+                "SELECT id FROM run_steps WHERE run_id = ?1",
                 params![&run_id],
                 |row| row.get(0),
             )?
@@ -559,7 +559,7 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
     };
 
     let has_concordant = stored_run
-        .checkpoints
+        .steps
         .iter()
         .filter(|cfg| !cfg.is_interactive_chat())
         .any(|cfg| matches!(cfg.proof_mode, RunProofMode::Concordant));
@@ -579,21 +579,13 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
         });
     }
 
-    let epsilon = stored_run
-        .epsilon
-        .ok_or_else(|| anyhow!("concordant run missing epsilon"))?;
-
     let mut checkpoint_reports = Vec::new();
-    for config in &stored_run.checkpoints {
+    for config in &stored_run.steps {
         if config.is_interactive_chat() {
             continue;
         }
         let entry = if matches!(config.proof_mode, RunProofMode::Concordant) {
-            let mut report = replay_concordant_checkpoint(&stored_run, &conn, config)?;
-            if report.epsilon.is_none() {
-                report.epsilon = Some(epsilon);
-            }
-            report
+            replay_concordant_checkpoint(&stored_run, &conn, config)?
         } else {
             replay_exact_checkpoint(&stored_run, &conn, config)?
         };
@@ -697,8 +689,8 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
             });
         }
     };
-    let config_map: HashMap<String, orchestrator::RunCheckpointConfig> = stored_run
-        .checkpoints
+    let config_map: HashMap<String, orchestrator::RunStep> = stored_run
+        .steps
         .iter()
         .map(|cfg| (cfg.id.clone(), cfg.clone()))
         .collect();

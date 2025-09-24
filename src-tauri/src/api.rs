@@ -77,7 +77,7 @@ pub fn create_run(
         seed,
         token_budget,
         model: default_model,
-        checkpoints: Vec::new(),
+        steps: Vec::new(),
         proof_mode,
         epsilon,
     };
@@ -87,7 +87,7 @@ pub fn create_run(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CheckpointConfigRequest {
+pub struct RunStepRequest {
     pub model: String,
     pub prompt: String,
     pub token_budget: u64,
@@ -97,16 +97,19 @@ pub struct CheckpointConfigRequest {
     pub order_index: Option<i64>,
     #[serde(default)]
     pub proof_mode: orchestrator::RunProofMode,
+    #[serde(default)]
+    pub epsilon: Option<f64>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UpdateCheckpointConfigRequest {
+pub struct UpdateRunStepRequest {
     pub model: Option<String>,
     pub prompt: Option<String>,
     pub token_budget: Option<u64>,
     pub checkpoint_type: Option<String>,
     pub proof_mode: Option<orchestrator::RunProofMode>,
+    pub epsilon: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -141,13 +144,14 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
         seed: spec.seed,
         token_budget: spec.token_budget,
         model: spec.model.clone(),
-        checkpoints: vec![orchestrator::RunCheckpointTemplate {
+        steps: vec![orchestrator::RunStepTemplate {
             model: spec.model,
             prompt: spec.dag_json,
             token_budget: spec.token_budget,
             order_index: Some(0),
             checkpoint_type: "Step".to_string(),
             proof_mode: spec.proof_mode,
+            epsilon: spec.epsilon,
         }],
         proof_mode: spec.proof_mode,
         epsilon: spec.epsilon,
@@ -177,13 +181,25 @@ pub struct RunSummary {
 }
 
 fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
+    let spec_json: String = row.get(3)?;
+    let spec: orchestrator::RunSpec = serde_json::from_str(&spec_json)
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err)))?;
+    let has_concordant_step = spec
+        .steps
+        .iter()
+        .any(|template| template.proof_mode.is_concordant());
+    let kind = if spec.proof_mode.is_concordant() || has_concordant_step {
+        "concordant".to_string()
+    } else {
+        "exact".to_string()
+    };
     Ok(RunSummary {
         id: row.get(0)?,
         name: row.get(1)?,
         created_at: row.get(2)?,
-        kind: row.get(3)?,
-        epsilon: row.get(4)?,
-        has_persisted_checkpoint: row.get(5)?,
+        kind,
+        epsilon: spec.epsilon,
+        has_persisted_checkpoint: row.get(4)?,
     })
 }
 
@@ -191,7 +207,7 @@ fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> 
 pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT r.id, r.name, r.created_at, r.kind, r.epsilon, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
+        "SELECT r.id, r.name, r.created_at, r.spec_json, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
     )?;
     let runs_iter = stmt.query_map(params![project_id], hydrate_run_summary)?;
     let mut runs = Vec::new();
@@ -204,7 +220,7 @@ pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSumma
 fn load_run_summary(conn: &Connection, run_id: &str) -> Result<RunSummary, Error> {
     let summary = conn
         .query_row(
-            "SELECT r.id, r.name, r.created_at, r.kind, r.epsilon, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.id = ?1",
+            "SELECT r.id, r.name, r.created_at, r.spec_json, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.id = ?1",
             params![run_id],
             hydrate_run_summary,
         )
@@ -272,7 +288,7 @@ pub struct CheckpointDetails {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InteractiveCheckpointSession {
-    pub checkpoint: orchestrator::RunCheckpointConfig,
+    pub checkpoint: orchestrator::RunStep,
     pub messages: Vec<CheckpointSummary>,
 }
 
@@ -319,7 +335,7 @@ pub fn open_interactive_checkpoint_session(
     pool: State<DbPool>,
 ) -> Result<InteractiveCheckpointSession, Error> {
     let conn = pool.get()?;
-    let config = load_checkpoint_config(&conn, &checkpoint_id)?;
+    let config = load_run_step(&conn, &checkpoint_id)?;
 
     if config.run_id != run_id {
         return Err(Error::Api(
@@ -531,13 +547,10 @@ pub fn finalize_interactive_checkpoint(
         .map_err(|err| Error::Api(err.to_string()))
 }
 
-fn load_checkpoint_config(
-    conn: &Connection,
-    checkpoint_id: &str,
-) -> Result<orchestrator::RunCheckpointConfig, Error> {
-    let row: Option<(String, i64, String, String, String, i64, String)> = conn
+fn load_run_step(conn: &Connection, checkpoint_id: &str) -> Result<orchestrator::RunStep, Error> {
+    let row: Option<(String, i64, String, String, String, i64, String, Option<f64>)> = conn
         .query_row(
-            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE id = ?1",
+            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE id = ?1",
             params![checkpoint_id],
             |row| Ok((
                 row.get(0)?,
@@ -547,12 +560,21 @@ fn load_checkpoint_config(
                 row.get(4)?,
                 row.get(5)?,
                 row.get(6)?,
+                row.get(7)?,
             )),
         )
         .optional()?;
 
-    let (run_id, order_index, checkpoint_type, model, prompt, token_budget_raw, proof_mode_raw) =
-        row.ok_or_else(|| Error::Api(format!("checkpoint config {checkpoint_id} not found")))?;
+    let (
+        run_id,
+        order_index,
+        checkpoint_type,
+        model,
+        prompt,
+        token_budget_raw,
+        proof_mode_raw,
+        epsilon,
+    ) = row.ok_or_else(|| Error::Api(format!("checkpoint config {checkpoint_id} not found")))?;
 
     let proof_mode =
         orchestrator::RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
@@ -563,7 +585,7 @@ fn load_checkpoint_config(
             ))
         })?;
 
-    Ok(orchestrator::RunCheckpointConfig {
+    Ok(orchestrator::RunStep {
         id: checkpoint_id.to_string(),
         run_id,
         order_index,
@@ -572,6 +594,7 @@ fn load_checkpoint_config(
         prompt,
         token_budget: token_budget_raw.max(0) as u64,
         proof_mode,
+        epsilon,
     })
 }
 
@@ -713,20 +736,20 @@ pub(crate) fn replay_run_with_pool(
 }
 
 #[tauri::command]
-pub fn list_run_checkpoint_configs(
+pub fn list_run_steps(
     run_id: String,
     pool: State<DbPool>,
-) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
-    list_run_checkpoint_configs_with_pool(run_id, pool.inner())
+) -> Result<Vec<orchestrator::RunStep>, Error> {
+    list_run_steps_with_pool(run_id, pool.inner())
 }
 
-pub(crate) fn list_run_checkpoint_configs_with_pool(
+pub(crate) fn list_run_steps_with_pool(
     run_id: String,
     pool: &DbPool,
-) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
+) -> Result<Vec<orchestrator::RunStep>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+        "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
     )?;
     let rows = stmt.query_map(params![&run_id], |row| {
         let token_budget: i64 = row.get(6)?;
@@ -739,7 +762,7 @@ pub(crate) fn list_run_checkpoint_configs_with_pool(
                     Box::new(err),
                 )
             })?;
-        Ok(orchestrator::RunCheckpointConfig {
+        Ok(orchestrator::RunStep {
             id: row.get(0)?,
             run_id: row.get(1)?,
             order_index: row.get(2)?,
@@ -748,6 +771,7 @@ pub(crate) fn list_run_checkpoint_configs_with_pool(
             prompt: row.get(5)?,
             token_budget: token_budget.max(0) as u64,
             proof_mode,
+            epsilon: row.get(8)?,
         })
     })?;
 
@@ -760,11 +784,11 @@ pub(crate) fn list_run_checkpoint_configs_with_pool(
 }
 
 #[tauri::command]
-pub fn create_checkpoint_config(
+pub fn create_run_step(
     run_id: String,
-    config: CheckpointConfigRequest,
+    config: RunStepRequest,
     pool: State<DbPool>,
-) -> Result<orchestrator::RunCheckpointConfig, Error> {
+) -> Result<orchestrator::RunStep, Error> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
 
@@ -780,28 +804,41 @@ pub fn create_checkpoint_config(
     let checkpoint_type = config.checkpoint_type.unwrap_or_else(|| "Step".to_string());
     let order_index = if let Some(index) = config.order_index {
         tx.execute(
-            "UPDATE run_checkpoints SET order_index = order_index + 1, updated_at = CURRENT_TIMESTAMP WHERE run_id = ?1 AND order_index >= ?2",
+            "UPDATE run_steps SET order_index = order_index + 1, updated_at = CURRENT_TIMESTAMP WHERE run_id = ?1 AND order_index >= ?2",
             params![&run_id, index],
         )?;
         index
     } else {
         tx.query_row(
-            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM run_checkpoints WHERE run_id = ?1",
+            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM run_steps WHERE run_id = ?1",
             params![&run_id],
             |row| row.get::<_, i64>(0),
         )?
     };
 
     let checkpoint_id = Uuid::new_v4().to_string();
-    let CheckpointConfigRequest {
+    let RunStepRequest {
         model,
         prompt,
         token_budget,
         proof_mode,
+        epsilon,
         ..
     } = config;
+    let epsilon = if proof_mode.is_concordant() {
+        let value =
+            epsilon.ok_or_else(|| Error::Api("concordant steps require an epsilon".to_string()))?;
+        if !value.is_finite() || value < 0.0 {
+            return Err(Error::Api(
+                "epsilon must be a finite, non-negative value".to_string(),
+            ));
+        }
+        Some(value)
+    } else {
+        None
+    };
     tx.execute(
-        "INSERT INTO run_checkpoints (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             &checkpoint_id,
             &run_id,
@@ -811,12 +848,13 @@ pub fn create_checkpoint_config(
             &prompt,
             (token_budget as i64),
             proof_mode.as_str(),
+            epsilon,
         ],
     )?;
 
     tx.commit()?;
 
-    Ok(orchestrator::RunCheckpointConfig {
+    Ok(orchestrator::RunStep {
         id: checkpoint_id,
         run_id,
         order_index,
@@ -825,18 +863,19 @@ pub fn create_checkpoint_config(
         prompt,
         token_budget,
         proof_mode,
+        epsilon,
     })
 }
 
 #[tauri::command]
-pub fn update_checkpoint_config(
+pub fn update_run_step(
     checkpoint_id: String,
-    updates: UpdateCheckpointConfigRequest,
+    updates: UpdateRunStepRequest,
     pool: State<DbPool>,
-) -> Result<orchestrator::RunCheckpointConfig, Error> {
+) -> Result<orchestrator::RunStep, Error> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
-    let mut config = load_checkpoint_config(&tx, &checkpoint_id)?;
+    let mut config = load_run_step(&tx, &checkpoint_id)?;
 
     if let Some(model) = updates.model {
         config.model = model;
@@ -853,15 +892,32 @@ pub fn update_checkpoint_config(
     if let Some(mode) = updates.proof_mode {
         config.proof_mode = mode;
     }
+    if let Some(epsilon) = updates.epsilon {
+        config.epsilon = Some(epsilon);
+    }
+    if config.proof_mode.is_concordant() {
+        let value = config
+            .epsilon
+            .ok_or_else(|| Error::Api("concordant steps require an epsilon".to_string()))?;
+        if !value.is_finite() || value < 0.0 {
+            return Err(Error::Api(
+                "epsilon must be a finite, non-negative value".to_string(),
+            ));
+        }
+        config.epsilon = Some(value);
+    } else {
+        config.epsilon = None;
+    }
 
     tx.execute(
-        "UPDATE run_checkpoints SET model = ?1, prompt = ?2, token_budget = ?3, checkpoint_type = ?4, proof_mode = ?5, updated_at = CURRENT_TIMESTAMP WHERE id = ?6",
+        "UPDATE run_steps SET model = ?1, prompt = ?2, token_budget = ?3, checkpoint_type = ?4, proof_mode = ?5, epsilon = ?6, updated_at = CURRENT_TIMESTAMP WHERE id = ?7",
         params![
             &config.model,
             &config.prompt,
             (config.token_budget as i64),
             &config.checkpoint_type,
             config.proof_mode.as_str(),
+            config.epsilon,
             &checkpoint_id,
         ],
     )?;
@@ -871,13 +927,13 @@ pub fn update_checkpoint_config(
 }
 
 #[tauri::command]
-pub fn delete_checkpoint_config(checkpoint_id: String, pool: State<DbPool>) -> Result<(), Error> {
+pub fn delete_run_step(checkpoint_id: String, pool: State<DbPool>) -> Result<(), Error> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
 
     let row: Option<(String, i64)> = tx
         .query_row(
-            "SELECT run_id, order_index FROM run_checkpoints WHERE id = ?1",
+            "SELECT run_id, order_index FROM run_steps WHERE id = ?1",
             params![&checkpoint_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -887,11 +943,11 @@ pub fn delete_checkpoint_config(checkpoint_id: String, pool: State<DbPool>) -> R
         row.ok_or_else(|| Error::Api(format!("checkpoint config {checkpoint_id} not found")))?;
 
     tx.execute(
-        "DELETE FROM run_checkpoints WHERE id = ?1",
+        "DELETE FROM run_steps WHERE id = ?1",
         params![&checkpoint_id],
     )?;
     tx.execute(
-        "UPDATE run_checkpoints SET order_index = order_index - 1, updated_at = CURRENT_TIMESTAMP WHERE run_id = ?1 AND order_index > ?2",
+        "UPDATE run_steps SET order_index = order_index - 1, updated_at = CURRENT_TIMESTAMP WHERE run_id = ?1 AND order_index > ?2",
         params![&run_id, order_index],
     )?;
 
@@ -900,26 +956,26 @@ pub fn delete_checkpoint_config(checkpoint_id: String, pool: State<DbPool>) -> R
 }
 
 #[tauri::command]
-pub fn reorder_checkpoint_configs(
+pub fn reorder_run_steps(
     run_id: String,
     checkpoint_ids: Vec<String>,
     pool: State<DbPool>,
-) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
-    reorder_checkpoint_configs_with_pool(run_id, checkpoint_ids, pool.inner())
+) -> Result<Vec<orchestrator::RunStep>, Error> {
+    reorder_run_steps_with_pool(run_id, checkpoint_ids, pool.inner())
 }
 
-pub(crate) fn reorder_checkpoint_configs_with_pool(
+pub(crate) fn reorder_run_steps_with_pool(
     run_id: String,
     checkpoint_ids: Vec<String>,
     pool: &DbPool,
-) -> Result<Vec<orchestrator::RunCheckpointConfig>, Error> {
+) -> Result<Vec<orchestrator::RunStep>, Error> {
     {
         let mut conn = pool.get()?;
         let tx = conn.transaction()?;
 
         let existing: Vec<(String, i64)> = {
             let mut existing_stmt = tx.prepare(
-                "SELECT id, order_index FROM run_checkpoints WHERE run_id = ?1 ORDER BY order_index ASC",
+                "SELECT id, order_index FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
             )?;
             let existing_rows = existing_stmt.query_map(params![&run_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -954,14 +1010,14 @@ pub(crate) fn reorder_checkpoint_configs_with_pool(
 
         for (index, checkpoint_id) in checkpoint_ids.iter().enumerate() {
             tx.execute(
-                "UPDATE run_checkpoints SET order_index = ?1 WHERE id = ?2",
+                "UPDATE run_steps SET order_index = ?1 WHERE id = ?2",
                 params![temporary_offset + index as i64, checkpoint_id],
             )?;
         }
 
         for (index, checkpoint_id) in checkpoint_ids.iter().enumerate() {
             tx.execute(
-                "UPDATE run_checkpoints SET order_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                "UPDATE run_steps SET order_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
                 params![index as i64, checkpoint_id],
             )?;
         }
@@ -969,7 +1025,7 @@ pub(crate) fn reorder_checkpoint_configs_with_pool(
         tx.commit()?;
     }
 
-    list_run_checkpoint_configs_with_pool(run_id, pool)
+    list_run_steps_with_pool(run_id, pool)
 }
 
 #[tauri::command]

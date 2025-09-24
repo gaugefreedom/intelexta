@@ -10,6 +10,7 @@ const MIGRATION_SCRIPTS: &[&str] = &[
     include_str!("migrations/V6__add_checkpoint_config_reference.sql"),
     include_str!("migrations/V7__create_checkpoint_payloads.sql"),
     include_str!("migrations/V8__add_proof_mode_to_run_checkpoints.sql"),
+    include_str!("migrations/V9__rename_run_checkpoints_to_run_steps.sql"),
 ];
 
 pub fn runner() -> Migrations<'static> {

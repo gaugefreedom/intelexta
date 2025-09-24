@@ -1,15 +1,15 @@
 import React from "react";
-import { RunCheckpointConfig } from "../lib/api";
+import { RunStepConfig } from "../lib/api";
 
 interface CheckpointListItemProps {
-  config: RunCheckpointConfig;
-  onEdit: (config: RunCheckpointConfig) => void;
-  onDelete: (config: RunCheckpointConfig) => void;
+  config: RunStepConfig;
+  onEdit: (config: RunStepConfig) => void;
+  onDelete: (config: RunStepConfig) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   isFirst: boolean;
   isLast: boolean;
-  onOpenInteractive?: (config: RunCheckpointConfig) => void;
+  onOpenInteractive?: (config: RunStepConfig) => void;
 }
 
 function truncatePrompt(value: string, length = 160): string {
@@ -72,6 +72,11 @@ export default function CheckpointListItem({
         <span>
           <strong>Proof Mode:</strong> {config.proofMode === "concordant" ? "Concordant" : "Exact"}
         </span>
+        {config.proofMode === "concordant" && (
+          <span>
+            <strong>Epsilon:</strong> {typeof config.epsilon === "number" ? config.epsilon.toFixed(3) : "—"}
+          </span>
+        )}
       </div>
       <div style={{ fontSize: "0.85rem", color: "#c8c8c8" }}>{promptPreview}</div>
       <div style={{ display: "flex", gap: "8px" }}>
