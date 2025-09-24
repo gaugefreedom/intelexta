@@ -17,7 +17,6 @@ interface CheckpointEditorProps {
   onSubmit: (value: CheckpointFormValue) => Promise<void> | void;
   onCancel: () => void;
   submitting?: boolean;
-  runEpsilon?: number | null;
 }
 
 function sanitizeLabel(value: string): string {
@@ -48,6 +47,21 @@ export function concordantSubmissionAllowed(
   return isValidNormalizedEpsilon(epsilon);
 }
 
+const DEFAULT_CONCORDANT_EPSILON = 0.1;
+
+function clampNormalizedEpsilon(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_CONCORDANT_EPSILON;
+  }
+  if (value < 0) {
+    return 0;
+  }
+  if (value > 1) {
+    return 1;
+  }
+  return value;
+}
+
 export default function CheckpointEditor({
   availableModels,
   initialValue,
@@ -55,7 +69,6 @@ export default function CheckpointEditor({
   onSubmit,
   onCancel,
   submitting = false,
-  runEpsilon = null,
 }: CheckpointEditorProps) {
   const mergedModels = React.useMemo(() => {
     const set = new Set<string>(availableModels);
@@ -78,21 +91,21 @@ export default function CheckpointEditor({
   const [proofMode, setProofMode] = React.useState<RunProofMode>(
     initialValue?.proofMode ?? "exact",
   );
-  const [epsilonInput, setEpsilonInput] = React.useState(() => {
+  const [epsilon, setEpsilon] = React.useState<number | null>(() => {
     if (typeof initialValue?.epsilon === "number") {
-      return initialValue.epsilon.toString();
+      return clampNormalizedEpsilon(initialValue.epsilon);
     }
-    if (typeof runEpsilon === "number") {
-      return runEpsilon.toString();
+    if (initialValue?.proofMode === "concordant") {
+      return DEFAULT_CONCORDANT_EPSILON;
     }
-    return "";
+    return null;
   });
   const [error, setError] = React.useState<string | null>(null);
+  const proofModeFieldName = React.useId();
 
   const canSubmitCurrent = React.useMemo(() => {
-    const parsed = epsilonInput.trim() === "" ? null : Number(epsilonInput);
-    return concordantSubmissionAllowed(proofMode, parsed);
-  }, [proofMode, epsilonInput]);
+    return concordantSubmissionAllowed(proofMode, epsilon);
+  }, [proofMode, epsilon]);
 
   React.useEffect(() => {
     setCheckpointType(initialValue?.checkpointType ?? "Step");
@@ -101,14 +114,14 @@ export default function CheckpointEditor({
     setPrompt(initialValue?.prompt ?? "");
     setProofMode(initialValue?.proofMode ?? "exact");
     if (typeof initialValue?.epsilon === "number") {
-      setEpsilonInput(initialValue.epsilon.toString());
-    } else if (typeof runEpsilon === "number") {
-      setEpsilonInput(runEpsilon.toString());
+      setEpsilon(clampNormalizedEpsilon(initialValue.epsilon));
+    } else if (initialValue?.proofMode === "concordant") {
+      setEpsilon(DEFAULT_CONCORDANT_EPSILON);
     } else {
-      setEpsilonInput("");
+      setEpsilon(null);
     }
     setError(null);
-  }, [initialValue, defaultModel, runEpsilon]);
+  }, [initialValue, defaultModel]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -147,12 +160,11 @@ export default function CheckpointEditor({
 
     let epsilonValue: number | null = null;
     if (proofMode === "concordant") {
-      const parsed = epsilonInput.trim() === "" ? NaN : Number(epsilonInput);
-      if (!isValidNormalizedEpsilon(parsed)) {
+      if (!isValidNormalizedEpsilon(epsilon)) {
         setError("Concordant checkpoints require an epsilon between 0 and 1.");
         return;
       }
-      epsilonValue = parsed;
+      epsilonValue = clampNormalizedEpsilon(epsilon as number);
     }
 
     setError(null);
@@ -212,42 +224,80 @@ export default function CheckpointEditor({
           onChange={(event) => setTokenBudget(event.target.value)}
         />
       </label>
-      <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        Proof Mode
-        <select
-          value={proofMode}
-          onChange={(event) => {
-            const nextValue = event.target.value === "concordant" ? "concordant" : "exact";
-            setProofMode(nextValue);
-            setError(null);
-            if (nextValue !== "concordant") {
-              setEpsilonInput("");
-            } else if (epsilonInput.trim() === "" && typeof runEpsilon === "number") {
-              setEpsilonInput(runEpsilon.toString());
-            }
-          }}
-        >
-          <option value="exact">Exact</option>
-          <option value="concordant">Concordant</option>
-        </select>
-      </label>
-      {proofMode === "concordant" && (
-        <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          Epsilon (0 – 1)
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.01}
-            value={epsilonInput}
-            onChange={(event) => setEpsilonInput(event.target.value)}
-            placeholder="e.g. 0.1"
-          />
-        </label>
-      )}
+      <fieldset
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          padding: 0,
+          border: "none",
+          margin: 0,
+        }}
+      >
+        <legend style={{ marginBottom: "4px" }}>Proof configuration</legend>
+        <div style={{ display: "flex", gap: "12px" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <input
+              type="radio"
+              name={proofModeFieldName}
+              value="exact"
+              checked={proofMode === "exact"}
+              onChange={() => {
+                setProofMode("exact");
+                setError(null);
+              }}
+            />
+            Exact
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <input
+              type="radio"
+              name={proofModeFieldName}
+              value="concordant"
+              checked={proofMode === "concordant"}
+              onChange={() => {
+                setProofMode("concordant");
+                setError(null);
+                setEpsilon((current) =>
+                  isValidNormalizedEpsilon(current)
+                    ? clampNormalizedEpsilon(current as number)
+                    : DEFAULT_CONCORDANT_EPSILON,
+                );
+              }}
+            />
+            Concordant
+          </label>
+        </div>
+        {proofMode === "concordant" && (
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={clampNormalizedEpsilon(
+                isValidNormalizedEpsilon(epsilon) ? (epsilon as number) : DEFAULT_CONCORDANT_EPSILON,
+              )}
+              onChange={(event) => {
+                const nextValue = Number(event.target.value);
+                setEpsilon(clampNormalizedEpsilon(nextValue));
+                setError(null);
+              }}
+            />
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>
+              ε =
+              {" "}
+              {clampNormalizedEpsilon(
+                isValidNormalizedEpsilon(epsilon) ? (epsilon as number) : DEFAULT_CONCORDANT_EPSILON,
+              ).toFixed(2)}
+            </span>
+          </div>
+        )}
+      </fieldset>
       {proofMode === "concordant" && !canSubmitCurrent ? (
         <div style={{ color: "#f48771", fontSize: "0.85rem" }}>
-          Provide an epsilon between 0 and 1 to save a concordant checkpoint.
+          Adjust the epsilon slider to a value between 0 and 1 before saving this concordant
+          checkpoint.
         </div>
       ) : null}
       <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>

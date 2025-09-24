@@ -292,9 +292,13 @@ export async function createRunStep(
   runId: string,
   config: RunStepRequest,
 ): Promise<RunStepConfig> {
+  const normalizedConfig: RunStepRequest = {
+    ...config,
+    epsilon: config.epsilon ?? null,
+  };
   return await invoke<RunStepConfig>('create_run_step', {
     runId,
-    config,
+    config: normalizedConfig,
   });
 }
 
@@ -302,9 +306,15 @@ export async function updateRunStep(
   checkpointId: string,
   updates: Partial<RunStepRequest> & { checkpointType?: string },
 ): Promise<RunStepConfig> {
+  const normalizedUpdates = { ...updates } as typeof updates & {
+    epsilon?: number | null;
+  };
+  if ('epsilon' in normalizedUpdates) {
+    normalizedUpdates.epsilon = normalizedUpdates.epsilon ?? null;
+  }
   return await invoke<RunStepConfig>('update_run_step', {
     checkpointId,
-    updates,
+    updates: normalizedUpdates,
   });
 }
 
