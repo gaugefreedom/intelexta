@@ -170,6 +170,13 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RunExecutionSummary {
+    pub id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunSummary {
     pub id: String,
     pub name: String,
@@ -178,6 +185,8 @@ pub struct RunSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epsilon: Option<f64>,
     pub has_persisted_checkpoint: bool,
+    #[serde(default)]
+    pub executions: Vec<RunExecutionSummary>,
 }
 
 fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
@@ -200,6 +209,7 @@ fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> 
         kind,
         epsilon: spec.epsilon,
         has_persisted_checkpoint: row.get(4)?,
+        executions: Vec::new(),
     })
 }
 
@@ -207,12 +217,25 @@ fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> 
 pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSummary>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT r.id, r.name, r.created_at, r.spec_json, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
+        "SELECT r.id, r.name, r.created_at, r.spec_json, EXISTS (SELECT 1 FROM run_executions e WHERE e.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
     )?;
     let runs_iter = stmt.query_map(params![project_id], hydrate_run_summary)?;
     let mut runs = Vec::new();
     for run in runs_iter {
-        runs.push(run?);
+        let mut summary = run?;
+        let executions = orchestrator::list_run_executions(&conn, &summary.id)
+            .map_err(|err| Error::Api(err.to_string()))?;
+        summary.executions = executions
+            .into_iter()
+            .map(|record| RunExecutionSummary {
+                id: record.id,
+                created_at: record.created_at,
+            })
+            .collect();
+        if !summary.executions.is_empty() {
+            summary.has_persisted_checkpoint = true;
+        }
+        runs.push(summary);
     }
     Ok(runs)
 }
@@ -220,13 +243,27 @@ pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSumma
 fn load_run_summary(conn: &Connection, run_id: &str) -> Result<RunSummary, Error> {
     let summary = conn
         .query_row(
-            "SELECT r.id, r.name, r.created_at, r.spec_json, EXISTS (SELECT 1 FROM checkpoints c WHERE c.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.id = ?1",
+            "SELECT r.id, r.name, r.created_at, r.spec_json, EXISTS (SELECT 1 FROM run_executions e WHERE e.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.id = ?1",
             params![run_id],
             hydrate_run_summary,
         )
         .optional()?;
 
-    summary.ok_or_else(|| Error::Api(format!("run {run_id} not found")))
+    let mut summary = summary.ok_or_else(|| Error::Api(format!("run {run_id} not found")))?;
+    let executions = orchestrator::list_run_executions(conn, &summary.id)
+        .map_err(|err| Error::Api(err.to_string()))?;
+    summary.executions = executions
+        .into_iter()
+        .map(|record| RunExecutionSummary {
+            id: record.id,
+            created_at: record.created_at,
+        })
+        .collect();
+    if !summary.executions.is_empty() {
+        summary.has_persisted_checkpoint = true;
+    }
+
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -247,6 +284,7 @@ pub fn update_run_settings(
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointSummary {
     pub id: String,
+    pub run_execution_id: String,
     pub timestamp: String,
     pub kind: String,
     pub incident: Option<IncidentSummary>,
@@ -267,6 +305,7 @@ pub struct CheckpointSummary {
 pub struct CheckpointDetails {
     pub id: String,
     pub run_id: String,
+    pub run_execution_id: String,
     pub timestamp: String,
     pub kind: String,
     pub incident: Option<IncidentSummary>,
@@ -314,9 +353,10 @@ pub struct CheckpointMessageSummary {
 #[tauri::command]
 pub fn list_checkpoints(
     run_id: String,
+    run_execution_id: Option<String>,
     pool: State<DbPool>,
 ) -> Result<Vec<CheckpointSummary>, Error> {
-    list_checkpoints_with_pool(run_id, pool.inner())
+    list_checkpoints_with_pool(run_id, run_execution_id, pool.inner())
 }
 
 #[tauri::command]
@@ -351,7 +391,7 @@ pub fn open_interactive_checkpoint_session(
 
     drop(conn);
 
-    let mut messages = list_checkpoints_with_pool(run_id.clone(), pool.inner())?;
+    let mut messages = list_checkpoints_with_pool(run_id.clone(), None, pool.inner())?;
     let checkpoint_id_ref = checkpoint_id.as_str();
     messages.retain(|entry| {
         entry
@@ -369,17 +409,29 @@ pub fn open_interactive_checkpoint_session(
 
 pub(crate) fn list_checkpoints_with_pool(
     run_id: String,
+    run_execution_id: Option<String>,
     pool: &DbPool,
 ) -> Result<Vec<CheckpointSummary>, Error> {
     let conn = pool.get()?;
+    let execution_id = match run_execution_id {
+        Some(id) => Some(id),
+        None => orchestrator::load_latest_run_execution(&conn, &run_id)
+            .map_err(|err| Error::Api(err.to_string()))?
+            .map(|record| record.id),
+    };
+
+    let Some(execution_id) = execution_id else {
+        return Ok(Vec::new());
+    };
+
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, c.checkpoint_config_id, m.role, m.body, m.created_at, m.updated_at
+        "SELECT c.id, c.run_execution_id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, c.checkpoint_config_id, m.role, m.body, m.created_at, m.updated_at
          FROM checkpoints c
          LEFT JOIN checkpoint_messages m ON m.checkpoint_id = c.id
-         WHERE c.run_id = ?1
+         WHERE c.run_id = ?1 AND c.run_execution_id = ?2
          ORDER BY c.timestamp ASC",
     )?;
-    let rows = stmt.query_map(params![run_id], |row| {
+    let rows = stmt.query_map(params![run_id, execution_id.clone()], |row| {
         let incident_json: Option<String> = row.get(3)?;
         let incident = incident_json
             .map(|payload| serde_json::from_str::<IncidentSummary>(&payload))
@@ -387,15 +439,15 @@ pub(crate) fn list_checkpoints_with_pool(
             .map_err(|err| {
                 rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
             })?;
-        let parent_checkpoint_id: Option<String> = row.get(10)?;
+        let parent_checkpoint_id: Option<String> = row.get(11)?;
         let turn_index = row
-            .get::<_, Option<i64>>(11)?
+            .get::<_, Option<i64>>(12)?
             .map(|value| value.max(0) as u32);
-        let checkpoint_config_id: Option<String> = row.get(12)?;
-        let message_role: Option<String> = row.get(13)?;
-        let message_body: Option<String> = row.get(14)?;
-        let message_created_at: Option<String> = row.get(15)?;
-        let message_updated_at: Option<String> = row.get(16)?;
+        let checkpoint_config_id: Option<String> = row.get(13)?;
+        let message_role: Option<String> = row.get(14)?;
+        let message_body: Option<String> = row.get(15)?;
+        let message_created_at: Option<String> = row.get(16)?;
+        let message_updated_at: Option<String> = row.get(17)?;
         let message = match (message_role, message_body, message_created_at) {
             (Some(role), Some(body), Some(created_at)) => Some(CheckpointMessageSummary {
                 role,
@@ -407,22 +459,23 @@ pub(crate) fn list_checkpoints_with_pool(
         };
         Ok(CheckpointSummary {
             id: row.get(0)?,
-            timestamp: row.get(1)?,
-            kind: row.get(2)?,
+            run_execution_id: row.get(1)?,
+            timestamp: row.get(2)?,
+            kind: row.get(3)?,
             incident,
-            inputs_sha256: row.get(4)?,
-            outputs_sha256: row.get(5)?,
-            semantic_digest: row.get(6)?,
+            inputs_sha256: row.get(5)?,
+            outputs_sha256: row.get(6)?,
+            semantic_digest: row.get(7)?,
             usage_tokens: {
-                let value: i64 = row.get(7)?;
-                value.max(0) as u64
-            },
-            prompt_tokens: {
                 let value: i64 = row.get(8)?;
                 value.max(0) as u64
             },
-            completion_tokens: {
+            prompt_tokens: {
                 let value: i64 = row.get(9)?;
+                value.max(0) as u64
+            },
+            completion_tokens: {
+                let value: i64 = row.get(10)?;
                 value.max(0) as u64
             },
             parent_checkpoint_id,
@@ -444,7 +497,7 @@ pub(crate) fn get_checkpoint_details_with_pool(
 ) -> Result<CheckpointDetails, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.run_id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, c.checkpoint_config_id, p.prompt_payload, p.output_payload, m.role, m.body, m.created_at, m.updated_at
+        "SELECT c.id, c.run_id, c.run_execution_id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, c.checkpoint_config_id, p.prompt_payload, p.output_payload, m.role, m.body, m.created_at, m.updated_at
          FROM checkpoints c
          LEFT JOIN checkpoint_payloads p ON p.checkpoint_id = c.id
          LEFT JOIN checkpoint_messages m ON m.checkpoint_id = c.id
@@ -459,17 +512,17 @@ pub(crate) fn get_checkpoint_details_with_pool(
             .map_err(|err| {
                 rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err))
             })?;
-        let parent_checkpoint_id: Option<String> = row.get(11)?;
+        let parent_checkpoint_id: Option<String> = row.get(12)?;
         let turn_index = row
-            .get::<_, Option<i64>>(12)?
+            .get::<_, Option<i64>>(13)?
             .map(|value| value.max(0) as u32);
-        let checkpoint_config_id: Option<String> = row.get(13)?;
-        let prompt_payload: Option<String> = row.get(14)?;
-        let output_payload: Option<String> = row.get(15)?;
-        let message_role: Option<String> = row.get(16)?;
-        let message_body: Option<String> = row.get(17)?;
-        let message_created_at: Option<String> = row.get(18)?;
-        let message_updated_at: Option<String> = row.get(19)?;
+        let checkpoint_config_id: Option<String> = row.get(14)?;
+        let prompt_payload: Option<String> = row.get(15)?;
+        let output_payload: Option<String> = row.get(16)?;
+        let message_role: Option<String> = row.get(17)?;
+        let message_body: Option<String> = row.get(18)?;
+        let message_created_at: Option<String> = row.get(19)?;
+        let message_updated_at: Option<String> = row.get(20)?;
         let message = match (message_role, message_body, message_created_at) {
             (Some(role), Some(body), Some(created_at)) => Some(CheckpointMessageSummary {
                 role,
@@ -483,22 +536,23 @@ pub(crate) fn get_checkpoint_details_with_pool(
         Ok(CheckpointDetails {
             id: row.get(0)?,
             run_id: row.get(1)?,
-            timestamp: row.get(2)?,
-            kind: row.get(3)?,
+            run_execution_id: row.get(2)?,
+            timestamp: row.get(3)?,
+            kind: row.get(4)?,
             incident,
-            inputs_sha256: row.get(5)?,
-            outputs_sha256: row.get(6)?,
-            semantic_digest: row.get(7)?,
+            inputs_sha256: row.get(6)?,
+            outputs_sha256: row.get(7)?,
+            semantic_digest: row.get(8)?,
             usage_tokens: {
-                let value: i64 = row.get(8)?;
-                value.max(0) as u64
-            },
-            prompt_tokens: {
                 let value: i64 = row.get(9)?;
                 value.max(0) as u64
             },
-            completion_tokens: {
+            prompt_tokens: {
                 let value: i64 = row.get(10)?;
+                value.max(0) as u64
+            },
+            completion_tokens: {
+                let value: i64 = row.get(11)?;
                 value.max(0) as u64
             },
             parent_checkpoint_id,
@@ -1029,13 +1083,13 @@ pub(crate) fn reorder_run_steps_with_pool(
 }
 
 #[tauri::command]
-pub fn start_run(run_id: String, pool: State<DbPool>) -> Result<(), Error> {
-    orchestrator::start_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
-}
-
-#[tauri::command]
-pub fn reopen_run(run_id: String, pool: State<DbPool>) -> Result<(), Error> {
-    orchestrator::reopen_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
+pub fn start_run(run_id: String, pool: State<DbPool>) -> Result<RunExecutionSummary, Error> {
+    orchestrator::start_run(pool.inner(), &run_id)
+        .map(|record| RunExecutionSummary {
+            id: record.id,
+            created_at: record.created_at,
+        })
+        .map_err(|err| Error::Api(err.to_string()))
 }
 
 #[tauri::command]

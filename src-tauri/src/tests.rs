@@ -129,7 +129,7 @@ fn list_checkpoints_includes_incident_payload() -> Result<()> {
         },
     )?;
 
-    let checkpoints = api::list_checkpoints_with_pool(run_id, &pool)?;
+    let checkpoints = api::list_checkpoints_with_pool(run_id, None, &pool)?;
     assert_eq!(checkpoints.len(), 1);
 
     let incident_ckpt = &checkpoints[0];
@@ -193,7 +193,7 @@ fn list_checkpoints_includes_message_payload() -> Result<()> {
         )?;
     }
 
-    let checkpoints = api::list_checkpoints_with_pool(run_id, &pool)?;
+    let checkpoints = api::list_checkpoints_with_pool(run_id, None, &pool)?;
     assert_eq!(checkpoints.len(), 1);
     let checkpoint = &checkpoints[0];
     assert_eq!(checkpoint.turn_index, Some(0));
@@ -261,15 +261,15 @@ fn get_checkpoint_details_includes_payloads() -> Result<()> {
 }
 
 #[test]
-fn reopen_run_returns_to_draft_without_execution() -> Result<()> {
+fn start_run_creates_new_execution_without_truncating_history() -> Result<()> {
     init_keyring_mock();
     let pool = setup_pool()?;
-    let project = api::create_project_with_pool("Reopen Draft".into(), &pool)?;
+    let project = api::create_project_with_pool("Execution History".into(), &pool)?;
 
     let spec = orchestrator::RunSpec {
         project_id: project.id.clone(),
-        name: "reopen-me".into(),
-        seed: 11,
+        name: "history-test".into(),
+        seed: 7,
         token_budget: 1_000,
         model: "stub-model".into(),
         steps: vec![orchestrator::RunStepTemplate {
@@ -306,40 +306,55 @@ fn reopen_run_returns_to_draft_without_execution() -> Result<()> {
     }
 
     let client = FixedClient;
-    orchestrator::start_run_with_client(&pool, &run_id, &client)?;
+    let first_execution = orchestrator::start_run_with_client(&pool, &run_id, &client)?;
 
     {
         let conn = pool.get()?;
-        let existing: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
+        let execution_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM run_executions WHERE run_id = ?1",
             params![&run_id],
             |row| row.get(0),
         )?;
-        assert_eq!(existing, 1);
+        assert_eq!(execution_count, 1);
+        let first_checkpoint_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_execution_id = ?1",
+            params![&first_execution.id],
+            |row| row.get(0),
+        )?;
+        assert!(first_checkpoint_count > 0);
     }
 
-    orchestrator::reopen_run(&pool, &run_id)?;
+    let second_execution = orchestrator::start_run_with_client(&pool, &run_id, &client)?;
+    assert_ne!(first_execution.id, second_execution.id);
 
     {
         let conn = pool.get()?;
-        let remaining: i64 = conn.query_row(
+        let execution_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM run_executions WHERE run_id = ?1",
+            params![&run_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(execution_count, 2);
+
+        let total_checkpoints: i64 = conn.query_row(
             "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
             params![&run_id],
             |row| row.get(0),
         )?;
-        assert_eq!(remaining, 0);
-    }
+        assert!(total_checkpoints >= 2);
 
-    orchestrator::start_run_with_client(&pool, &run_id, &client)?;
-
-    {
-        let conn = pool.get()?;
-        let rerun: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
-            params![&run_id],
+        let first_execution_remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_execution_id = ?1",
+            params![&first_execution.id],
             |row| row.get(0),
         )?;
-        assert_eq!(rerun, 1);
+        let second_execution_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE run_execution_id = ?1",
+            params![&second_execution.id],
+            |row| row.get(0),
+        )?;
+        assert!(first_execution_remaining > 0);
+        assert!(second_execution_count > 0);
     }
 
     Ok(())
@@ -391,7 +406,7 @@ fn start_run_with_client_replays_concordant_with_epsilon() -> Result<()> {
     }
 
     let client = NoopClient;
-    orchestrator::start_run_with_client(&pool, &run_id, &client)?;
+    let _ = orchestrator::start_run_with_client(&pool, &run_id, &client)?;
 
     {
         let conn = pool.get()?;

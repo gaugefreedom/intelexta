@@ -32,9 +32,17 @@ CREATE TABLE IF NOT EXISTS runs (
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
+CREATE TABLE IF NOT EXISTS run_executions (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES runs(id)
+);
+
 CREATE TABLE IF NOT EXISTS checkpoints (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
+    run_execution_id TEXT NOT NULL,
     checkpoint_config_id TEXT,
     parent_checkpoint_id TEXT, -- For chaining interactive turns
     turn_index INTEGER,        -- Strict ordering for interactive mode
@@ -51,12 +59,16 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     completion_tokens INTEGER NOT NULL DEFAULT 0,
     semantic_digest TEXT,
     FOREIGN KEY (run_id) REFERENCES runs(id),
+    FOREIGN KEY (run_execution_id) REFERENCES run_executions(id),
     FOREIGN KEY (parent_checkpoint_id) REFERENCES checkpoints(id),
     FOREIGN KEY (checkpoint_config_id) REFERENCES run_steps(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_checkpoints_config_id
     ON checkpoints(checkpoint_config_id);
+
+CREATE INDEX IF NOT EXISTS idx_checkpoints_execution
+    ON checkpoints(run_execution_id);
 
 CREATE TABLE IF NOT EXISTS checkpoint_messages (
     checkpoint_id TEXT PRIMARY KEY,
@@ -90,6 +102,7 @@ CREATE TABLE IF NOT EXISTS receipts (
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_ckpt_run ON checkpoints(run_id);
+CREATE INDEX IF NOT EXISTS idx_run_executions_run_id ON run_executions(run_id);
 
 CREATE TABLE IF NOT EXISTS run_steps (
     id TEXT PRIMARY KEY,

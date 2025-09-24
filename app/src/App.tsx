@@ -4,10 +4,12 @@ import ProjectTree from './components/ProjectTree';
 import ContextPanel from './components/ContextPanel';
 import EditorPanel from './components/EditorPanel';
 import InspectorPanel from './components/InspectorPanel';
+import type { RunExecutionSummary } from './lib/api';
 
 export default function App() {
   const [selectedProject, setSelectedProject] = React.useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
+  const [selectedExecutionId, setSelectedExecutionId] = React.useState<string | null>(null);
   const [runsRefreshToken, setRunsRefreshToken] = React.useState(0);
 
   const requestRunsRefresh = React.useCallback(() => {
@@ -17,15 +19,18 @@ export default function App() {
   const handleProjectSelect = React.useCallback((projectId: string | null) => {
     setSelectedProject(projectId);
     setSelectedRunId(null);
+    setSelectedExecutionId(null);
   }, []);
 
-  const handleRunExecuted = React.useCallback((runId: string) => {
+  const handleRunExecuted = React.useCallback((runId: string, execution: RunExecutionSummary) => {
     requestRunsRefresh();
     setSelectedRunId(runId);
+    setSelectedExecutionId(execution.id);
   }, [requestRunsRefresh]);
 
-  const handleRunSelection = React.useCallback((runId: string | null) => {
+  const handleRunSelection = React.useCallback((runId: string | null, executionId?: string | null) => {
     setSelectedRunId(runId);
+    setSelectedExecutionId(executionId ?? null);
   }, []);
 
   return (
@@ -63,6 +68,7 @@ export default function App() {
               projectId={selectedProject}
               refreshToken={runsRefreshToken}
               selectedRunId={selectedRunId}
+              selectedExecutionId={selectedExecutionId}
               onSelectRun={handleRunSelection}
             />
           ) : null}

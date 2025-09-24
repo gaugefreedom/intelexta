@@ -3,6 +3,7 @@ import {
   CheckpointSummary,
   listLocalModels,
   RunSummary,
+  RunExecutionSummary,
   listRuns,
   listRunSteps,
   RunStepConfig,
@@ -13,7 +14,6 @@ import {
   RunStepRequest,
   createRun,
   startRun,
-  reopenRun,
   cloneRun,
   estimateRunCost,
   updateRunSettings,
@@ -542,9 +542,9 @@ type EditorState =
 interface EditorPanelProps {
   projectId: string;
   selectedRunId: string | null;
-  onSelectRun: (runId: string | null) => void;
+  onSelectRun: (runId: string | null, executionId?: string | null) => void;
   refreshToken: number;
-  onRunExecuted?: (runId: string) => void;
+  onRunExecuted?: (runId: string, execution: RunExecutionSummary) => void;
   onRunsMutated?: () => void;
 }
 
@@ -590,7 +590,6 @@ export default function EditorPanel({
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [executingRun, setExecutingRun] = React.useState(false);
   const [creatingRun, setCreatingRun] = React.useState(false);
-  const [reopeningRun, setReopeningRun] = React.useState(false);
   const [cloningRun, setCloningRun] = React.useState(false);
   const [newRunName, setNewRunName] = React.useState("");
   const [newRunNameError, setNewRunNameError] = React.useState<string | null>(null);
@@ -759,12 +758,13 @@ export default function EditorPanel({
         setRuns(runList);
         if (runList.length === 0) {
           if (selectedRunId !== null) {
-            onSelectRun(null);
+            onSelectRun(null, null);
           }
           return;
         }
         if (!selectedRunId || !runList.some((run) => run.id === selectedRunId)) {
-          onSelectRun(runList[0].id);
+          const latestExecutionId = runList[0]?.executions?.[0]?.id ?? null;
+          onSelectRun(runList[0].id, latestExecutionId);
         }
       })
       .catch((err) => {
@@ -772,7 +772,7 @@ export default function EditorPanel({
         console.error("Failed to load runs", err);
         setRunsError("Could not load runs for this project.");
         setRuns([]);
-        onSelectRun(null);
+        onSelectRun(null, null);
       })
       .finally(() => {
         if (!cancelled) {
@@ -1031,7 +1031,7 @@ export default function EditorPanel({
       setNewRunProofMode("exact");
       setNewRunEpsilon("");
       setNewRunEpsilonError(null);
-      onSelectRun(runId);
+      onSelectRun(runId, undefined);
       setStatusMessage("Run created. Configure checkpoints before execution.");
       onRunsMutated?.();
     } catch (err) {
@@ -1239,9 +1239,16 @@ export default function EditorPanel({
     setErrorMessage(null);
     setExecutingRun(true);
     try {
-      await startRun(selectedRunId);
-      setStatusMessage("Run executed successfully.");
-      onRunExecuted?.(selectedRunId);
+      const execution = await startRun(selectedRunId);
+      const executedAt = execution.createdAt
+        ? new Date(execution.createdAt).toLocaleString()
+        : null;
+      setStatusMessage(
+        executedAt
+          ? `Run executed at ${executedAt}.`
+          : 'Run executed successfully.',
+      );
+      onRunExecuted?.(selectedRunId, execution);
     } catch (err) {
       console.error("Failed to execute run", err);
       const message = err instanceof Error ? err.message : "Unable to execute run.";
@@ -1250,31 +1257,6 @@ export default function EditorPanel({
       setExecutingRun(false);
     }
   }, [selectedRunId, onRunExecuted, epsilonRequirementUnmet]);
-
-  const handleReopenRun = React.useCallback(async () => {
-    if (!selectedRunId) {
-      return;
-    }
-    setStatusMessage(null);
-    setErrorMessage(null);
-    setActiveEditor(null);
-    setEditorSubmitting(false);
-    setConversationContext(null);
-    setReopeningRun(true);
-    try {
-      await reopenRun(selectedRunId);
-      setStatusMessage("Run reopened—ready to execute again.");
-      setConfigsRefreshToken((token) => token + 1);
-      setCostsRefreshToken((token) => token + 1);
-      onRunsMutated?.();
-    } catch (err) {
-      console.error("Failed to reopen run", err);
-      const message = err instanceof Error ? err.message : "Unable to reopen run.";
-      setErrorMessage(message);
-    } finally {
-      setReopeningRun(false);
-    }
-  }, [selectedRunId, onRunsMutated]);
 
   const handleCloneRun = React.useCallback(async () => {
     if (!selectedRunId) {
@@ -1315,6 +1297,7 @@ export default function EditorPanel({
               kind: fallbackKind,
               epsilon: selectedRun?.epsilon ?? null,
               hasPersistedCheckpoint: false,
+              executions: [],
             },
             ...filtered,
           ];
@@ -1322,7 +1305,7 @@ export default function EditorPanel({
       }
 
       setStatusMessage("Run cloned. Switched to the duplicate for editing.");
-      onRunExecuted?.(clonedRunId);
+      onSelectRun(clonedRunId, null);
       onRunsMutated?.();
     } catch (err) {
       console.error("Failed to clone run", err);
@@ -1334,7 +1317,7 @@ export default function EditorPanel({
   }, [
     selectedRunId,
     projectId,
-    onRunExecuted,
+    onSelectRun,
     onRunsMutated,
     selectedRun,
   ]);
@@ -1355,13 +1338,8 @@ export default function EditorPanel({
     setConversationContext(null);
   }, []);
 
-  const runActionPending =
-    executingRun || reopeningRun || cloningRun || runSettingsSaving;
-  const disableExecute =
-    !selectedRun ||
-    runActionPending ||
-    checkpointConfigs.length === 0 ||
-    epsilonRequirementUnmet;
+  const runActionPending = executingRun || cloningRun || runSettingsSaving;
+  const executeDisabled = !selectedRunId || executingRun;
   const cloneRunDisabled = isCloneRunDisabled(
     selectedRunId,
     runActionPending,
@@ -1401,7 +1379,9 @@ export default function EditorPanel({
                 Run
                 <select
                   value={selectedRunId ?? ""}
-                  onChange={(event) => onSelectRun(event.target.value || null)}
+                  onChange={(event) =>
+                    onSelectRun(event.target.value || null, undefined)
+                  }
                   disabled={runsLoading || runs.length === 0}
                 >
                   <option value="" disabled>
@@ -1550,15 +1530,8 @@ export default function EditorPanel({
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                  <button type="button" onClick={handleExecuteRun} disabled={disableExecute}>
+                  <button type="button" onClick={handleExecuteRun} disabled={executeDisabled}>
                     {executingRun ? "Executing…" : "Execute Full Run"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleReopenRun}
-                    disabled={!selectedRunId || runActionPending}
-                  >
-                    {reopeningRun ? "Reopening…" : "Reopen run"}
                   </button>
                   <button
                     type="button"
