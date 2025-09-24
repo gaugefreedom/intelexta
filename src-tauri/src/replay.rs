@@ -44,6 +44,8 @@ pub struct CheckpointReplayReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_mode: Option<RunProofMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_original_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_replay_digest: Option<String>,
@@ -51,6 +53,8 @@ pub struct CheckpointReplayReport {
     pub semantic_distance: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epsilon: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configured_epsilon: Option<f64>,
 }
 
 impl CheckpointReplayReport {
@@ -64,10 +68,12 @@ impl CheckpointReplayReport {
             original_digest: String::new(),
             replay_digest: String::new(),
             error_message: None,
+            proof_mode: Some(config.proof_mode),
             semantic_original_digest: None,
             semantic_replay_digest: None,
             semantic_distance: None,
             epsilon: None,
+            configured_epsilon: config.epsilon,
         }
     }
 
@@ -81,10 +87,12 @@ impl CheckpointReplayReport {
             original_digest: String::new(),
             replay_digest: String::new(),
             error_message: None,
+            proof_mode: Some(config.proof_mode),
             semantic_original_digest: None,
             semantic_replay_digest: None,
             semantic_distance: None,
             epsilon: None,
+            configured_epsilon: config.epsilon,
         }
     }
 }

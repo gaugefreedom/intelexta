@@ -168,11 +168,24 @@ pub fn start_hello_run(spec: HelloRunSpec, pool: State<DbPool>) -> Result<String
     result.map_err(|e| Error::Api(e.to_string()))
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionStepProofSummary {
+    pub checkpoint_config_id: String,
+    pub checkpoint_type: String,
+    pub order_index: i64,
+    pub proof_mode: orchestrator::RunProofMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epsilon: Option<f64>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunExecutionSummary {
     pub id: String,
     pub created_at: String,
+    #[serde(default)]
+    pub step_proofs: Vec<ExecutionStepProofSummary>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -187,6 +200,8 @@ pub struct RunSummary {
     pub has_persisted_checkpoint: bool,
     #[serde(default)]
     pub executions: Vec<RunExecutionSummary>,
+    #[serde(default)]
+    pub step_proofs: Vec<ExecutionStepProofSummary>,
 }
 
 fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
@@ -210,7 +225,39 @@ fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> 
         epsilon: spec.epsilon,
         has_persisted_checkpoint: row.get(4)?,
         executions: Vec::new(),
+        step_proofs: Vec::new(),
     })
+}
+
+fn load_step_proof_summaries(
+    conn: &Connection,
+    run_id: &str,
+) -> Result<Vec<ExecutionStepProofSummary>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, checkpoint_type, order_index, proof_mode, epsilon FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
+    )?;
+
+    let rows = stmt.query_map(params![run_id], |row| {
+        let proof_mode_raw: String = row.get(3)?;
+        let proof_mode =
+            orchestrator::RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
+            })?;
+        Ok(ExecutionStepProofSummary {
+            checkpoint_config_id: row.get(0)?,
+            checkpoint_type: row.get(1)?,
+            order_index: row.get(2)?,
+            proof_mode,
+            epsilon: row.get(4)?,
+        })
+    })?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        entries.push(row?);
+    }
+
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -223,6 +270,9 @@ pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSumma
     let mut runs = Vec::new();
     for run in runs_iter {
         let mut summary = run?;
+        let step_proofs = load_step_proof_summaries(&conn, &summary.id)?;
+        summary.step_proofs = step_proofs.clone();
+
         let executions = orchestrator::list_run_executions(&conn, &summary.id)
             .map_err(|err| Error::Api(err.to_string()))?;
         summary.executions = executions
@@ -230,6 +280,7 @@ pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSumma
             .map(|record| RunExecutionSummary {
                 id: record.id,
                 created_at: record.created_at,
+                step_proofs: step_proofs.clone(),
             })
             .collect();
         if !summary.executions.is_empty() {
@@ -250,6 +301,9 @@ fn load_run_summary(conn: &Connection, run_id: &str) -> Result<RunSummary, Error
         .optional()?;
 
     let mut summary = summary.ok_or_else(|| Error::Api(format!("run {run_id} not found")))?;
+    let step_proofs = load_step_proof_summaries(conn, &summary.id)?;
+    summary.step_proofs = step_proofs.clone();
+
     let executions = orchestrator::list_run_executions(conn, &summary.id)
         .map_err(|err| Error::Api(err.to_string()))?;
     summary.executions = executions
@@ -257,6 +311,7 @@ fn load_run_summary(conn: &Connection, run_id: &str) -> Result<RunSummary, Error
         .map(|record| RunExecutionSummary {
             id: record.id,
             created_at: record.created_at,
+            step_proofs: step_proofs.clone(),
         })
         .collect();
     if !summary.executions.is_empty() {
@@ -743,10 +798,12 @@ pub(crate) fn replay_run_with_pool(
                         error_message: interactive_default_error.clone().or_else(|| {
                             Some("no interactive checkpoints recorded for config".to_string())
                         }),
+                        proof_mode: Some(config.proof_mode),
                         semantic_original_digest: None,
                         semantic_replay_digest: None,
                         semantic_distance: None,
                         epsilon: None,
+                        configured_epsilon: config.epsilon,
                     });
                 checkpoint_reports.push(report);
             }
@@ -1084,12 +1141,17 @@ pub(crate) fn reorder_run_steps_with_pool(
 
 #[tauri::command]
 pub fn start_run(run_id: String, pool: State<DbPool>) -> Result<RunExecutionSummary, Error> {
-    orchestrator::start_run(pool.inner(), &run_id)
-        .map(|record| RunExecutionSummary {
-            id: record.id,
-            created_at: record.created_at,
-        })
-        .map_err(|err| Error::Api(err.to_string()))
+    let record = orchestrator::start_run(pool.inner(), &run_id)
+        .map_err(|err| Error::Api(err.to_string()))?;
+
+    let conn = pool.get()?;
+    let step_proofs = load_step_proof_summaries(&conn, &run_id)?;
+
+    Ok(RunExecutionSummary {
+        id: record.id,
+        created_at: record.created_at,
+        step_proofs,
+    })
 }
 
 #[tauri::command]

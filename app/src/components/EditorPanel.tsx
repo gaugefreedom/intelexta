@@ -1079,6 +1079,7 @@ export default function EditorPanel({
               epsilon: selectedRun?.epsilon ?? null,
               hasPersistedCheckpoint: false,
               executions: [],
+              stepProofs: selectedRun?.stepProofs ?? [],
             },
             ...filtered,
           ];
