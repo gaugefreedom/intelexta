@@ -804,7 +804,7 @@ export default function InspectorPanel({
               value={selectedRunIdWithCheckpoint ?? ""}
               onChange={(event) => onSelectRun(event.target.value || null, undefined)}
               disabled={loadingRuns || runsWithExecutions.length === 0}
-              style={{ flex: 1 }}
+              style={{ width: '100%' }}
             >
               <option value="" disabled>
                 {loadingRuns
@@ -954,27 +954,17 @@ export default function InspectorPanel({
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #333" }}>
-                  <th style={{ textAlign: "left", padding: "4px" }}>Timestamp</th>
-                  <th style={{ textAlign: "left", padding: "4px" }}>Turn</th>
-                  <th style={{ textAlign: "left", padding: "4px" }}>Kind</th>
-                  <th style={{ textAlign: "left", padding: "4px" }}>Message</th>
-                  <th style={{ textAlign: "left", padding: "4px" }}>Inputs SHA</th>
-                  <th style={{ textAlign: "left", padding: "4px" }}>Outputs SHA</th>
-                  <th style={{ textAlign: "right", padding: "4px" }}>Usage</th>
+                  {/* --- Simplified Headers --- */}
+                  <th style={{ textAlign: "left", padding: "4px", width: '180px' }}>Timestamp</th>
+                  <th style={{ textAlign: "left", padding: "4px", width: '80px' }}>Kind</th>
+                  <th style={{ textAlign: "left", padding: "4px" }}>Summary</th>
+                  <th style={{ textAlign: "right", padding: "4px", width: '80px' }}>Usage</th>
                 </tr>
               </thead>
               <tbody>
                 {checkpoints.map((ckpt) => {
                   const isIncident = ckpt.kind === "Incident";
-                  const incidentMessage = isIncident
-                    ? formatIncidentMessage(ckpt.incident)
-                    : null;
-                  const severityColor = incidentSeverityColor(ckpt.incident);
-                  const turnLabel = ckpt.turnIndex ?? null;
-                  const parentLabel = abbreviateId(ckpt.parentCheckpointId);
-                  const messageBadge = ckpt.message
-                    ? messageRoleBadge(ckpt.message.role)
-                    : null;
+                  const incidentMessage = isIncident ? formatIncidentMessage(ckpt.incident) : null;
                   const isSelected = selectedCheckpointId === ckpt.id;
                   const baseBackground = isIncident ? "#2d1616" : undefined;
                   const rowStyle: React.CSSProperties = {
@@ -985,6 +975,14 @@ export default function InspectorPanel({
                   if (isSelected) {
                     rowStyle.boxShadow = "inset 3px 0 0 #9cdcfe";
                   }
+
+                  // Logic for the new Summary column
+                  const summaryText = isIncident
+                    ? incidentMessage
+                    : ckpt.message
+                    ? ckpt.message.body
+                    : '—';
+
                   return (
                     <tr
                       key={ckpt.id}
@@ -1001,92 +999,22 @@ export default function InspectorPanel({
                       style={rowStyle}
                       title="Inspect checkpoint details"
                     >
+                      {/* --- Simplified Cells --- */}
                       <td style={{ padding: "4px", verticalAlign: "top" }}>
                         {new Date(ckpt.timestamp).toLocaleString()}
                       </td>
                       <td style={{ padding: "4px", verticalAlign: "top" }}>
-                        {turnLabel !== null ? (
-                          <div style={{ fontWeight: 600 }}>{turnLabel}</div>
-                        ) : (
-                          "—"
-                        )}
-                        {parentLabel && (
-                          <div
-                            style={{
-                              marginTop: "4px",
-                              fontSize: "0.7rem",
-                              color: "#a6a6a6",
-                              fontFamily: "monospace",
-                            }}
-                          >
-                            Parent · {parentLabel}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ padding: "4px" }}>
                         <div style={{ fontWeight: 600 }}>{ckpt.kind}</div>
-                        {isIncident && ckpt.incident?.severity && (
-                          <span
-                            style={{
-                              display: "inline-block",
-                              marginTop: "4px",
-                              fontSize: "0.7rem",
-                              letterSpacing: "0.08em",
-                              fontWeight: 700,
-                              padding: "2px 6px",
-                              borderRadius: "999px",
-                              border: `1px solid ${severityColor}`,
-                              color: severityColor,
-                              textTransform: "uppercase",
-                            }}
-                          >
-                            {ckpt.incident.severity.toUpperCase()}
-                          </span>
-                        )}
                       </td>
-                      <td style={{ padding: "4px", verticalAlign: "top" }}>
-                        {ckpt.message ? (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                            {messageBadge && (
-                              <span
-                                style={{
-                                  alignSelf: "flex-start",
-                                  fontSize: "0.7rem",
-                                  letterSpacing: "0.08em",
-                                  fontWeight: 700,
-                                  padding: "2px 6px",
-                                  borderRadius: "999px",
-                                  border: `1px solid ${messageBadge.color}`,
-                                  color: messageBadge.color,
-                                  textTransform: "uppercase",
-                                }}
-                              >
-                                {messageBadge.label}
-                              </span>
-                            )}
-                            <div
-                              style={{
-                                whiteSpace: "pre-wrap",
-                                wordBreak: "break-word",
-                                lineHeight: 1.4,
-                              }}
-                            >
-                              {ckpt.message.body}
-                            </div>
-                          </div>
-                        ) : isIncident ? (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                            <div style={{ fontWeight: 700, color: severityColor }}>{incidentMessage}</div>
-                          </div>
-                        ) : (
-                          <span>—</span>
-                        )}
-                      </td>
-                      <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>
-                        {ckpt.inputsSha256 ?? "—"}
-                      </td>
-                      <td style={{ padding: "4px", fontFamily: "monospace", wordBreak: "break-all" }}>
-                        {ckpt.outputsSha256 ?? "—"}
+                      <td style={{ 
+                        padding: "4px", 
+                        verticalAlign: "top",
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        maxWidth: '200px' // Adjust as needed
+                      }}>
+                        {summaryText}
                       </td>
                       <td style={{ padding: "4px", textAlign: "right", verticalAlign: "top" }}>
                         {ckpt.usageTokens}

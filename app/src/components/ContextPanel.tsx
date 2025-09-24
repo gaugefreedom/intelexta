@@ -407,10 +407,27 @@ export default function ContextPanel({
   return (
     <div>
       <h2>Context</h2>
-      <div style={{ fontSize: "0.85rem", marginBottom: "0.5rem", color: "#9cdcfe" }}>
-        Project: {projectId}
+
+      {/* --- Project ID with Truncation --- */}
+      <div style={{ marginBottom: '16px' }}>
+        <div style={{ fontSize: '0.7rem', color: '#808080' }}>Project</div>
+        <div
+          style={{
+            fontFamily: 'monospace',
+            fontSize: '0.8rem',
+            color: '#9cdcfe',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+          title={projectId} // Show full ID on hover
+        >
+          {projectId}
+        </div>
       </div>
-      {selectedRunId ? (
+
+      {/* --- Cost Overrun Warning (no changes needed here) --- */}
+      {selectedRunId && (
         <div style={{ marginBottom: "0.75rem" }}>
           {costLoading && <div style={{ color: "#9cdcfe" }}>Estimating projected run costs…</div>}
           {costError && <div style={{ color: "#f48771" }}>{costError}</div>}
@@ -423,9 +440,7 @@ export default function ContextPanel({
                 padding: "10px",
                 borderRadius: "6px",
                 fontSize: "0.85rem",
-                display: "flex",
-                flexDirection: "column",
-                gap: "6px",
+                display: "flex", flexDirection: "column", gap: "6px",
               }}
             >
               <div style={{ fontWeight: 600, color: "#f48771" }}>
@@ -433,60 +448,48 @@ export default function ContextPanel({
               </div>
               <ul style={{ margin: 0, paddingLeft: "18px" }}>
                 {costOverrunMessages.map((message) => (
-                  <li key={message} style={{ marginBottom: "2px" }}>
-                    {message}
-                  </li>
+                  <li key={message} style={{ marginBottom: "2px" }}>{message}</li>
                 ))}
               </ul>
-              <div>
-                Estimated totals: {costEstimates.estimatedTokens.toLocaleString()} tokens (~$
-                {costEstimates.estimatedUsd.toFixed(2)}, {costEstimates.estimatedGCo2e.toFixed(2)} gCO₂e).
-                Increase policy budgets or lower checkpoint token budgets before running.
-              </div>
             </div>
           )}
         </div>
-      ) : (
-        <div style={{ fontSize: "0.8rem", color: "#808080", marginBottom: "0.75rem" }}>
-          Select a run to review policy cost projections.
-        </div>
       )}
+
+      {/* --- Policy Form (stacked vertically for a narrow layout) --- */}
       {loading ? (
         <p>Loading policy…</p>
       ) : policy ? (
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <input type="checkbox" checked={policy.allowNetwork} onChange={handleToggle} />
-            Allow outbound network access
+            Allow network access
           </label>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "8px" }}>
-            <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <div style={{ display: "flex", flexDirection: 'column', gap: "8px" }}>
+            <label style={{ display: "flex", flexDirection: 'column', gap: '4px', fontSize: '0.8rem' }}>
               Token Budget
               <input
                 type="number"
-                min={0}
-                step={1}
+                min={0} step={1}
                 value={policy.budgetTokens}
                 onChange={handleNumberChange("budgetTokens")}
               />
             </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <label style={{ display: "flex", flexDirection: 'column', gap: '4px', fontSize: '0.8rem' }}>
               USD Budget
               <input
                 type="number"
-                min={0}
-                step={0.01}
+                min={0} step={0.01}
                 value={policy.budgetUsd}
                 onChange={handleNumberChange("budgetUsd")}
               />
             </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <label style={{ display: "flex", flexDirection: 'column', gap: '4px', fontSize: '0.8rem' }}>
               Carbon Budget (gCO₂e)
               <input
                 type="number"
-                min={0}
-                step={0.01}
+                min={0} step={0.01}
                 value={policy.budgetGCo2e}
                 onChange={handleNumberChange("budgetGCo2e")}
               />
@@ -497,48 +500,32 @@ export default function ContextPanel({
             <button type="submit" disabled={saving}>
               {saving ? "Saving…" : "Save Policy"}
             </button>
-            {status && <span style={{ color: "#6A9955" }}>{status}</span>}
-            {error && <span style={{ color: "#f48771" }}>{error}</span>}
+            {status && <span style={{ color: "#6A9955", fontSize: '0.8rem' }}>{status}</span>}
+            {error && <span style={{ color: "#f48771", fontSize: '0.8rem' }}>{error}</span>}
           </div>
         </form>
       ) : (
         <p>No policy found for this project.</p>
       )}
 
+      {/* --- Portability (buttons stacked vertically) --- */}
       <div
         style={{
           marginTop: "1.5rem",
           paddingTop: "1rem",
           borderTop: "1px solid #333",
-          display: "flex",
-          flexDirection: "column",
-          gap: "8px",
         }}
       >
-        <h3 style={{ margin: 0 }}>Portability</h3>
-        <input
-          ref={projectFileInputRef}
-          type="file"
-          accept=".ixp"
-          style={{ display: "none" }}
-          onChange={handleProjectFileSelected}
-        />
-        <input
-          ref={carFileInputRef}
-          type="file"
-          accept=".car.json,.json"
-          style={{ display: "none" }}
-          onChange={handleCarFileSelected}
-        />
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+        <h3 style={{ margin: 0, marginBottom: '12px' }}>Portability</h3>
+        <input ref={projectFileInputRef} type="file" accept=".ixp" style={{ display: "none" }} onChange={handleProjectFileSelected} />
+        <input ref={carFileInputRef} type="file" accept=".car.json,.json" style={{ display: "none" }} onChange={handleCarFileSelected} />
+
+        {/* This div stacks the buttons vertically */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: 'stretch' }}>
           <button type="button" onClick={handleExportProject} disabled={exportingProject}>
             {exportingProject ? "Exporting…" : "Export Project"}
           </button>
-          <button
-            type="button"
-            onClick={handleImportProjectArchive}
-            disabled={importingProjectArchive}
-          >
+          <button type="button" onClick={handleImportProjectArchive} disabled={importingProjectArchive}>
             {importingProjectArchive ? "Importing…" : "Import .ixp"}
           </button>
           <button type="button" onClick={handleImportCarReceipt} disabled={importingCarReceipt}>
@@ -546,18 +533,11 @@ export default function ContextPanel({
           </button>
         </div>
 
-        {exportStatus && (
-          <span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{exportStatus}</span>
-        )}
-        {exportError && (
-          <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{exportError}</span>
-        )}
-        {projectImportStatus && (
-          <span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{projectImportStatus}</span>
-        )}
-        {projectImportError && (
-          <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{projectImportError}</span>
-        )}
+        {/* All the status messages below will now format nicely in the vertical layout */}
+        {exportStatus && (<span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{exportStatus}</span>)}
+        {exportError && (<span style={{ color: "#f48771", fontSize: "0.85rem" }}>{exportError}</span>)}
+        {projectImportStatus && (<span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{projectImportStatus}</span>)}
+        {projectImportError && (<span style={{ color: "#f48771", fontSize: "0.85rem" }}>{projectImportError}</span>)}
         {lastImportSummary && (
           <ul style={{ margin: 0, paddingLeft: "18px", fontSize: "0.8rem", color: "#cbd5f5" }}>
             <li>Runs imported: {lastImportSummary.runsImported}</li>
@@ -566,25 +546,16 @@ export default function ContextPanel({
             <li>Incidents generated: {lastImportSummary.incidentsGenerated}</li>
           </ul>
         )}
-        {carImportStatus && (
-          <span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{carImportStatus}</span>
-        )}
+        {carImportStatus && (<span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{carImportStatus}</span>)}
         {carReplayFeedback && (
           <div style={{ fontSize: "0.85rem", display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span
-              style={{
-                color: carReplayFeedback.overallTone === "success" ? "#a5d6a7" : "#f48771",
-              }}
-            >
+            <span style={{ color: carReplayFeedback.overallTone === "success" ? "#a5d6a7" : "#f48771" }}>
               {carReplayFeedback.overallMessage}
             </span>
             {carReplayFeedback.checkpoints.length > 0 && (
               <ul style={{ margin: 0, paddingLeft: "1.2rem", listStyleType: "disc" }}>
                 {carReplayFeedback.checkpoints.map((entry) => (
-                  <li
-                    key={entry.key}
-                    style={{ color: entry.tone === "success" ? "#a5d6a7" : "#f48771" }}
-                  >
+                  <li key={entry.key} style={{ color: entry.tone === "success" ? "#a5d6a7" : "#f48771" }}>
                     {entry.message}
                   </li>
                 ))}
@@ -592,9 +563,7 @@ export default function ContextPanel({
             )}
           </div>
         )}
-        {carImportError && (
-          <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{carImportError}</span>
-        )}
+        {carImportError && (<span style={{ color: "#f48771", fontSize: "0.85rem" }}>{carImportError}</span>)}
         {carReplayReport && !carReplayFeedback && (
           <span style={{ fontSize: "0.85rem", color: "#cbd5f5" }}>
             Imported CAR for run {carReplayReport.runId}.

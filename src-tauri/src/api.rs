@@ -1110,7 +1110,7 @@ pub(crate) fn emit_car_to_base_dir(
     std::fs::create_dir_all(&receipts_dir)
         .map_err(|err| Error::Api(format!("failed to create receipts dir: {err}")))?;
 
-    let file_path = receipts_dir.join(format!("{}.car.json", car.id));
+    let file_path = receipts_dir.join(format!("{}.car.json", car.id.replace(':', "_")));
     let json = serde_json::to_string_pretty(&car)
         .map_err(|err| Error::Api(format!("failed to serialize CAR: {err}")))?;
     std::fs::write(&file_path, json)

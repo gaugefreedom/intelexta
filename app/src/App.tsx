@@ -39,7 +39,7 @@ export default function App() {
         <ProjectTree onSelectProject={handleProjectSelect} refreshToken={runsRefreshToken} />
       </div>
       <div style={{ flex: 1, display: 'flex' }}>
-        <div style={{ width: '300px', borderRight: '1px solid #333', padding: '8px' }}>
+        <div style={{ width: '200px', borderRight: '1px solid #333', padding: '8px' }}>
           {selectedProject ? (
             <ContextPanel
               projectId={selectedProject}
