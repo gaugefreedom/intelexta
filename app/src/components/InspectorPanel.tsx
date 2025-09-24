@@ -451,9 +451,23 @@ export default function InspectorPanel({
   }, [projectId, refreshToken, onSelectRun]);
 
   React.useEffect(() => {
-    if (runsWithExecutions.length === 0) {
+    if (runs.length === 0) {
       if (selectedRunId !== null || selectedExecutionId !== null) {
         onSelectRun(null, null);
+      }
+      return;
+    }
+
+    if (runsWithExecutions.length === 0) {
+      if (selectedRunId && runs.some((run) => run.id === selectedRunId)) {
+        if (selectedExecutionId !== null) {
+          onSelectRun(selectedRunId, null);
+        }
+      } else {
+        const fallbackRunId = runs[0].id;
+        if (selectedRunId !== fallbackRunId || selectedExecutionId !== null) {
+          onSelectRun(fallbackRunId, null);
+        }
       }
       return;
     }
@@ -465,11 +479,12 @@ export default function InspectorPanel({
 
     const run = runs.find((item) => item.id === nextRunId) ?? runsWithExecutions[0];
     const executions = run.executions ?? [];
-    const nextExecutionId = executions.length === 0
-      ? null
-      : selectedExecutionId && executions.some((entry) => entry.id === selectedExecutionId)
-      ? selectedExecutionId
-      : executions[0].id;
+    const nextExecutionId =
+      executions.length === 0
+        ? null
+        : selectedExecutionId && executions.some((entry) => entry.id === selectedExecutionId)
+        ? selectedExecutionId
+        : executions[0].id;
 
     if (nextRunId !== selectedRunId || nextExecutionId !== selectedExecutionId) {
       onSelectRun(nextRunId, nextExecutionId ?? null);
