@@ -12,6 +12,8 @@ import {
   emitCar,
   replayRun,
   ReplayReport,
+  ExecutionStepProofSummary,
+  RunProofMode,
 } from "../lib/api";
 
 function formatIncidentMessage(incident?: IncidentSummary | null): string {
@@ -45,15 +47,58 @@ function incidentSeverityColor(incident?: IncidentSummary | null): string {
   }
 }
 
-function proofBadgeFor(kind: string): { label: string; color: string; title: string } {
-  switch (kind) {
+type ProofBadgeKind = RunProofMode | "interactive" | "unknown";
+
+function proofBadgeFor(mode: ProofBadgeKind): {
+  label: string;
+  color: string;
+  title: string;
+} {
+  switch (mode) {
     case "concordant":
       return { label: "[C]", color: "#c586c0", title: "Concordant proof mode" };
     case "exact":
       return { label: "[E]", color: "#9cdcfe", title: "Exact proof mode" };
+    case "interactive":
+      return { label: "[I]", color: "#4ec9b0", title: "Interactive proof mode" };
     default:
       return { label: "[?]", color: "#dcdcaa", title: "Unknown proof mode" };
   }
+}
+
+function collectProofBadges(
+  stepProofs: ExecutionStepProofSummary[] | undefined,
+  fallbackKind?: string,
+): ReturnType<typeof proofBadgeFor>[] {
+  const uniqueModes: ProofBadgeKind[] = [];
+  const seen = new Set<ProofBadgeKind>();
+  for (const entry of stepProofs ?? []) {
+    const checkpointType = entry.checkpointType?.toLowerCase() ?? "";
+    const mode: ProofBadgeKind = checkpointType === "interactivechat"
+      ? "interactive"
+      : entry.proofMode;
+    if (!seen.has(mode)) {
+      seen.add(mode);
+      uniqueModes.push(mode);
+    }
+  }
+  if (uniqueModes.length === 0 && fallbackKind) {
+    const fallback = (fallbackKind as ProofBadgeKind) ?? "unknown";
+    if (!seen.has(fallback)) {
+      uniqueModes.push(fallback);
+    }
+  }
+  if (uniqueModes.length === 0) {
+    uniqueModes.push("unknown");
+  }
+  const order = new Map<ProofBadgeKind, number>([
+    ["concordant", 0],
+    ["exact", 1],
+    ["interactive", 2],
+    ["unknown", 3],
+  ]);
+  uniqueModes.sort((a, b) => (order.get(a) ?? 10) - (order.get(b) ?? 10));
+  return uniqueModes.map((mode) => proofBadgeFor(mode));
 }
 
 function messageRoleBadge(role: string): { label: string; color: string } {
@@ -589,8 +634,24 @@ export default function InspectorPanel({
 
   const actionDisabled =
     !selectedRunIdWithCheckpoint || !activeExecutionId || emittingCar || replayingRun;
-  const replayButtonLabel = selectedRun?.kind === "concordant" ? "Replay (Concordant)" : "Replay Run";
-  const selectedRunBadge = selectedRun ? proofBadgeFor(selectedRun.kind) : null;
+  const executionHasConcordant = React.useMemo(() => {
+    if (selectedExecution?.stepProofs) {
+      return selectedExecution.stepProofs.some((entry) => entry.proofMode === "concordant");
+    }
+    if (selectedRun?.stepProofs) {
+      return selectedRun.stepProofs.some((entry) => entry.proofMode === "concordant");
+    }
+    return selectedRun?.kind === "concordant";
+  }, [selectedExecution?.stepProofs, selectedRun?.stepProofs, selectedRun?.kind]);
+  const replayButtonLabel = executionHasConcordant ? "Replay (Concordant)" : "Replay Run";
+  const selectedRunBadges = React.useMemo(
+    () => collectProofBadges(selectedRun?.stepProofs, selectedRun?.kind),
+    [selectedRun?.stepProofs, selectedRun?.kind],
+  );
+  const selectedExecutionBadges = React.useMemo(
+    () => collectProofBadges(selectedExecution?.stepProofs ?? selectedRun?.stepProofs, selectedRun?.kind),
+    [selectedExecution?.stepProofs, selectedRun?.stepProofs, selectedRun?.kind],
+  );
 
   const replayFeedback = React.useMemo(() => {
     if (!replayReport) {
@@ -613,31 +674,39 @@ export default function InspectorPanel({
       }
       const label = parts.length > 0 ? parts.join(" ") : "Checkpoint";
       let message: string;
+      const configuredMode: ProofBadgeKind = entry.proofMode ?? entry.mode ?? "unknown";
       if (
-        entry.mode === "concordant" &&
+        configuredMode === "concordant" &&
         typeof entry.semanticDistance === "number" &&
         typeof entry.epsilon === "number"
       ) {
         const normalized = entry.semanticDistance / 64;
         const comparison = normalized <= entry.epsilon ? "<=" : ">";
+        const configuredEpsilon = entry.configuredEpsilon ?? entry.epsilon;
+        const epsilonText =
+          typeof configuredEpsilon === "number" ? configuredEpsilon.toFixed(2) : "∅";
         message = `Concordant ${label}: ${entry.matchStatus ? "PASS" : "FAIL"} (distance ${normalized.toFixed(
           2,
-        )} ${comparison} ε=${entry.epsilon.toFixed(2)})`;
+        )} ${comparison} ε=${epsilonText})`;
         if (!entry.matchStatus && entry.errorMessage) {
           message += ` — ${entry.errorMessage}`;
         }
-      } else if (entry.mode === "interactive") {
+      } else if (configuredMode === "interactive") {
         message = `Interactive ${label}: ${entry.matchStatus ? "PASS" : "FAIL"}`;
         if (entry.errorMessage) {
           message += ` — ${entry.errorMessage}`;
         }
-      } else if (entry.matchStatus) {
+      } else if (configuredMode === "exact" && entry.matchStatus) {
         message = `Exact ${label}: PASS (digest ${entry.replayDigest || "∅"})`;
       } else {
         const expected = entry.originalDigest || "∅";
         const replayed = entry.replayDigest || "∅";
         const details = entry.errorMessage ?? "digests differ";
-        message = `Exact ${label}: FAIL — ${details} (expected ${expected}, replayed ${replayed})`;
+        const modeLabel =
+          configuredMode === "unknown"
+            ? "Checkpoint"
+            : configuredMode.charAt(0).toUpperCase() + configuredMode.slice(1);
+        message = `${modeLabel} ${label}: FAIL — ${details} (expected ${expected}, replayed ${replayed})`;
       }
       return {
         key: entry.checkpointConfigId ?? `checkpoint-${index}`,
@@ -647,41 +716,11 @@ export default function InspectorPanel({
     };
 
     if (checkpoints.length === 0) {
-      if (
-        typeof replayReport.epsilon === "number" &&
-        typeof replayReport.semanticDistance === "number"
-      ) {
-        const rawDistance = replayReport.semanticDistance;
-        const normalized = rawDistance / 64;
-        const epsilon = replayReport.epsilon;
-        const comparison = normalized <= epsilon ? "<=" : ">";
-        const message = `Concordant Proof: ${
-          replayReport.matchStatus ? "PASS" : "FAIL"
-        } (Normalized Distance: ${normalized.toFixed(2)} ${comparison} ε: ${epsilon.toFixed(2)})${
-          replayReport.matchStatus || !replayReport.errorMessage
-            ? ""
-            : ` — ${replayReport.errorMessage}`
-        }`;
-        return {
-          overallTone: replayReport.matchStatus ? "success" : "error", 
-          overallMessage: message,
-          checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
-        };
-      }
-
-      const expectedDigest = replayReport.originalDigest || "∅";
-      const replayedDigest = replayReport.replayDigest || "∅";
-      if (replayReport.matchStatus) {
-        return {
-          overallTone: "success" as const,
-          overallMessage: `Exact Proof: PASS (Digest: ${replayedDigest})`,
-          checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
-        };
-      }
-      const details = replayReport.errorMessage ?? "digests differ";
+      const base = replayReport.matchStatus ? "Replay PASS" : "Replay FAIL";
+      const overallMessage = replayReport.errorMessage ? `${base} — ${replayReport.errorMessage}` : base;
       return {
-        overallTone: "error" as const,
-        overallMessage: `Exact Proof: FAIL — ${details} (expected ${expectedDigest}, replayed ${replayedDigest})`,
+        overallTone: replayReport.matchStatus ? "success" : "error",
+        overallMessage,
         checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
       };
     }
@@ -723,24 +762,29 @@ export default function InspectorPanel({
         <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
           Run
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            {selectedRunBadge && (
-              <span
-                title={selectedRunBadge.title}
-                style={{
-                  border: `1px solid ${selectedRunBadge.color}`,
-                  color: selectedRunBadge.color,
-                  borderRadius: "999px",
-                  fontSize: "0.7rem",
-                  fontWeight: 700,
-                  letterSpacing: "0.08em",
-                  padding: "1px 6px",
-                  minWidth: "3ch",
-                  textAlign: "center",
-                }}
-              >
-                {selectedRunBadge.label}
-              </span>
-            )}
+            <div style={{ display: "flex", gap: "4px" }}>
+              {selectedRun
+                ? selectedRunBadges.map((badge) => (
+                    <span
+                      key={`${badge.label}-${badge.title}`}
+                      title={badge.title}
+                      style={{
+                        border: `1px solid ${badge.color}`,
+                        color: badge.color,
+                        borderRadius: "999px",
+                        fontSize: "0.7rem",
+                        fontWeight: 700,
+                        letterSpacing: "0.08em",
+                        padding: "1px 6px",
+                        minWidth: "3ch",
+                        textAlign: "center",
+                      }}
+                    >
+                      {badge.label}
+                    </span>
+                  ))
+                : null}
+            </div>
             <select
               value={selectedRunIdWithCheckpoint ?? ""}
               onChange={(event) => onSelectRun(event.target.value || null, undefined)}
@@ -755,11 +799,12 @@ export default function InspectorPanel({
                   : "Select a run"}
               </option>
               {runsWithExecutions.map((run) => {
-                const badge = proofBadgeFor(run.kind);
-                const timestamp = new Date(run.createdAt).toLocaleString();
+                const badges = collectProofBadges(run.stepProofs, run.kind);
+                const badgeText = badges.map((badge) => badge.label).join(" ");
+                const timestamp = formatExecutionTimestamp(run.createdAt);
                 return (
                   <option key={run.id} value={run.id}>
-                    {`${badge.label} ${run.name} · ${timestamp}`}
+                    {`${badgeText} ${run.name} · ${timestamp}`}
                   </option>
                 );
               })}
@@ -767,7 +812,31 @@ export default function InspectorPanel({
           </div>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          Execution
+          Run Execution
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div style={{ display: "flex", gap: "4px" }}>
+              {selectedRun
+                ? selectedExecutionBadges.map((badge) => (
+                    <span
+                      key={`execution-${badge.label}-${badge.title}`}
+                      title={badge.title}
+                      style={{
+                        border: `1px solid ${badge.color}`,
+                        color: badge.color,
+                        borderRadius: "999px",
+                        fontSize: "0.7rem",
+                        fontWeight: 700,
+                        letterSpacing: "0.08em",
+                        padding: "1px 6px",
+                        minWidth: "3ch",
+                        textAlign: "center",
+                      }}
+                    >
+                      {badge.label}
+                    </span>
+                  ))
+                : null}
+            </div>
           <select
             value={activeExecutionId ?? ""}
             onChange={(event) =>
@@ -782,12 +851,19 @@ export default function InspectorPanel({
             <option value="" disabled>
               {availableExecutions.length === 0 ? "No executions" : "Select an execution"}
             </option>
-            {availableExecutions.map((execution) => (
-              <option key={execution.id} value={execution.id}>
-                {`${formatExecutionTimestamp(execution.createdAt)} · ${abbreviateId(execution.id) ?? execution.id}`}
-              </option>
-            ))}
+            {availableExecutions.map((execution) => {
+              const badges = collectProofBadges(execution.stepProofs, selectedRun?.kind);
+              const badgeText = badges.map((badge) => badge.label).join(" ");
+              const timestamp = formatExecutionTimestamp(execution.createdAt);
+              const executionLabel = abbreviateId(execution.id) ?? execution.id;
+              return (
+                <option key={execution.id} value={execution.id}>
+                  {`${badgeText} ${timestamp} · ${executionLabel}`}
+                </option>
+              );
+            })}
           </select>
+          </div>
         </label>
         {selectedExecution && (
           <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>

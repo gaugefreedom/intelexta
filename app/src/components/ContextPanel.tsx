@@ -10,7 +10,10 @@ import {
   importCar,
   type ProjectImportSummary,
   type ReplayReport,
+  type RunProofMode,
 } from "../lib/api";
+
+type ProofBadgeKind = RunProofMode | "interactive" | "unknown";
 
 interface ContextPanelProps {
   projectId: string;
@@ -331,31 +334,39 @@ export default function ContextPanel({
       }
       const label = parts.length > 0 ? parts.join(" ") : "Checkpoint";
       let message: string;
+      const configuredMode: ProofBadgeKind = entry.proofMode ?? entry.mode ?? "unknown";
       if (
-        entry.mode === "concordant" &&
+        configuredMode === "concordant" &&
         typeof entry.semanticDistance === "number" &&
         typeof entry.epsilon === "number"
       ) {
         const normalized = entry.semanticDistance / 64;
         const comparison = normalized <= entry.epsilon ? "<=" : ">";
+        const configuredEpsilon = entry.configuredEpsilon ?? entry.epsilon;
+        const epsilonText =
+          typeof configuredEpsilon === "number" ? configuredEpsilon.toFixed(2) : "∅";
         message = `Concordant ${label}: ${entry.matchStatus ? "PASS" : "FAIL"} (distance ${normalized.toFixed(
           2,
-        )} ${comparison} ε=${entry.epsilon.toFixed(2)})`;
+        )} ${comparison} ε=${epsilonText})`;
         if (!entry.matchStatus && entry.errorMessage) {
           message += ` — ${entry.errorMessage}`;
         }
-      } else if (entry.mode === "interactive") {
+      } else if (configuredMode === "interactive") {
         message = `Interactive ${label}: ${entry.matchStatus ? "PASS" : "FAIL"}`;
         if (entry.errorMessage) {
           message += ` — ${entry.errorMessage}`;
         }
-      } else if (entry.matchStatus) {
+      } else if (configuredMode === "exact" && entry.matchStatus) {
         message = `Exact ${label}: PASS (digest ${entry.replayDigest || "∅"})`;
       } else {
         const expected = entry.originalDigest || "∅";
         const replayed = entry.replayDigest || "∅";
         const details = entry.errorMessage ?? "digests differ";
-        message = `Exact ${label}: FAIL — ${details} (expected ${expected}, replayed ${replayed})`;
+        const modeLabel =
+          configuredMode === "unknown"
+            ? "Checkpoint"
+            : configuredMode.charAt(0).toUpperCase() + configuredMode.slice(1);
+        message = `${modeLabel} ${label}: FAIL — ${details} (expected ${expected}, replayed ${replayed})`;
       }
       return {
         key: entry.checkpointConfigId ?? `checkpoint-${index}`,
@@ -365,38 +376,13 @@ export default function ContextPanel({
     };
 
     if (checkpoints.length === 0) {
-      if (
-        typeof carReplayReport.epsilon === "number" &&
-        typeof carReplayReport.semanticDistance === "number"
-      ) {
-        const normalized = carReplayReport.semanticDistance / 64;
-        const comparison = normalized <= carReplayReport.epsilon ? "<=" : ">";
-        const suffix = carReplayReport.errorMessage
-          ? ` — ${carReplayReport.errorMessage}`
-          : "";
-        return {
-          overallTone: carReplayReport.matchStatus ? "success" : "error",
-          overallMessage: `Concordant proof ${
-            carReplayReport.matchStatus ? "PASS" : "FAIL"
-          } (distance ${normalized.toFixed(2)} ${comparison} ε=${carReplayReport.epsilon.toFixed(2)})${suffix}`,
-          checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
-        };
-      }
-
-      if (carReplayReport.matchStatus) {
-        return {
-          overallTone: "success" as const,
-          overallMessage: `Exact proof PASS (digest ${carReplayReport.replayDigest || "∅"})`,
-          checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
-        };
-      }
-
-      const details = carReplayReport.errorMessage ?? "digests differ";
+      const base = carReplayReport.matchStatus ? "Replay PASS" : "Replay FAIL";
+      const overallMessage = carReplayReport.errorMessage
+        ? `${base} — ${carReplayReport.errorMessage}`
+        : base;
       return {
-        overallTone: "error" as const,
-        overallMessage: `Exact proof FAIL — ${details} (expected ${
-          carReplayReport.originalDigest || "∅"
-        }, replayed ${carReplayReport.replayDigest || "∅"})`,
+        overallTone: carReplayReport.matchStatus ? "success" : "error",
+        overallMessage,
         checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
       };
     }

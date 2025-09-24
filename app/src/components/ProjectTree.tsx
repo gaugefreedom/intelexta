@@ -5,6 +5,8 @@ import {
   listRuns,
   Project,
   RunSummary,
+  type RunProofMode,
+  type ExecutionStepProofSummary,
 } from "../lib/api";
 
 interface ProjectTreeProps {
@@ -31,15 +33,58 @@ function formatExecutionTimestamp(value?: string | null): string {
   return parsed.toLocaleString();
 }
 
-function proofBadgeFor(kind: string): { label: string; color: string; title: string } {
-  switch (kind) {
-    case "exact":
-      return { label: "[E]", color: "#9cdcfe", title: "Exact proof mode" };
+type ProofBadgeKind = RunProofMode | "interactive" | "unknown";
+
+function proofBadgeFor(mode: ProofBadgeKind): {
+  label: string;
+  color: string;
+  title: string;
+} {
+  switch (mode) {
     case "concordant":
       return { label: "[C]", color: "#c586c0", title: "Concordant proof mode" };
+    case "exact":
+      return { label: "[E]", color: "#9cdcfe", title: "Exact proof mode" };
+    case "interactive":
+      return { label: "[I]", color: "#4ec9b0", title: "Interactive proof mode" };
     default:
       return { label: "[?]", color: "#dcdcaa", title: "Unknown proof mode" };
   }
+}
+
+function collectProofBadges(
+  stepProofs: ExecutionStepProofSummary[] | undefined,
+  fallbackKind?: string,
+): ReturnType<typeof proofBadgeFor>[] {
+  const seen = new Set<ProofBadgeKind>();
+  const modes: ProofBadgeKind[] = [];
+  for (const entry of stepProofs ?? []) {
+    const checkpointType = entry.checkpointType?.toLowerCase() ?? "";
+    const mode: ProofBadgeKind = checkpointType === "interactivechat"
+      ? "interactive"
+      : entry.proofMode;
+    if (!seen.has(mode)) {
+      seen.add(mode);
+      modes.push(mode);
+    }
+  }
+  if (modes.length === 0 && fallbackKind) {
+    const fallback = (fallbackKind as ProofBadgeKind) ?? "unknown";
+    if (!seen.has(fallback)) {
+      modes.push(fallback);
+    }
+  }
+  if (modes.length === 0) {
+    modes.push("unknown");
+  }
+  const order = new Map<ProofBadgeKind, number>([
+    ["concordant", 0],
+    ["exact", 1],
+    ["interactive", 2],
+    ["unknown", 3],
+  ]);
+  modes.sort((a, b) => (order.get(a) ?? 10) - (order.get(b) ?? 10));
+  return modes.map((mode) => proofBadgeFor(mode));
 }
 
 export default function ProjectTree({
@@ -276,25 +321,30 @@ export default function ProjectTree({
                   ) : runState && runState.runs.length > 0 ? (
                     <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "2px" }}>
                       {runState.runs.map((run) => {
-                        const badge = proofBadgeFor(run.kind);
+                        const badges = collectProofBadges(run.stepProofs, run.kind);
                         const executionCount = run.executions?.length ?? 0;
                         const latestExecution = run.executions?.[0] ?? null;
                         return (
                           <li key={run.id} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.85rem" }}>
-                            <span
-                              title={badge.title}
-                              style={{
-                                border: `1px solid ${badge.color}`,
-                                color: badge.color,
-                                borderRadius: "999px",
-                                fontSize: "0.7rem",
-                                fontWeight: 700,
-                                letterSpacing: "0.08em",
-                                padding: "1px 6px",
-                              }}
-                            >
-                              {badge.label}
-                            </span>
+                            <div style={{ display: "flex", gap: "4px" }}>
+                              {badges.map((badge) => (
+                                <span
+                                  key={`${badge.label}-${badge.title}`}
+                                  title={badge.title}
+                                  style={{
+                                    border: `1px solid ${badge.color}`,
+                                    color: badge.color,
+                                    borderRadius: "999px",
+                                    fontSize: "0.7rem",
+                                    fontWeight: 700,
+                                    letterSpacing: "0.08em",
+                                    padding: "1px 6px",
+                                  }}
+                                >
+                                  {badge.label}
+                                </span>
+                              ))}
+                            </div>
                             <div style={{ display: "flex", flexDirection: "column" }}>
                               <span>{run.name}</span>
                               <span style={{ fontSize: "0.7rem", color: "#808080" }}>

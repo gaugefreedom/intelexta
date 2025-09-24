@@ -9,9 +9,18 @@ export interface Project {
   pubkey: string;
 }
 
+export interface ExecutionStepProofSummary {
+  checkpointConfigId: string;
+  checkpointType: string;
+  orderIndex: number;
+  proofMode: RunProofMode;
+  epsilon?: number | null;
+}
+
 export interface RunExecutionSummary {
   id: string;
   createdAt: string;
+  stepProofs: ExecutionStepProofSummary[];
 }
 
 export interface RunSummary {
@@ -22,6 +31,7 @@ export interface RunSummary {
   epsilon?: number | null;
   hasPersistedCheckpoint: boolean;
   executions: RunExecutionSummary[];
+  stepProofs: ExecutionStepProofSummary[];
 }
 
 export type RunProofMode = 'exact' | 'concordant';
@@ -102,10 +112,12 @@ export interface CheckpointReplayReport {
   originalDigest: string;
   replayDigest: string;
   errorMessage?: string | null;
+  proofMode?: RunProofMode | null;
   semanticOriginalDigest?: string | null;
   semanticReplayDigest?: string | null;
   semanticDistance?: number | null;
   epsilon?: number | null;
+  configuredEpsilon?: number | null;
 }
 
 export interface ReplayReport {
