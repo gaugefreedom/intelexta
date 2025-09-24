@@ -9,6 +9,11 @@ export interface Project {
   pubkey: string;
 }
 
+export interface RunExecutionSummary {
+  id: string;
+  createdAt: string;
+}
+
 export interface RunSummary {
   id: string;
   name: string;
@@ -16,12 +21,14 @@ export interface RunSummary {
   kind: string;
   epsilon?: number | null;
   hasPersistedCheckpoint: boolean;
+  executions: RunExecutionSummary[];
 }
 
 export type RunProofMode = 'exact' | 'concordant';
 
 export interface CheckpointSummary {
   id: string;
+  runExecutionId: string;
   timestamp: string;
   kind: string;
   incident?: IncidentSummary | null;
@@ -40,6 +47,7 @@ export interface CheckpointSummary {
 export interface CheckpointDetails {
   id: string;
   runId: string;
+  runExecutionId: string;
   timestamp: string;
   kind: string;
   incident?: IncidentSummary | null;
@@ -256,8 +264,14 @@ export async function listRuns(projectId: string): Promise<RunSummary[]> {
   return await invoke<RunSummary[]>('list_runs', { projectId });
 }
 
-export async function listCheckpoints(runId: string): Promise<CheckpointSummary[]> {
-  return await invoke<CheckpointSummary[]>('list_checkpoints', { runId });
+export async function listCheckpoints(
+  runId: string,
+  runExecutionId?: string | null,
+): Promise<CheckpointSummary[]> {
+  return await invoke<CheckpointSummary[]>('list_checkpoints', {
+    runId,
+    runExecutionId: runExecutionId ?? null,
+  });
 }
 
 export async function getCheckpointDetails(
@@ -308,12 +322,8 @@ export async function reorderRunSteps(
   });
 }
 
-export async function startRun(runId: string): Promise<void> {
-  await invoke('start_run', { runId });
-}
-
-export async function reopenRun(runId: string): Promise<void> {
-  await invoke('reopen_run', { runId });
+export async function startRun(runId: string): Promise<RunExecutionSummary> {
+  return await invoke<RunExecutionSummary>('start_run', { runId });
 }
 
 export async function cloneRun(runId: string): Promise<string> {

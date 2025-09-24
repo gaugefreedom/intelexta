@@ -39,6 +39,7 @@ struct CheckpointMessageInput<'a> {
 
 struct CheckpointInsert<'a> {
     run_id: &'a str,
+    run_execution_id: &'a str,
     checkpoint_config_id: Option<&'a str>,
     parent_checkpoint_id: Option<&'a str>,
     turn_index: Option<u32>,
@@ -193,6 +194,14 @@ pub struct StoredRun {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epsilon: Option<f64>,
     pub steps: Vec<RunStep>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunExecutionRecord {
+    pub id: String,
+    pub run_id: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -716,10 +725,11 @@ fn persist_checkpoint(
     let incident_json = params.incident.map(|value| value.to_string());
 
     conn.execute(
-        "INSERT INTO checkpoints (id, run_id, checkpoint_config_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+        "INSERT INTO checkpoints (id, run_id, run_execution_id, checkpoint_config_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         params![
             &checkpoint_id,
             params.run_id,
+            params.run_execution_id,
             params.checkpoint_config_id,
             params.parent_checkpoint_id,
             params.turn_index.map(|value| value as i64),
@@ -771,17 +781,18 @@ fn persist_checkpoint(
 fn sum_checkpoint_token_usage(
     conn: &Connection,
     run_id: &str,
+    run_execution_id: &str,
     checkpoint_config_id: Option<&str>,
 ) -> anyhow::Result<(u64, u64)> {
     let (prompt_total, completion_total): (i64, i64) = match checkpoint_config_id {
         Some(config_id) => conn.query_row(
-            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1 AND checkpoint_config_id = ?2",
-            params![run_id, config_id],
+            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1 AND run_execution_id = ?2 AND checkpoint_config_id = ?3",
+            params![run_id, run_execution_id, config_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?,
         None => conn.query_row(
-            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1",
-            params![run_id],
+            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM checkpoints WHERE run_id = ?1 AND run_execution_id = ?2",
+            params![run_id, run_execution_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?,
     };
@@ -917,6 +928,64 @@ pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<Stored
     })
 }
 
+fn insert_run_execution(conn: &Connection, run_id: &str) -> anyhow::Result<RunExecutionRecord> {
+    let execution_id = Uuid::new_v4().to_string();
+    let created_at = Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO run_executions (id, run_id, created_at) VALUES (?1, ?2, ?3)",
+        params![&execution_id, run_id, &created_at],
+    )?;
+
+    Ok(RunExecutionRecord {
+        id: execution_id,
+        run_id: run_id.to_string(),
+        created_at,
+    })
+}
+
+pub fn list_run_executions(
+    conn: &Connection,
+    run_id: &str,
+) -> anyhow::Result<Vec<RunExecutionRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, run_id, created_at FROM run_executions WHERE run_id = ?1 ORDER BY datetime(created_at) DESC, id DESC",
+    )?;
+
+    let rows = stmt.query_map(params![run_id], |row| {
+        Ok(RunExecutionRecord {
+            id: row.get(0)?,
+            run_id: row.get(1)?,
+            created_at: row.get(2)?,
+        })
+    })?;
+
+    let mut executions = Vec::new();
+    for entry in rows {
+        executions.push(entry?);
+    }
+
+    Ok(executions)
+}
+
+pub fn load_latest_run_execution(
+    conn: &Connection,
+    run_id: &str,
+) -> anyhow::Result<Option<RunExecutionRecord>> {
+    conn.query_row(
+        "SELECT id, run_id, created_at FROM run_executions WHERE run_id = ?1 ORDER BY datetime(created_at) DESC, id DESC LIMIT 1",
+        params![run_id],
+        |row| {
+            Ok(RunExecutionRecord {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
 struct LastCheckpointInfo {
     id: String,
     curr_chain: String,
@@ -926,11 +995,12 @@ struct LastCheckpointInfo {
 fn load_last_checkpoint(
     conn: &Connection,
     run_id: &str,
+    run_execution_id: &str,
 ) -> anyhow::Result<Option<LastCheckpointInfo>> {
     let row = conn
         .query_row(
-            "SELECT id, curr_chain, turn_index FROM checkpoints WHERE run_id = ?1 ORDER BY COALESCE(turn_index, -1) DESC, timestamp DESC LIMIT 1",
-            params![run_id],
+            "SELECT id, curr_chain, turn_index FROM checkpoints WHERE run_id = ?1 AND run_execution_id = ?2 ORDER BY COALESCE(turn_index, -1) DESC, timestamp DESC LIMIT 1",
+            params![run_id, run_execution_id],
             |row| {
                 let turn_index = row
                     .get::<_, Option<i64>>(2)?
@@ -951,12 +1021,13 @@ fn load_last_checkpoint(
 fn load_last_checkpoint_for_config(
     conn: &Connection,
     run_id: &str,
+    run_execution_id: &str,
     checkpoint_config_id: &str,
 ) -> anyhow::Result<Option<LastCheckpointInfo>> {
     let row = conn
         .query_row(
-            "SELECT id, curr_chain, turn_index FROM checkpoints WHERE run_id = ?1 AND checkpoint_config_id = ?2 ORDER BY COALESCE(turn_index, -1) DESC, timestamp DESC LIMIT 1",
-            params![run_id, checkpoint_config_id],
+            "SELECT id, curr_chain, turn_index FROM checkpoints WHERE run_id = ?1 AND run_execution_id = ?2 AND checkpoint_config_id = ?3 ORDER BY COALESCE(turn_index, -1) DESC, timestamp DESC LIMIT 1",
+            params![run_id, run_execution_id, checkpoint_config_id],
             |row| {
                 let turn_index = row
                     .get::<_, Option<i64>>(2)?
@@ -977,17 +1048,21 @@ fn load_last_checkpoint_for_config(
 fn load_interactive_messages(
     conn: &Connection,
     run_id: &str,
+    run_execution_id: &str,
     checkpoint_config_id: &str,
 ) -> anyhow::Result<Vec<(String, String)>> {
     let mut stmt = conn.prepare(
-        "SELECT m.role, m.body FROM checkpoints c JOIN checkpoint_messages m ON m.checkpoint_id = c.id WHERE c.run_id = ?1 AND c.checkpoint_config_id = ?2 ORDER BY COALESCE(c.turn_index, -1) ASC, c.timestamp ASC",
+        "SELECT m.role, m.body FROM checkpoints c JOIN checkpoint_messages m ON m.checkpoint_id = c.id WHERE c.run_id = ?1 AND c.run_execution_id = ?2 AND c.checkpoint_config_id = ?3 ORDER BY COALESCE(c.turn_index, -1) ASC, c.timestamp ASC",
     )?;
 
-    let rows = stmt.query_map(params![run_id, checkpoint_config_id], |row| {
-        let role: String = row.get(0)?;
-        let body: String = row.get(1)?;
-        Ok((role, body))
-    })?;
+    let rows = stmt.query_map(
+        params![run_id, run_execution_id, checkpoint_config_id],
+        |row| {
+            let role: String = row.get(0)?;
+            let body: String = row.get(1)?;
+            Ok((role, body))
+        },
+    )?;
 
     let mut messages = Vec::new();
     for row in rows {
@@ -1081,7 +1156,12 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
         ));
     }
 
-    let transcript = load_interactive_messages(&conn, run_id, checkpoint_config_id)?;
+    let latest_execution = load_latest_run_execution(&conn, run_id)?
+        .ok_or_else(|| anyhow!("run has not been executed yet"))?;
+    let run_execution_id = latest_execution.id.clone();
+
+    let transcript =
+        load_interactive_messages(&conn, run_id, &run_execution_id, checkpoint_config_id)?;
     let llm_prompt = build_interactive_prompt(&config.prompt, &transcript, trimmed_prompt);
 
     let signing_key = ensure_project_signing_key(&conn, &stored_run.project_id)?;
@@ -1093,8 +1173,12 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
 
     let tx = conn.transaction()?;
 
-    let (prior_prompt, prior_completion) =
-        sum_checkpoint_token_usage(&tx, run_id, Some(checkpoint_config_id))?;
+    let (prior_prompt, prior_completion) = sum_checkpoint_token_usage(
+        &tx,
+        run_id,
+        run_execution_id.as_str(),
+        Some(checkpoint_config_id),
+    )?;
     let projected_prompt_total = prior_prompt
         .checked_add(usage.prompt_tokens)
         .ok_or_else(|| anyhow!("prompt token total overflow"))?;
@@ -1112,7 +1196,7 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
         )));
     }
 
-    let last_checkpoint = load_last_checkpoint(&tx, run_id)?;
+    let last_checkpoint = load_last_checkpoint(&tx, run_id, run_execution_id.as_str())?;
     let parent_checkpoint_id_owned = last_checkpoint.as_ref().map(|info| info.id.clone());
     let prev_chain_owned = last_checkpoint.as_ref().map(|info| info.curr_chain.clone());
     let parent_checkpoint_ref = parent_checkpoint_id_owned
@@ -1120,8 +1204,12 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
         .map(|value| value.as_str());
     let prev_chain_ref = prev_chain_owned.as_deref().unwrap_or("");
 
-    let config_last_checkpoint =
-        load_last_checkpoint_for_config(&tx, run_id, checkpoint_config_id)?;
+    let config_last_checkpoint = load_last_checkpoint_for_config(
+        &tx,
+        run_id,
+        run_execution_id.as_str(),
+        checkpoint_config_id,
+    )?;
     let last_turn_index = config_last_checkpoint
         .as_ref()
         .and_then(|info| info.turn_index);
@@ -1135,6 +1223,7 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
     let human_timestamp = Utc::now().to_rfc3339();
     let human_insert = CheckpointInsert {
         run_id,
+        run_execution_id: run_execution_id.as_str(),
         checkpoint_config_id: Some(checkpoint_config_id),
         parent_checkpoint_id: parent_checkpoint_ref,
         turn_index: Some(human_turn_index),
@@ -1172,6 +1261,7 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
         .ok_or_else(|| anyhow!("usage token overflow"))?;
     let ai_insert = CheckpointInsert {
         run_id,
+        run_execution_id: run_execution_id.as_str(),
         checkpoint_config_id: Some(checkpoint_config_id),
         parent_checkpoint_id: Some(human_checkpoint_id.as_str()),
         turn_index: Some(ai_turn_index),
@@ -1234,9 +1324,12 @@ pub fn finalize_interactive_checkpoint(
         ));
     }
 
+    let latest_execution = load_latest_run_execution(&conn, run_id)?
+        .ok_or_else(|| anyhow!("run has not been executed yet"))?;
+
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1 AND checkpoint_config_id = ?2",
-        params![run_id, checkpoint_config_id],
+        "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1 AND run_execution_id = ?2 AND checkpoint_config_id = ?3",
+        params![run_id, latest_execution.id, checkpoint_config_id],
         |row| row.get(0),
     )?;
 
@@ -1261,12 +1354,12 @@ pub(crate) fn start_hello_run_with_client(
     }
 
     let run_id = create_run(pool, spec)?;
-    start_run_with_client(pool, &run_id, llm_client)?;
+    let _ = start_run_with_client(pool, &run_id, llm_client)?;
 
     Ok(run_id)
 }
 
-pub fn start_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
+pub fn start_run(pool: &DbPool, run_id: &str) -> anyhow::Result<RunExecutionRecord> {
     let client = DefaultOllamaClient::new();
     start_run_with_client(pool, run_id, &client)
 }
@@ -1275,7 +1368,7 @@ pub(crate) fn start_run_with_client(
     pool: &DbPool,
     run_id: &str,
     llm_client: &dyn LlmClient,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RunExecutionRecord> {
     let mut conn = pool.get()?;
     let stored_run = load_stored_run(&conn, run_id)?;
 
@@ -1302,18 +1395,8 @@ pub(crate) fn start_run_with_client(
         }
     }
 
-    let existing_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM checkpoints WHERE run_id = ?1",
-        params![run_id],
-        |row| row.get(0),
-    )?;
-    if existing_count > 0 {
-        return Err(anyhow!(format!(
-            "run {run_id} already has persisted checkpoints; reopen or clone before re-running"
-        )));
-    }
-
     let tx = conn.transaction()?;
+    let execution_record = insert_run_execution(&tx, run_id)?;
     let signing_key = ensure_project_signing_key(&tx, &stored_run.project_id)?;
     let policy = store::policies::get(tx.deref(), &stored_run.project_id)?;
     let mut prev_chain = String::new();
@@ -1365,6 +1448,7 @@ pub(crate) fn start_run_with_client(
 
             let checkpoint_insert = CheckpointInsert {
                 run_id,
+                run_execution_id: execution_record.id.as_str(),
                 checkpoint_config_id: Some(config.id.as_str()),
                 parent_checkpoint_id: None,
                 turn_index: None,
@@ -1421,6 +1505,7 @@ pub(crate) fn start_run_with_client(
 
         let checkpoint_insert = CheckpointInsert {
             run_id,
+            run_execution_id: execution_record.id.as_str(),
             checkpoint_config_id: Some(config.id.as_str()),
             parent_checkpoint_id: None,
             turn_index: None,
@@ -1448,18 +1533,7 @@ pub(crate) fn start_run_with_client(
     }
 
     tx.commit()?;
-    Ok(())
-}
-
-pub fn reopen_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
-    {
-        let mut conn = pool.get()?;
-        let tx = conn.transaction()?;
-        tx.execute("DELETE FROM checkpoints WHERE run_id = ?1", params![run_id])?;
-        tx.commit()?;
-    }
-
-    Ok(())
+    Ok(execution_record)
 }
 
 pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
@@ -1499,9 +1573,7 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
         epsilon: source_run.epsilon,
     };
 
-    let new_run_id = create_run(pool, spec_snapshot)?;
-    start_run(pool, &new_run_id)?;
-    Ok(new_run_id)
+    create_run(pool, spec_snapshot)
 }
 
 fn execute_checkpoint(

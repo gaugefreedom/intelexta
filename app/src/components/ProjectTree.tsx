@@ -20,6 +20,17 @@ interface ProjectRunState {
 
 type RunsByProject = Record<string, ProjectRunState>;
 
+function formatExecutionTimestamp(value?: string | null): string {
+  if (!value) {
+    return 'Unknown time';
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
 function proofBadgeFor(kind: string): { label: string; color: string; title: string } {
   switch (kind) {
     case "exact":
@@ -266,6 +277,8 @@ export default function ProjectTree({
                     <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "2px" }}>
                       {runState.runs.map((run) => {
                         const badge = proofBadgeFor(run.kind);
+                        const executionCount = run.executions?.length ?? 0;
+                        const latestExecution = run.executions?.[0] ?? null;
                         return (
                           <li key={run.id} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.85rem" }}>
                             <span
@@ -282,7 +295,14 @@ export default function ProjectTree({
                             >
                               {badge.label}
                             </span>
-                            <span>{run.name}</span>
+                            <div style={{ display: "flex", flexDirection: "column" }}>
+                              <span>{run.name}</span>
+                              <span style={{ fontSize: "0.7rem", color: "#808080" }}>
+                                {executionCount > 0
+                                  ? `${executionCount} execution${executionCount === 1 ? "" : "s"} • latest ${formatExecutionTimestamp(latestExecution?.createdAt)}`
+                                  : "No executions yet"}
+                              </span>
+                            </div>
                           </li>
                         );
                       })}

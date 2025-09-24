@@ -71,6 +71,17 @@ function messageRoleBadge(role: string): { label: string; color: string } {
   }
 }
 
+function formatExecutionTimestamp(value?: string | null): string {
+  if (!value) {
+    return "Unknown time";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
 function abbreviateId(value?: string | null): string | null {
   if (!value) {
     return null;
@@ -301,12 +312,14 @@ export default function InspectorPanel({
   projectId,
   refreshToken,
   selectedRunId,
+  selectedExecutionId,
   onSelectRun,
 }: {
   projectId: string;
   refreshToken: number;
   selectedRunId: string | null;
-  onSelectRun: (runId: string | null) => void;
+  selectedExecutionId: string | null;
+  onSelectRun: (runId: string | null, executionId?: string | null) => void;
 }) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
   const [checkpoints, setCheckpoints] = React.useState<CheckpointSummary[]>([]);
@@ -332,8 +345,8 @@ export default function InspectorPanel({
   const [promptViewMode, setPromptViewMode] = React.useState<PayloadViewMode>("raw");
   const [outputViewMode, setOutputViewMode] = React.useState<PayloadViewMode>("raw");
 
-  const persistedRuns = React.useMemo(
-    () => runs.filter((run) => run.hasPersistedCheckpoint),
+  const runsWithExecutions = React.useMemo(
+    () => runs.filter((run) => (run.executions?.length ?? 0) > 0),
     [runs],
   );
 
@@ -341,8 +354,27 @@ export default function InspectorPanel({
     if (!selectedRunId) {
       return null;
     }
-    return persistedRuns.find((run) => run.id === selectedRunId) ?? null;
-  }, [persistedRuns, selectedRunId]);
+    return runs.find((run) => run.id === selectedRunId) ?? null;
+  }, [runs, selectedRunId]);
+
+  const availableExecutions = selectedRun?.executions ?? [];
+
+  const activeExecutionId = React.useMemo(() => {
+    if (availableExecutions.length === 0) {
+      return null;
+    }
+    if (selectedExecutionId) {
+      const exists = availableExecutions.some((entry) => entry.id === selectedExecutionId);
+      if (exists) {
+        return selectedExecutionId;
+      }
+    }
+    return availableExecutions[0]?.id ?? null;
+  }, [availableExecutions, selectedExecutionId]);
+
+  const selectedExecution = activeExecutionId
+    ? availableExecutions.find((entry) => entry.id === activeExecutionId) ?? null
+    : null;
 
   const selectedRunIdWithCheckpoint = selectedRun?.id ?? null;
 
@@ -361,7 +393,7 @@ export default function InspectorPanel({
         console.error("Failed to load runs", err);
         setRunsError("Could not load runs for this project.");
         setRuns([]);
-        onSelectRun(null);
+        onSelectRun(null, null);
       })
       .finally(() => {
         if (!cancelled) {
@@ -374,25 +406,33 @@ export default function InspectorPanel({
   }, [projectId, refreshToken, onSelectRun]);
 
   React.useEffect(() => {
-    if (persistedRuns.length === 0) {
+    if (runsWithExecutions.length === 0) {
+      if (selectedRunId !== null || selectedExecutionId !== null) {
+        onSelectRun(null, null);
+      }
       return;
     }
 
-    const firstPersistedRunId = persistedRuns[0].id;
-
-    if (!selectedRunId) {
-      onSelectRun(firstPersistedRunId);
-      return;
+    let nextRunId = selectedRunId;
+    if (!nextRunId || !runs.some((run) => run.id === nextRunId)) {
+      nextRunId = runsWithExecutions[0].id;
     }
 
-    const selectedRunExists = runs.some((run) => run.id === selectedRunId);
-    if (!selectedRunExists && firstPersistedRunId !== selectedRunId) {
-      onSelectRun(firstPersistedRunId);
+    const run = runs.find((item) => item.id === nextRunId) ?? runsWithExecutions[0];
+    const executions = run.executions ?? [];
+    const nextExecutionId = executions.length === 0
+      ? null
+      : selectedExecutionId && executions.some((entry) => entry.id === selectedExecutionId)
+      ? selectedExecutionId
+      : executions[0].id;
+
+    if (nextRunId !== selectedRunId || nextExecutionId !== selectedExecutionId) {
+      onSelectRun(nextRunId, nextExecutionId ?? null);
     }
-  }, [persistedRuns, runs, selectedRunId, onSelectRun]);
+  }, [runs, runsWithExecutions, selectedRunId, selectedExecutionId, onSelectRun]);
 
   React.useEffect(() => {
-    if (!selectedRunIdWithCheckpoint) {
+    if (!selectedRunIdWithCheckpoint || !activeExecutionId) {
       setCheckpoints([]);
       setCheckpointError(null);
       return;
@@ -400,7 +440,7 @@ export default function InspectorPanel({
     let cancelled = false;
     setLoadingCheckpoints(true);
     setCheckpointError(null);
-    listCheckpoints(selectedRunIdWithCheckpoint)
+    listCheckpoints(selectedRunIdWithCheckpoint, activeExecutionId)
       .then((items) => {
         if (!cancelled) {
           setCheckpoints(items);
@@ -421,7 +461,7 @@ export default function InspectorPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedRunIdWithCheckpoint, refreshToken]);
+  }, [selectedRunIdWithCheckpoint, activeExecutionId, refreshToken]);
 
   // MERGED LOGIC: Using the useEffect and useCallback from the `emit_car` branch.
   React.useEffect(() => {
@@ -436,7 +476,7 @@ export default function InspectorPanel({
     setDetailsLoading(false);
     setPromptViewMode("raw");
     setOutputViewMode("raw");
-  }, [selectedRunId]);
+  }, [selectedRunId, activeExecutionId]);
 
   React.useEffect(() => {
     if (
@@ -548,7 +588,7 @@ export default function InspectorPanel({
   }, []);
 
   const actionDisabled =
-    !selectedRunIdWithCheckpoint || emittingCar || replayingRun;
+    !selectedRunIdWithCheckpoint || !activeExecutionId || emittingCar || replayingRun;
   const replayButtonLabel = selectedRun?.kind === "concordant" ? "Replay (Concordant)" : "Replay Run";
   const selectedRunBadge = selectedRun ? proofBadgeFor(selectedRun.kind) : null;
 
@@ -703,18 +743,18 @@ export default function InspectorPanel({
             )}
             <select
               value={selectedRunIdWithCheckpoint ?? ""}
-              onChange={(event) => onSelectRun(event.target.value || null)}
-              disabled={loadingRuns || persistedRuns.length === 0}
+              onChange={(event) => onSelectRun(event.target.value || null, undefined)}
+              disabled={loadingRuns || runsWithExecutions.length === 0}
               style={{ flex: 1 }}
             >
               <option value="" disabled>
                 {loadingRuns
                   ? "Loading…"
-                  : persistedRuns.length === 0
-                  ? "No checkpointed runs"
+                  : runsWithExecutions.length === 0
+                  ? "No executed runs"
                   : "Select a run"}
               </option>
-              {persistedRuns.map((run) => {
+              {runsWithExecutions.map((run) => {
                 const badge = proofBadgeFor(run.kind);
                 const timestamp = new Date(run.createdAt).toLocaleString();
                 return (
@@ -726,11 +766,39 @@ export default function InspectorPanel({
             </select>
           </div>
         </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          Execution
+          <select
+            value={activeExecutionId ?? ""}
+            onChange={(event) =>
+              onSelectRun(
+                selectedRunIdWithCheckpoint,
+                event.target.value ? event.target.value : null,
+              )
+            }
+            disabled={!selectedRunIdWithCheckpoint || availableExecutions.length === 0}
+            style={{ width: "100%" }}
+          >
+            <option value="" disabled>
+              {availableExecutions.length === 0 ? "No executions" : "Select an execution"}
+            </option>
+            {availableExecutions.map((execution) => (
+              <option key={execution.id} value={execution.id}>
+                {`${formatExecutionTimestamp(execution.createdAt)} · ${abbreviateId(execution.id) ?? execution.id}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedExecution && (
+          <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>
+            Viewing execution {abbreviateId(selectedExecution.id) ?? selectedExecution.id} from{' '}
+            {formatExecutionTimestamp(selectedExecution.createdAt)}
+          </div>
+        )}
         {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
-        {!runsError && !loadingRuns && persistedRuns.length === 0 && (
+        {!runsError && !loadingRuns && runsWithExecutions.length === 0 && (
           <span style={{ fontSize: "0.8rem", color: "#808080" }}>
-            No runs with persisted checkpoints are available. Execute or import a
-            run that saves checkpoints to inspect it here.
+            No executed runs are available. Launch a workflow to populate the history.
           </span>
         )}
 
