@@ -16,7 +16,6 @@ import {
   startRun,
   cloneRun,
   estimateRunCost,
-  updateRunSettings,
   openInteractiveCheckpointSession,
   submitInteractiveCheckpointTurn,
   finalizeInteractiveCheckpoint,
@@ -24,7 +23,6 @@ import {
   type SubmitInteractiveCheckpointTurn,
   type FinalizeInteractiveCheckpoint,
   type RunCostEstimates,
-  type RunProofMode,
 } from "../lib/api";
 import { interactiveFeatureEnabled } from "../lib/featureFlags";
 import CheckpointEditor, { CheckpointFormValue } from "./CheckpointEditor";
@@ -83,41 +81,6 @@ const MAX_RUN_NAME_LENGTH = 120;
 
 function sanitizeRunName(value: string): string {
   return value.replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
-}
-
-function evaluateNormalizedEpsilonInput(value: string): {
-  value: number | null;
-  error: string | null;
-} {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return { value: null, error: null };
-  }
-  const parsed = Number.parseFloat(trimmed);
-  if (!Number.isFinite(parsed)) {
-    return { value: null, error: "Epsilon must be a number between 0 and 1." };
-  }
-  if (parsed < 0 || parsed > 1) {
-    return { value: null, error: "Epsilon must be between 0 and 1." };
-  }
-  return { value: parsed, error: null };
-}
-
-function formatNormalizedEpsilon(value: number): string {
-  if (!Number.isFinite(value)) {
-    return "";
-  }
-  return Number(value.toFixed(6)).toString();
-}
-
-function epsilonValuesEqual(a: number | null, b: number | null): boolean {
-  if (a === null && b === null) {
-    return true;
-  }
-  if (a === null || b === null) {
-    return false;
-  }
-  return Math.abs(a - b) < 1e-9;
 }
 
 function extractMessagesFromCheckpoints(
@@ -466,16 +429,6 @@ function InteractiveConversationView({
   );
 }
 
-function proofModeLabel(kind: string): string {
-  switch (kind) {
-    case "concordant":
-      return "Concordant";
-    case "exact":
-    default:
-      return "Exact";
-  }
-}
-
 function sanitizeLabelForRequest(value: string, fallback: string): string {
   const cleaned = value.replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
   return cleaned.length > 0 ? cleaned : fallback;
@@ -560,15 +513,6 @@ export default function EditorPanel({
   const [runsLoading, setRunsLoading] = React.useState(false);
   const [runsError, setRunsError] = React.useState<string | null>(null);
 
-  const runEpsilonInputRef = React.useRef<HTMLInputElement | null>(null);
-  const [runProofMode, setRunProofMode] = React.useState<RunProofMode>("exact");
-  const [runEpsilonInput, setRunEpsilonInput] = React.useState<string>("");
-  const [runSettingsSaving, setRunSettingsSaving] = React.useState(false);
-  const lastSavedSettings = React.useRef<{ proofMode: RunProofMode; epsilon: number | null }>({
-    proofMode: "exact",
-    epsilon: null,
-  });
-
   const [checkpointConfigs, setCheckpointConfigs] = React.useState<RunStepConfig[]>([]);
   const [configsLoading, setConfigsLoading] = React.useState(false);
   const [configsError, setConfigsError] = React.useState<string | null>(null);
@@ -593,9 +537,6 @@ export default function EditorPanel({
   const [cloningRun, setCloningRun] = React.useState(false);
   const [newRunName, setNewRunName] = React.useState("");
   const [newRunNameError, setNewRunNameError] = React.useState<string | null>(null);
-  const [newRunProofMode, setNewRunProofMode] = React.useState<RunProofMode>("exact");
-  const [newRunEpsilon, setNewRunEpsilon] = React.useState<string>("");
-  const [newRunEpsilonError, setNewRunEpsilonError] = React.useState<string | null>(null);
 
   const [conversationContext, setConversationContext] = React.useState<
     { runId: string; checkpointId: string } | null
@@ -632,31 +573,6 @@ export default function EditorPanel({
     }
   }, [interactiveSupport]);
 
-  React.useEffect(() => {
-    if (!selectedRun) {
-      setRunProofMode("exact");
-      setRunEpsilonInput("");
-      lastSavedSettings.current = { proofMode: "exact", epsilon: null };
-      return;
-    }
-
-    const normalizedMode: RunProofMode =
-      selectedRun.kind === "concordant" ? "concordant" : "exact";
-    const epsilonFromRun =
-      typeof selectedRun.epsilon === "number" && Number.isFinite(selectedRun.epsilon)
-        ? selectedRun.epsilon
-        : null;
-
-    setRunProofMode(normalizedMode);
-    setRunEpsilonInput(
-      epsilonFromRun !== null ? formatNormalizedEpsilon(epsilonFromRun) : "",
-    );
-    lastSavedSettings.current = {
-      proofMode: normalizedMode,
-      epsilon: epsilonFromRun,
-    };
-  }, [selectedRun?.id, selectedRun?.kind, selectedRun?.epsilon]);
-
   const combinedModelOptions = React.useMemo(() => {
     const set = new Set<string>(availableModels);
     for (const config of checkpointConfigs) {
@@ -665,34 +581,19 @@ export default function EditorPanel({
     return Array.from(set).sort();
   }, [availableModels, checkpointConfigs]);
 
-  const runEpsilonEvaluation = React.useMemo(
-    () => evaluateNormalizedEpsilonInput(runEpsilonInput),
-    [runEpsilonInput],
-  );
-  const runEpsilonValue =
-    runEpsilonEvaluation.error === null ? runEpsilonEvaluation.value : null;
-  const runEpsilonInputError = runEpsilonEvaluation.error;
-
-  const newRunEpsilonEvaluation = React.useMemo(
-    () => evaluateNormalizedEpsilonInput(newRunEpsilon),
-    [newRunEpsilon],
-  );
-  const newRunEpsilonValue =
-    newRunEpsilonEvaluation.error === null ? newRunEpsilonEvaluation.value : null;
-
-  const hasConcordantCheckpoint = React.useMemo(() => {
-    return checkpointConfigs.some((config) => config.proofMode === "concordant");
-  }, [checkpointConfigs]);
-
   const hasInteractiveCheckpoint = React.useMemo(() => {
     return checkpointConfigs.some(
       (config) => config.checkpointType.trim().toLowerCase() === 'interactivechat'.toLowerCase(),
     );
   }, [checkpointConfigs]);
 
-  const epsilonRequired = runProofMode === "concordant" || hasConcordantCheckpoint;
-  const epsilonRequirementUnmet =
-    epsilonRequired && (runEpsilonInputError !== null || runEpsilonValue === null);
+  const concordantStepsMissingEpsilon = React.useMemo(() => {
+    return checkpointConfigs.some(
+      (config) =>
+        config.proofMode === "concordant" &&
+        !(typeof config.epsilon === "number" && Number.isFinite(config.epsilon)),
+    );
+  }, [checkpointConfigs]);
 
   const costOverrunMessages = React.useMemo(() => {
     if (!costEstimates) {
@@ -889,69 +790,6 @@ export default function EditorPanel({
     });
   }, [checkpointConfigs]);
 
-  const persistRunSettings = React.useCallback(
-    async (nextProofMode: RunProofMode, epsilonValue: number | null) => {
-      if (!selectedRunId) {
-        return;
-      }
-
-      const saved = lastSavedSettings.current;
-      if (
-        saved.proofMode === nextProofMode &&
-        epsilonValuesEqual(saved.epsilon, epsilonValue)
-      ) {
-        return;
-      }
-
-      setStatusMessage(null);
-      setErrorMessage(null);
-      setRunSettingsSaving(true);
-      try {
-        const updated = await updateRunSettings({
-          runId: selectedRunId,
-          proofMode: nextProofMode,
-          epsilon: epsilonValue,
-        });
-        setRuns((previous) =>
-          previous.map((run) => (run.id === updated.id ? updated : run)),
-        );
-
-        const updatedProofMode: RunProofMode =
-          updated.kind === "concordant" ? "concordant" : "exact";
-        const updatedEpsilon =
-          typeof updated.epsilon === "number" && Number.isFinite(updated.epsilon)
-            ? updated.epsilon
-            : null;
-
-        lastSavedSettings.current = {
-          proofMode: updatedProofMode,
-          epsilon: updatedEpsilon,
-        };
-
-        setRunProofMode(updatedProofMode);
-        setRunEpsilonInput(
-          updatedEpsilon !== null ? formatNormalizedEpsilon(updatedEpsilon) : "",
-        );
-        setStatusMessage("Run proof settings updated.");
-        onRunsMutated?.();
-      } catch (err) {
-        console.error("Failed to update run settings", err);
-        const message =
-          err instanceof Error ? err.message : "Unable to update run settings.";
-        setErrorMessage(message);
-        const savedProofMode = lastSavedSettings.current.proofMode;
-        const savedEpsilon = lastSavedSettings.current.epsilon;
-        setRunProofMode(savedProofMode);
-        setRunEpsilonInput(
-          savedEpsilon !== null ? formatNormalizedEpsilon(savedEpsilon) : "",
-        );
-      } finally {
-        setRunSettingsSaving(false);
-      }
-    },
-    [selectedRunId, onRunsMutated],
-  );
-
   const handleCreateRun = React.useCallback(async () => {
     if (creatingRun) {
       return;
@@ -966,18 +804,6 @@ export default function EditorPanel({
     setStatusMessage(null);
     setErrorMessage(null);
     setNewRunNameError(null);
-    setNewRunEpsilonError(null);
-
-    if (
-      newRunProofMode === "concordant" &&
-      (newRunEpsilonEvaluation.error !== null || newRunEpsilonValue === null)
-    ) {
-      const message =
-        newRunEpsilonEvaluation.error ??
-        "Concordant runs require an epsilon between 0 and 1.";
-      setNewRunEpsilonError(message);
-      return;
-    }
 
     setCreatingRun(true);
     try {
@@ -989,11 +815,11 @@ export default function EditorPanel({
       const runId = await createRun({
         projectId,
         name: chosenName,
-        proofMode: newRunProofMode,
+        proofMode: "exact",
         seed: randomSeed,
         tokenBudget: 1_000,
         defaultModel: fallbackModel,
-        epsilon: newRunEpsilonValue ?? null,
+        epsilon: null,
       });
 
       let runList: RunSummary[] | null = null;
@@ -1018,9 +844,10 @@ export default function EditorPanel({
               id: runId,
               name: chosenName,
               createdAt: fallbackCreatedAt,
-              kind: newRunProofMode,
-              epsilon: newRunEpsilonValue ?? null,
+              kind: "exact",
+              epsilon: null,
               hasPersistedCheckpoint: false,
+              executions: [],
             },
             ...filtered,
           ];
@@ -1028,9 +855,6 @@ export default function EditorPanel({
       }
 
       setNewRunName("");
-      setNewRunProofMode("exact");
-      setNewRunEpsilon("");
-      setNewRunEpsilonError(null);
       onSelectRun(runId, undefined);
       setStatusMessage("Run created. Configure checkpoints before execution.");
       onRunsMutated?.();
@@ -1048,49 +872,7 @@ export default function EditorPanel({
     onSelectRun,
     onRunsMutated,
     newRunName,
-    newRunProofMode,
-    newRunEpsilonEvaluation.error,
-    newRunEpsilonValue,
   ]);
-
-  const handleRunProofModeChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLSelectElement>) => {
-      const nextValue: RunProofMode =
-        event.target.value === "concordant" ? "concordant" : "exact";
-      setRunProofMode(nextValue);
-      setStatusMessage(null);
-      setErrorMessage(null);
-
-      if (
-        nextValue === "concordant" &&
-        (runEpsilonInputError !== null || runEpsilonValue === null)
-      ) {
-        runEpsilonInputRef.current?.focus();
-        return;
-      }
-
-      void persistRunSettings(nextValue, runEpsilonValue);
-    },
-    [runEpsilonInputError, runEpsilonValue, persistRunSettings],
-  );
-
-  const handleRunEpsilonChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      setRunEpsilonInput(event.target.value);
-    },
-    [],
-  );
-
-  const handleRunEpsilonBlur = React.useCallback(() => {
-    if (runEpsilonInputError !== null) {
-      return;
-    }
-    if (runProofMode === "concordant" && runEpsilonValue === null) {
-      runEpsilonInputRef.current?.focus();
-      return;
-    }
-    void persistRunSettings(runProofMode, runEpsilonValue);
-  }, [runEpsilonInputError, runProofMode, runEpsilonValue, persistRunSettings]);
 
   const handleAddCheckpoint = React.useCallback(() => {
     if (!selectedRunId) {
@@ -1228,11 +1010,10 @@ export default function EditorPanel({
     if (!selectedRunId) {
       return;
     }
-    if (epsilonRequirementUnmet) {
+    if (concordantStepsMissingEpsilon) {
       setErrorMessage(
-        "Provide a run epsilon between 0 and 1 before executing a concordant run.",
+        "Set an epsilon between 0 and 1 for each concordant checkpoint before executing this run.",
       );
-      runEpsilonInputRef.current?.focus();
       return;
     }
     setStatusMessage(null);
@@ -1256,7 +1037,7 @@ export default function EditorPanel({
     } finally {
       setExecutingRun(false);
     }
-  }, [selectedRunId, onRunExecuted, epsilonRequirementUnmet]);
+  }, [selectedRunId, onRunExecuted, concordantStepsMissingEpsilon]);
 
   const handleCloneRun = React.useCallback(async () => {
     if (!selectedRunId) {
@@ -1338,7 +1119,7 @@ export default function EditorPanel({
     setConversationContext(null);
   }, []);
 
-  const runActionPending = executingRun || cloningRun || runSettingsSaving;
+  const runActionPending = executingRun || cloningRun;
   const executeDisabled = !selectedRunId || executingRun;
   const cloneRunDisabled = isCloneRunDisabled(
     selectedRunId,
@@ -1418,46 +1199,8 @@ export default function EditorPanel({
                 {creatingRun ? "Creating…" : "+ New run"}
               </button>
             </div>
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-              <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                New run proof mode
-                <select
-                  value={newRunProofMode}
-                  onChange={(event) => {
-                    const nextValue =
-                      event.target.value === "concordant" ? "concordant" : "exact";
-                    setNewRunProofMode(nextValue);
-                    setNewRunEpsilonError(null);
-                  }}
-                  disabled={creatingRun}
-                >
-                  <option value="exact">Exact</option>
-                  <option value="concordant">Concordant</option>
-                </select>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                New run ε (0–1)
-                <input
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={newRunEpsilon}
-                  onChange={(event) => {
-                    setNewRunEpsilon(event.target.value);
-                    setNewRunEpsilonError(null);
-                  }}
-                  disabled={creatingRun}
-                />
-              </label>
-            </div>
             {newRunNameError && (
               <span style={{ color: "#f48771", fontSize: "0.85rem" }}>{newRunNameError}</span>
-            )}
-            {(newRunEpsilonError || newRunEpsilonEvaluation.error) && (
-              <span style={{ color: "#f48771", fontSize: "0.85rem" }}>
-                {newRunEpsilonError ?? newRunEpsilonEvaluation.error}
-              </span>
             )}
             {runsError && <span style={{ color: "#f48771" }}>{runsError}</span>}
             {!runsLoading && runs.length === 0 ? (
@@ -1484,41 +1227,6 @@ export default function EditorPanel({
                   <div>
                     <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Name</div>
                     <div>{selectedRun.name}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Proof mode</div>
-                    <select
-                      value={runProofMode}
-                      onChange={handleRunProofModeChange}
-                      disabled={runSettingsSaving}
-                    >
-                      <option value="exact">Exact</option>
-                      <option value="concordant">Concordant</option>
-                    </select>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Run ε (0–1)</div>
-                    <input
-                      ref={runEpsilonInputRef}
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={runEpsilonInput}
-                      onChange={handleRunEpsilonChange}
-                      onBlur={handleRunEpsilonBlur}
-                      disabled={runSettingsSaving}
-                    />
-                    {runEpsilonInputError && (
-                      <div style={{ color: "#f48771", fontSize: "0.75rem" }}>
-                        {runEpsilonInputError}
-                      </div>
-                    )}
-                    {!runEpsilonInputError && epsilonRequirementUnmet && (
-                      <div style={{ color: "#f48771", fontSize: "0.75rem" }}>
-                        Set a run epsilon between 0 and 1 for concordant proof.
-                      </div>
-                    )}
                   </div>
                   <div>
                     <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Created</div>
@@ -1671,7 +1379,6 @@ export default function EditorPanel({
                   onSubmit={handleEditorSubmit}
                   onCancel={handleCancelEditor}
                   submitting={editorSubmitting}
-                  runEpsilon={runEpsilonValue}
                 />
               )}
             </>
