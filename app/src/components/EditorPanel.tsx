@@ -1,6 +1,7 @@
 import React from "react";
 import {
   CheckpointSummary,
+  CheckpointDetails,
   listLocalModels,
   RunSummary,
   RunExecutionSummary,
@@ -23,9 +24,11 @@ import {
   type SubmitInteractiveCheckpointTurn,
   type FinalizeInteractiveCheckpoint,
   type RunCostEstimates,
+  getCheckpointDetails,
 } from "../lib/api";
 import { interactiveFeatureEnabled } from "../lib/featureFlags";
 import CheckpointEditor, { CheckpointFormValue } from "./CheckpointEditor";
+import CheckpointDetailsPanel from "./CheckpointDetailsPanel";
 import CheckpointListItem from "./CheckpointListItem";
 import { isCloneRunDisabled } from "./cloneRunHelpers";
 
@@ -529,6 +532,9 @@ export default function EditorPanel({
 
   const [activeEditor, setActiveEditor] = React.useState<EditorState | null>(null);
   const [editorSubmitting, setEditorSubmitting] = React.useState(false);
+  const [editorDetails, setEditorDetails] = React.useState<CheckpointDetails | null>(null);
+  const [editorDetailsLoading, setEditorDetailsLoading] = React.useState(false);
+  const [editorDetailsError, setEditorDetailsError] = React.useState<string | null>(null);
 
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
@@ -767,6 +773,9 @@ export default function EditorPanel({
   React.useEffect(() => {
     setActiveEditor(null);
     setEditorSubmitting(false);
+    setEditorDetails(null);
+    setEditorDetailsError(null);
+    setEditorDetailsLoading(false);
     setStatusMessage(null);
     setErrorMessage(null);
     setConversationContext((current) => {
@@ -887,18 +896,39 @@ export default function EditorPanel({
     }
     setStatusMessage(null);
     setErrorMessage(null);
+    setEditorDetails(null);
+    setEditorDetailsError(null);
+    setEditorDetailsLoading(false);
     setActiveEditor({ mode: "create" });
   }, [selectedRunId]);
 
   const handleEditCheckpoint = React.useCallback((config: RunStepConfig) => {
     setStatusMessage(null);
     setErrorMessage(null);
+    setEditorDetails(null);
+    setEditorDetailsError(null);
+    setEditorDetailsLoading(true);
     setActiveEditor({ mode: "edit", checkpoint: config });
+    getCheckpointDetails(config.id)
+      .then((details) => {
+        setEditorDetails(details);
+      })
+      .catch((err) => {
+        console.error("Failed to load checkpoint details", err);
+        const message = err instanceof Error ? err.message : String(err);
+        setEditorDetailsError(`Unable to load checkpoint details: ${message}`);
+      })
+      .finally(() => {
+        setEditorDetailsLoading(false);
+      });
   }, []);
 
   const handleCancelEditor = React.useCallback(() => {
     setActiveEditor(null);
     setEditorSubmitting(false);
+    setEditorDetails(null);
+    setEditorDetailsError(null);
+    setEditorDetailsLoading(false);
   }, []);
 
   const handleEditorSubmit = React.useCallback(
@@ -931,6 +961,9 @@ export default function EditorPanel({
           setCostsRefreshToken((token) => token + 1);
         }
         setActiveEditor(null);
+        setEditorDetails(null);
+        setEditorDetailsError(null);
+        setEditorDetailsLoading(false);
       } catch (err) {
         console.error("Failed to save checkpoint configuration", err);
         const message =
@@ -965,6 +998,9 @@ export default function EditorPanel({
         await deleteRunStep(config.id);
         setStatusMessage("Checkpoint deleted.");
         setActiveEditor(null);
+        setEditorDetails(null);
+        setEditorDetailsError(null);
+        setEditorDetailsLoading(false);
         setConfigsRefreshToken((token) => token + 1);
         setCostsRefreshToken((token) => token + 1);
       } catch (err) {
@@ -1299,27 +1335,6 @@ export default function EditorPanel({
                     </button>
                   </div>
                 </div>
-                {activeEditor && (
-                  <CheckpointEditor
-                    availableModels={combinedModelOptions}
-                    initialValue={
-                      activeEditor.mode === "edit"
-                        ? {
-                            checkpointType: activeEditor.checkpoint.checkpointType,
-                            model: activeEditor.checkpoint.model,
-                            tokenBudget: activeEditor.checkpoint.tokenBudget,
-                            prompt: activeEditor.checkpoint.prompt,
-                            proofMode: activeEditor.checkpoint.proofMode,
-                            epsilon: activeEditor.checkpoint.epsilon ?? null,
-                          }
-                        : undefined
-                    }
-                    mode={activeEditor.mode}
-                    onSubmit={handleEditorSubmit}
-                    onCancel={handleCancelEditor}
-                    submitting={editorSubmitting}
-                  />
-                )}
                 {costEstimateLoading && (
                   <div style={{ color: "#9cdcfe", fontSize: "0.8rem" }}>
                     Estimating projected run costs…
@@ -1399,6 +1414,43 @@ export default function EditorPanel({
           )}
         </div>
       )}
+      <CheckpointDetailsPanel
+        open={activeEditor !== null}
+        onClose={handleCancelEditor}
+        title={
+          activeEditor?.mode === "edit" ? "Edit checkpoint" : "Add checkpoint"
+        }
+        subtitle={
+          activeEditor?.mode === "edit" ? activeEditor.checkpoint.id : undefined
+        }
+        checkpointDetails={
+          activeEditor?.mode === "edit" ? editorDetails : null
+        }
+        loading={activeEditor?.mode === "edit" ? editorDetailsLoading : false}
+        error={activeEditor?.mode === "edit" ? editorDetailsError : null}
+      >
+        {activeEditor && (
+          <CheckpointEditor
+            availableModels={combinedModelOptions}
+            initialValue={
+              activeEditor.mode === "edit"
+                ? {
+                    checkpointType: activeEditor.checkpoint.checkpointType,
+                    model: activeEditor.checkpoint.model,
+                    tokenBudget: activeEditor.checkpoint.tokenBudget,
+                    prompt: activeEditor.checkpoint.prompt,
+                    proofMode: activeEditor.checkpoint.proofMode,
+                    epsilon: activeEditor.checkpoint.epsilon ?? null,
+                  }
+                : undefined
+            }
+            mode={activeEditor.mode}
+            onSubmit={handleEditorSubmit}
+            onCancel={handleCancelEditor}
+            submitting={editorSubmitting}
+          />
+        )}
+      </CheckpointDetailsPanel>
     </div>
   );
 }
