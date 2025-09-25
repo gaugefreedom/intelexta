@@ -613,6 +613,12 @@ pub fn create_run(
 
     let run_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
+    // Check if the provided name is empty.
+    let final_name = if name.trim().is_empty() {
+        "New run" // If so, use the simple, static default.
+    } else {
+        name.trim() // Otherwise, use the provided name.
+    };
 
     {
         let tx = conn.transaction()?;
@@ -621,7 +627,7 @@ pub fn create_run(
             params![
                 &run_id,
                 project_id,
-                name,
+                final_name,
                 &now,
                 Option::<String>::None,
                 (seed as i64),
