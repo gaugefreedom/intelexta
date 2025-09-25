@@ -535,6 +535,11 @@ export default function EditorPanel({
   const [editorDetails, setEditorDetails] = React.useState<CheckpointDetails | null>(null);
   const [editorDetailsLoading, setEditorDetailsLoading] = React.useState(false);
   const [editorDetailsError, setEditorDetailsError] = React.useState<string | null>(null);
+  const activeEditorRef = React.useRef<EditorState | null>(null);
+
+  React.useEffect(() => {
+    activeEditorRef.current = activeEditor;
+  }, [activeEditor]);
 
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
@@ -909,17 +914,34 @@ export default function EditorPanel({
     setEditorDetailsError(null);
     setEditorDetailsLoading(true);
     setActiveEditor({ mode: "edit", checkpoint: config });
-    getCheckpointDetails(config.id)
+    const checkpointId = config.id;
+    getCheckpointDetails(checkpointId)
       .then((details) => {
-        setEditorDetails(details);
+        if (
+          activeEditorRef.current?.mode === "edit" &&
+          activeEditorRef.current.checkpoint.id === checkpointId
+        ) {
+          setEditorDetails(details);
+          setEditorDetailsError(null);
+        }
       })
       .catch((err) => {
         console.error("Failed to load checkpoint details", err);
         const message = err instanceof Error ? err.message : String(err);
-        setEditorDetailsError(`Unable to load checkpoint details: ${message}`);
+        if (
+          activeEditorRef.current?.mode === "edit" &&
+          activeEditorRef.current.checkpoint.id === checkpointId
+        ) {
+          setEditorDetailsError(`Unable to load checkpoint details: ${message}`);
+        }
       })
       .finally(() => {
-        setEditorDetailsLoading(false);
+        if (
+          activeEditorRef.current?.mode === "edit" &&
+          activeEditorRef.current.checkpoint.id === checkpointId
+        ) {
+          setEditorDetailsLoading(false);
+        }
       });
   }, []);
 
