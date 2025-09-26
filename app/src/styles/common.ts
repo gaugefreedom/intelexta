@@ -21,8 +21,8 @@ export const buttonBase: CSSProperties = {
 
 export const buttonPrimary: CSSProperties = {
   ...buttonBase,
-  backgroundColor: "#2563eb",
-  borderColor: "#3b82f6",
+  backgroundColor: "#2c4a72",
+  borderColor: "#2c4a72",
   color: "#f8fafc",
 };
 
