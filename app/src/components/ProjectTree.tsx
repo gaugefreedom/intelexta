@@ -1,3 +1,4 @@
+// a/app/src/components/ProjectTree.tsx
 import React from "react";
 import {
   createProject,
@@ -9,6 +10,8 @@ import {
   type ExecutionStepProofSummary,
   ProofBadgeKind,
 } from "../lib/api";
+
+import NewProjectIcon from "../assets/icons/new_project_icon_v.svg?react";
 
 interface ProjectTreeProps {
   onSelectProject: (projectId: string | null) => void;
@@ -261,8 +264,17 @@ export default function ProjectTree({
   return (
     <div>
       <h2>Projects</h2>
-      <button onClick={handleNewProject} style={{ marginBottom: "8px" }}>
-        + New Project
+      <button
+        onClick={handleNewProject}
+        style={{
+          marginBottom: "8px",
+          display: 'flex',       // Use flexbox for alignment
+          alignItems: 'center',  // Vertically center icon and text
+          gap: '8px',            // Add space between icon and text
+        }}
+      >
+        <NewProjectIcon style={{ width: '16px', height: '16px' }} />
+        <span>New Project</span>
       </button>
       {loadingProjects && <div>Loading projects…</div>}
       {error && <div style={{ color: "#f48771", marginTop: "8px" }}>{error}</div>}
