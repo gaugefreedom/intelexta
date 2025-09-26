@@ -13,6 +13,12 @@ import {
   type RunProofMode,
   ProofBadgeKind,
 } from "../lib/api";
+import {
+  buttonPrimary,
+  buttonSecondary,
+  buttonDisabled,
+  combineButtonStyles,
+} from "../styles/common.js";
 
 interface ContextPanelProps {
   projectId: string;
@@ -497,7 +503,11 @@ export default function ContextPanel({
           </div>
 
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <button type="submit" disabled={saving}>
+            <button
+              type="submit"
+              disabled={saving}
+              style={combineButtonStyles(buttonPrimary, saving && buttonDisabled)}
+            >
               {saving ? "Saving…" : "Save Policy"}
             </button>
             {status && <span style={{ color: "#6A9955", fontSize: '0.8rem' }}>{status}</span>}
@@ -522,13 +532,28 @@ export default function ContextPanel({
 
         {/* This div stacks the buttons vertically */}
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: 'stretch' }}>
-          <button type="button" onClick={handleExportProject} disabled={exportingProject}>
+          <button
+            type="button"
+            onClick={handleExportProject}
+            disabled={exportingProject}
+            style={combineButtonStyles(buttonSecondary, exportingProject && buttonDisabled)}
+          >
             {exportingProject ? "Exporting…" : "Export Project"}
           </button>
-          <button type="button" onClick={handleImportProjectArchive} disabled={importingProjectArchive}>
+          <button
+            type="button"
+            onClick={handleImportProjectArchive}
+            disabled={importingProjectArchive}
+            style={combineButtonStyles(buttonSecondary, importingProjectArchive && buttonDisabled)}
+          >
             {importingProjectArchive ? "Importing…" : "Import .ixp"}
           </button>
-          <button type="button" onClick={handleImportCarReceipt} disabled={importingCarReceipt}>
+          <button
+            type="button"
+            onClick={handleImportCarReceipt}
+            disabled={importingCarReceipt}
+            style={combineButtonStyles(buttonSecondary, importingCarReceipt && buttonDisabled)}
+          >
             {importingCarReceipt ? "Verifying…" : "Import CAR"}
           </button>
         </div>

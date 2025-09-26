@@ -1,5 +1,13 @@
 import React from "react";
 import { RunStepConfig } from "../lib/api";
+import {
+  buttonGhost,
+  buttonSecondary,
+  buttonDanger,
+  buttonPrimary,
+  buttonDisabled,
+  combineButtonStyles,
+} from "../styles/common.js";
 
 interface CheckpointListItemProps {
   config: RunStepConfig;
@@ -54,10 +62,30 @@ export default function CheckpointListItem({
           <span style={{ fontSize: "1.05rem", fontWeight: 600 }}>{config.checkpointType}</span>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
-          <button type="button" onClick={() => onMoveUp()} disabled={isFirst} title="Move up">
+          <button
+            type="button"
+            onClick={() => onMoveUp()}
+            disabled={isFirst}
+            title="Move up"
+            style={combineButtonStyles(
+              buttonGhost,
+              { padding: "2px 6px", fontSize: "0.85rem" },
+              isFirst && buttonDisabled,
+            )}
+          >
             ↑
           </button>
-          <button type="button" onClick={() => onMoveDown()} disabled={isLast} title="Move down">
+          <button
+            type="button"
+            onClick={() => onMoveDown()}
+            disabled={isLast}
+            title="Move down"
+            style={combineButtonStyles(
+              buttonGhost,
+              { padding: "2px 6px", fontSize: "0.85rem" },
+              isLast && buttonDisabled,
+            )}
+          >
             ↓
           </button>
         </div>
@@ -80,18 +108,22 @@ export default function CheckpointListItem({
       </div>
       <div style={{ fontSize: "0.85rem", color: "#c8c8c8" }}>{promptPreview}</div>
       <div style={{ display: "flex", gap: "8px" }}>
-        <button type="button" onClick={() => onEdit(config)}>
+        <button type="button" onClick={() => onEdit(config)} style={buttonSecondary}>
           Edit
         </button>
         <button
           type="button"
           onClick={() => onDelete(config)}
-          style={{ color: "#f48771" }}
+          style={buttonDanger}
         >
           Delete
         </button>
         {isInteractive && onOpenInteractive && (
-          <button type="button" onClick={() => onOpenInteractive(config)}>
+          <button
+            type="button"
+            onClick={() => onOpenInteractive(config)}
+            style={buttonPrimary}
+          >
             Open Chat
           </button>
         )}

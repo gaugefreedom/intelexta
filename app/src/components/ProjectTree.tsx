@@ -11,7 +11,11 @@ import {
   ProofBadgeKind,
 } from "../lib/api";
 
-import newProjectIcon from "../assets/icons/new_project_icon_v.svg";
+import {
+  buttonPrimary,
+  buttonGhost,
+  combineButtonStyles,
+} from "../styles/common.js";
 
 interface ProjectTreeProps {
   onSelectProject: (projectId: string | null) => void;
@@ -266,19 +270,14 @@ export default function ProjectTree({
       <h2>Projects</h2>
       <button
         onClick={handleNewProject}
-        style={{
+        style={combineButtonStyles(buttonPrimary, {
           marginBottom: "8px",
-          display: "flex",
-          alignItems: "center",
+          justifyContent: "flex-start",
+          alignSelf: "flex-start",
           gap: "8px",
-        }}
+        })}
       >
-        <img
-          src={newProjectIcon}
-          alt="New project"
-          style={{ width: "16px", height: "16px" }}
-        />
-        <span>New Project</span>
+        + New Project
       </button>
       {loadingProjects && <div>Loading projects…</div>}
       {error && <div style={{ color: "#f48771", marginTop: "8px" }}>{error}</div>}
@@ -296,16 +295,12 @@ export default function ProjectTree({
                 <button
                   type="button"
                   onClick={() => handleProjectToggle(project.id)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "#d4d4d4",
-                    cursor: "pointer",
-                    fontSize: "1rem",
-                    lineHeight: 1,
-                    padding: 0,
-                    width: "18px",
-                  }}
+                  style={combineButtonStyles(buttonGhost, {
+                    padding: "2px 4px",
+                    width: "20px",
+                    minWidth: "20px",
+                    justifyContent: "center",
+                  })}
                   aria-label={isExpanded ? "Collapse project" : "Expand project"}
                 >
                   {isExpanded ? "▾" : "▸"}
@@ -313,16 +308,16 @@ export default function ProjectTree({
                 <button
                   type="button"
                   onClick={() => handleProjectSelect(project.id)}
-                  style={{
+                  style={combineButtonStyles(buttonGhost, {
                     flex: 1,
-                    background: "none",
-                    border: "none",
-                    color: isSelected ? "#ffffff" : "#d4d4d4",
-                    cursor: "pointer",
-                    fontWeight: isSelected ? 600 : 500,
+                    justifyContent: "flex-start",
                     textAlign: "left",
-                    padding: "2px 0",
-                  }}
+                    padding: "2px 6px",
+                    borderColor: "transparent",
+                    color: isSelected ? "#ffffff" : "#d4d4d4",
+                    fontWeight: isSelected ? 600 : 500,
+                    backgroundColor: "transparent",
+                  })}
                 >
                   {project.name}
                 </button>
