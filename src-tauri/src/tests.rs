@@ -58,7 +58,6 @@ fn create_project_stores_secret_for_later_use() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn start_run_creates_new_execution_without_truncating_history() -> Result<()> {
     init_keyring_mock();
@@ -446,7 +445,6 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
 
     Ok(())
 }
-
 
 #[test]
 fn get_policy_returns_default_for_new_project() -> Result<()> {
