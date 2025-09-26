@@ -1,5 +1,11 @@
 import React from "react";
 import { CheckpointDetails, IncidentSummary } from "../lib/api";
+import {
+  buttonGhost,
+  buttonSecondary,
+  buttonDisabled,
+  combineButtonStyles,
+} from "../styles/common.js";
 
 type PayloadViewMode = "raw" | "canonical" | "digest";
 
@@ -99,16 +105,15 @@ function PayloadViewer({
 
   const toggleStyle = (mode: PayloadViewMode, enabled: boolean): React.CSSProperties => {
     const isActive = viewMode === mode;
-    return {
+    return combineButtonStyles(buttonGhost, {
       fontSize: "0.7rem",
       padding: "2px 8px",
-      borderRadius: "4px",
-      border: `1px solid ${isActive ? "#9cdcfe" : "#333"}`,
+      borderColor: isActive ? "#9cdcfe" : "#333",
       backgroundColor: isActive ? "#1f2937" : "#111",
       color: enabled ? (isActive ? "#9cdcfe" : "#ccc") : "#666",
       cursor: enabled ? "pointer" : "not-allowed",
       opacity: enabled ? 1 : 0.5,
-    };
+    });
   };
 
   const handleCopy = React.useCallback(() => {
@@ -206,10 +211,20 @@ function PayloadViewer({
         {displayContent}
       </pre>
       <div style={{ marginTop: "8px", display: "flex", gap: "8px" }}>
-        <button type="button" onClick={handleCopy} disabled={copyDisabled}>
+        <button
+          type="button"
+          onClick={handleCopy}
+          disabled={copyDisabled}
+          style={combineButtonStyles(buttonSecondary, copyDisabled && buttonDisabled)}
+        >
           Copy
         </button>
-        <button type="button" onClick={handleDownload} disabled={copyDisabled}>
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={copyDisabled}
+          style={combineButtonStyles(buttonSecondary, copyDisabled && buttonDisabled)}
+        >
           Download
         </button>
       </div>
@@ -353,7 +368,7 @@ export default function CheckpointDetailsPanel({
               </div>
             )}
           </div>
-          <button type="button" onClick={onClose}>
+          <button type="button" onClick={onClose} style={buttonSecondary}>
             Close
           </button>
         </div>

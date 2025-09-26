@@ -19,6 +19,12 @@ import CheckpointDetailsPanel, {
   formatIncidentMessage,
   incidentSeverityColor,
 } from "./CheckpointDetailsPanel";
+import {
+  buttonPrimary,
+  buttonSecondary,
+  buttonDisabled,
+  combineButtonStyles,
+} from "../styles/common.js";
 
 function proofBadgeFor(mode: ProofBadgeKind): {
   label: string;
@@ -623,7 +629,11 @@ export default function InspectorPanel({
             type="button"
             onClick={handleEmitCar}
             disabled={actionDisabled}
-            style={{ alignSelf: "flex-start" }}
+            style={combineButtonStyles(
+              buttonPrimary,
+              actionDisabled && buttonDisabled,
+              { alignSelf: "flex-start" },
+            )}
           >
             {emittingCar ? "Emitting…" : "Emit CAR"}
           </button>
@@ -631,7 +641,11 @@ export default function InspectorPanel({
             type="button"
             onClick={handleReplayRun}
             disabled={actionDisabled}
-            style={{ alignSelf: "flex-start" }}
+            style={combineButtonStyles(
+              buttonSecondary,
+              actionDisabled && buttonDisabled,
+              { alignSelf: "flex-start" },
+            )}
           >
             {replayingRun ? "Replaying…" : replayButtonLabel}
           </button>

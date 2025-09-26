@@ -1,5 +1,11 @@
 import React from "react";
 import type { RunProofMode } from "../lib/api";
+import {
+  buttonPrimary,
+  buttonSecondary,
+  buttonDisabled,
+  combineButtonStyles,
+} from "../styles/common.js";
 
 export interface CheckpointFormValue {
   checkpointType: string;
@@ -311,10 +317,19 @@ export default function CheckpointEditor({
       </label>
       {error && <div style={{ color: "#f48771", fontSize: "0.85rem" }}>{error}</div>}
       <div style={{ display: "flex", gap: "8px" }}>
-        <button type="submit" disabled={submitting}>
+        <button
+          type="submit"
+          disabled={submitting}
+          style={combineButtonStyles(buttonPrimary, submitting && buttonDisabled)}
+        >
           {submitting ? "Saving…" : submitLabel}
         </button>
-        <button type="button" onClick={onCancel} disabled={submitting}>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={submitting}
+          style={combineButtonStyles(buttonSecondary, submitting && buttonDisabled)}
+        >
           Cancel
         </button>
       </div>

@@ -31,6 +31,12 @@ import CheckpointEditor, { CheckpointFormValue } from "./CheckpointEditor";
 import CheckpointDetailsPanel from "./CheckpointDetailsPanel";
 import CheckpointListItem from "./CheckpointListItem";
 import { isCloneRunDisabled } from "./cloneRunHelpers";
+import {
+  buttonPrimary,
+  buttonSecondary,
+  buttonDisabled,
+  combineButtonStyles,
+} from "../styles/common.js";
 
 type ConversationRoleCategory = "human" | "ai" | "other";
 
@@ -287,10 +293,18 @@ function InteractiveConversationView({
           </div>
         </div>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <button type="button" onClick={handleFinalize} disabled={messagesLoading || isSending}>
+          <button
+            type="button"
+            onClick={handleFinalize}
+            disabled={messagesLoading || isSending}
+            style={combineButtonStyles(
+              buttonPrimary,
+              (messagesLoading || isSending) && buttonDisabled,
+            )}
+          >
             Finalize transcript
           </button>
-          <button type="button" onClick={onExit}>
+          <button type="button" onClick={onExit} style={buttonSecondary}>
             Return to configuration
           </button>
         </div>
@@ -420,7 +434,11 @@ function InteractiveConversationView({
           />
         </label>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <button type="submit" disabled={disableSend}>
+          <button
+            type="submit"
+            disabled={disableSend}
+            style={combineButtonStyles(buttonPrimary, disableSend && buttonDisabled)}
+          >
             {isSending ? "Sending…" : "Send"}
           </button>
           {composerError && (
@@ -1255,6 +1273,10 @@ export default function EditorPanel({
                 type="button"
                 onClick={handleCreateRun}
                 disabled={creatingRun || runsLoading}
+                style={combineButtonStyles(
+                  buttonPrimary,
+                  (creatingRun || runsLoading) && buttonDisabled,
+                )}
               >
                 {creatingRun ? "Creating…" : "+ New run"}
               </button>
@@ -1300,7 +1322,12 @@ export default function EditorPanel({
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                  <button type="button" onClick={handleExecuteRun} disabled={executeDisabled}>
+                  <button
+                    type="button"
+                    onClick={handleExecuteRun}
+                    disabled={executeDisabled}
+                    style={combineButtonStyles(buttonPrimary, executeDisabled && buttonDisabled)}
+                  >
                     {executingRun ? "Executing…" : "Execute Full Run"}
                   </button>
                   <button
@@ -1312,6 +1339,7 @@ export default function EditorPanel({
                         ? "Add at least one checkpoint before cloning this run."
                         : undefined
                     }
+                    style={combineButtonStyles(buttonSecondary, cloneRunDisabled && buttonDisabled)}
                   >
                     {cloningRun ? "Cloning…" : "Clone run"}
                   </button>
@@ -1352,6 +1380,10 @@ export default function EditorPanel({
                       type="button"
                       onClick={handleAddCheckpoint}
                       disabled={!selectedRunId || activeEditor !== null || editorSubmitting}
+                      style={combineButtonStyles(
+                        buttonPrimary,
+                        (!selectedRunId || activeEditor !== null || editorSubmitting) && buttonDisabled,
+                      )}
                     >
                       + Add checkpoint
                     </button>

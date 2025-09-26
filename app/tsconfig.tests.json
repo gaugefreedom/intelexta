@@ -12,6 +12,7 @@
     "src/components/cloneRunHelpers.ts",
     "src/components/__tests__/checkpointEditor.test.ts",
     "src/components/__tests__/cloneRunHelpers.test.ts",
+    "src/styles/common.ts",
     "src/test/node-shims.d.ts"
   ]
 }
