@@ -11,7 +11,7 @@ import {
   ProofBadgeKind,
 } from "../lib/api";
 
-import NewProjectIcon from "../assets/icons/new_project_icon_v.svg?react";
+import newProjectIcon from "../assets/icons/new_project_icon_v.svg";
 
 interface ProjectTreeProps {
   onSelectProject: (projectId: string | null) => void;
@@ -268,12 +268,16 @@ export default function ProjectTree({
         onClick={handleNewProject}
         style={{
           marginBottom: "8px",
-          display: 'flex',       // Use flexbox for alignment
-          alignItems: 'center',  // Vertically center icon and text
-          gap: '8px',            // Add space between icon and text
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
         }}
       >
-        <NewProjectIcon style={{ width: '16px', height: '16px' }} />
+        <img
+          src={newProjectIcon}
+          alt="New project"
+          style={{ width: "16px", height: "16px" }}
+        />
         <span>New Project</span>
       </button>
       {loadingProjects && <div>Loading projects…</div>}
