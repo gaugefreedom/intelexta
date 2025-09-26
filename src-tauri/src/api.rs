@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 #[tauri::command]
-pub fn list_projects(pool: State<DbPool>) -> Result<Vec<Project>, Error> {
+pub fn list_projects(pool: State<'_, DbPool>) -> Result<Vec<Project>, Error> {
     let conn = pool.get()?;
     let projects = store::projects::list(&conn)?;
     Ok(projects)
@@ -28,7 +28,7 @@ pub fn list_local_models() -> Result<Vec<String>, Error> {
 }
 
 #[tauri::command]
-pub fn create_project(name: String, pool: State<DbPool>) -> Result<Project, Error> {
+pub fn create_project(name: String, pool: State<'_, DbPool>) -> Result<Project, Error> {
     create_project_with_pool(name, pool.inner())
 }
 
@@ -69,7 +69,7 @@ pub fn create_run(
     seed: u64,
     token_budget: u64,
     default_model: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<String, Error> {
     // We create an empty run. Steps will be added separately by the UI.
     let initial_steps = Vec::new();
@@ -109,7 +109,7 @@ pub struct RunStepRequest {
 pub fn create_run_step(
     run_id: String,
     config: RunStepRequest,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<orchestrator::RunStep, Error> {
     orchestrator::create_run_step(pool.inner(), &run_id, config)
         .map_err(|err| Error::Api(err.to_string()))
@@ -147,7 +147,6 @@ pub struct ImportCarArgs {
     #[serde(default)]
     pub bytes: Option<Vec<u8>>,
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -199,7 +198,7 @@ fn hydrate_run_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> 
         name: row.get(1)?,
         created_at: row.get(2)?,
         // The 'kind' is determined later by inspecting the steps.
-        kind: String::new(), 
+        kind: String::new(),
         // Epsilon is now per-step, so it's not needed here.
         epsilon: None,
         // has_persisted_checkpoint is the new name for the column at index 3.
@@ -241,19 +240,19 @@ fn load_step_proof_summaries(
 }
 
 #[tauri::command]
-pub fn list_runs(project_id: String, pool: State<DbPool>) -> Result<Vec<RunSummary>, Error> {
+pub fn list_runs(project_id: String, pool: State<'_, DbPool>) -> Result<Vec<RunSummary>, Error> {
     let conn = pool.get()?;
     // This SQL query is now simpler and no longer selects the obsolete spec_json.
     let mut stmt = conn.prepare(
         "SELECT r.id, r.name, r.created_at, EXISTS (SELECT 1 FROM run_executions e WHERE e.run_id = r.id) AS has_persisted_checkpoint FROM runs r WHERE r.project_id = ?1 ORDER BY r.created_at DESC",
     )?;
-    
+
     let runs_iter = stmt.query_map(params![project_id], hydrate_run_summary)?;
     let mut runs = Vec::new();
 
     for run in runs_iter {
         let mut summary = run?;
-        
+
         // Load the configured steps for this run.
         let step_proofs = load_step_proof_summaries(&conn, &summary.id)?;
 
@@ -314,7 +313,6 @@ fn load_run_summary(conn: &Connection, run_id: &str) -> Result<RunSummary, Error
 
     Ok(summary)
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -391,7 +389,7 @@ pub struct CheckpointMessageSummary {
 #[tauri::command]
 pub fn list_checkpoints(
     args: ListCheckpointsArgs,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<Vec<CheckpointSummary>, Error> {
     // 1. Get the execution_id from the arguments first.
     let Some(execution_id) = args.run_execution_id else {
@@ -416,7 +414,7 @@ pub fn list_checkpoints(
 #[tauri::command]
 pub fn get_checkpoint_details(
     checkpoint_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<CheckpointDetails, Error> {
     get_checkpoint_details_with_pool(checkpoint_id, pool.inner())
 }
@@ -426,7 +424,7 @@ pub fn get_checkpoint_details(
 pub fn open_interactive_checkpoint_session(
     run_id: String,
     checkpoint_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<InteractiveCheckpointSession, Error> {
     let conn = pool.get()?;
     let config = load_run_step(&conn, &checkpoint_id)?;
@@ -445,11 +443,12 @@ pub fn open_interactive_checkpoint_session(
 
     // First, get the latest execution record for the run.
     let latest_execution = orchestrator::load_latest_run_execution(&conn, &run_id)
-    .map_err(|err| Error::Api(err.to_string()))?
-    .ok_or_else(|| Error::Api(format!("Run {} has no executions", run_id)))?;
+        .map_err(|err| Error::Api(err.to_string()))?
+        .ok_or_else(|| Error::Api(format!("Run {} has no executions", run_id)))?;
 
     // Now, call the helper with the specific execution ID.
-    let mut messages = list_checkpoints_with_pool(Some(latest_execution.id.as_str()), pool.inner())?;
+    let mut messages =
+        list_checkpoints_with_pool(Some(latest_execution.id.as_str()), pool.inner())?;
     let checkpoint_id_ref = checkpoint_id.as_str();
     messages.retain(|entry| {
         entry
@@ -465,7 +464,6 @@ pub fn open_interactive_checkpoint_session(
     })
 }
 
-
 pub(crate) fn list_checkpoints_with_pool(
     run_execution_id: Option<&str>,
     pool: &DbPool,
@@ -476,7 +474,7 @@ pub(crate) fn list_checkpoints_with_pool(
     };
 
     let conn = pool.get()?;
-    
+
     // 2. The SQL query is corrected to filter ONLY by run_execution_id.
     let mut stmt = conn.prepare(
         "SELECT c.id, c.run_execution_id, c.timestamp, c.kind, c.incident_json, c.inputs_sha256, c.outputs_sha256, c.semantic_digest, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.parent_checkpoint_id, c.turn_index, c.checkpoint_config_id, m.role, m.body, m.created_at, m.updated_at
@@ -540,7 +538,7 @@ pub(crate) fn list_checkpoints_with_pool(
             message,
         })
     })?;
-    
+
     let mut checkpoints = Vec::new();
     for row in rows {
         checkpoints.push(row?);
@@ -565,7 +563,7 @@ pub(crate) fn get_checkpoint_details_with_pool(
 
     let result = stmt.query_row(params![checkpoint_id], |row| {
         let incident_json: Option<String> = row.get(5)?; // Index 5 for incident_json
-        
+
         // --- START OF FIX ---
         // This logic now safely handles empty or null JSON strings.
         let incident = incident_json
@@ -577,11 +575,15 @@ pub(crate) fn get_checkpoint_details_with_pool(
                 }
             })
             .transpose()
-            .map_err(|err| rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err)))?;
+            .map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+            })?;
         // --- END OF FIX ---
 
         let parent_checkpoint_id: Option<String> = row.get(12)?;
-        let turn_index = row.get::<_, Option<i64>>(13)?.map(|value| value.max(0) as u32);
+        let turn_index = row
+            .get::<_, Option<i64>>(13)?
+            .map(|value| value.max(0) as u32);
         let checkpoint_config_id: Option<String> = row.get(14)?;
         let prompt_payload: Option<String> = row.get(15)?;
         let output_payload: Option<String> = row.get(16)?;
@@ -609,9 +611,18 @@ pub(crate) fn get_checkpoint_details_with_pool(
             inputs_sha256: row.get(6)?,
             outputs_sha256: row.get(7)?,
             semantic_digest: row.get(8)?,
-            usage_tokens: { let value: i64 = row.get(9)?; value.max(0) as u64 },
-            prompt_tokens: { let value: i64 = row.get(10)?; value.max(0) as u64 },
-            completion_tokens: { let value: i64 = row.get(11)?; value.max(0) as u64 },
+            usage_tokens: {
+                let value: i64 = row.get(9)?;
+                value.max(0) as u64
+            },
+            prompt_tokens: {
+                let value: i64 = row.get(10)?;
+                value.max(0) as u64
+            },
+            completion_tokens: {
+                let value: i64 = row.get(11)?;
+                value.max(0) as u64
+            },
             parent_checkpoint_id,
             turn_index,
             checkpoint_config_id,
@@ -636,7 +647,7 @@ pub fn submit_interactive_checkpoint_turn(
     run_id: String,
     checkpoint_id: String,
     prompt_text: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<orchestrator::SubmitTurnOutcome, Error> {
     orchestrator::submit_interactive_checkpoint_turn(
         pool.inner(),
@@ -652,7 +663,7 @@ pub fn submit_interactive_checkpoint_turn(
 pub fn finalize_interactive_checkpoint(
     run_id: String,
     checkpoint_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<(), Error> {
     orchestrator::finalize_interactive_checkpoint(pool.inner(), &run_id, &checkpoint_id)
         .map_err(|err| Error::Api(err.to_string()))
@@ -710,7 +721,7 @@ fn load_run_step(conn: &Connection, checkpoint_id: &str) -> Result<orchestrator:
 }
 
 #[tauri::command]
-pub fn get_policy(project_id: String, pool: State<DbPool>) -> Result<Policy, Error> {
+pub fn get_policy(project_id: String, pool: State<'_, DbPool>) -> Result<Policy, Error> {
     let conn = pool.get()?;
     store::policies::get(&conn, &project_id)
 }
@@ -718,7 +729,7 @@ pub fn get_policy(project_id: String, pool: State<DbPool>) -> Result<Policy, Err
 #[tauri::command]
 pub async fn replay_run(
     run_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<replay::ReplayReport, Error> {
     let pool = pool.inner().clone();
     let handle = tauri::async_runtime::spawn_blocking(move || replay_run_with_pool(run_id, &pool));
@@ -852,7 +863,7 @@ pub(crate) fn replay_run_with_pool(
 #[tauri::command]
 pub fn list_run_steps(
     run_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<Vec<orchestrator::RunStep>, Error> {
     list_run_steps_with_pool(run_id, pool.inner())
 }
@@ -901,7 +912,7 @@ pub(crate) fn list_run_steps_with_pool(
 pub fn update_run_step(
     checkpoint_id: String,
     updates: UpdateRunStepRequest,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<orchestrator::RunStep, Error> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
@@ -957,7 +968,7 @@ pub fn update_run_step(
 }
 
 #[tauri::command]
-pub fn delete_run_step(checkpoint_id: String, pool: State<DbPool>) -> Result<(), Error> {
+pub fn delete_run_step(checkpoint_id: String, pool: State<'_, DbPool>) -> Result<(), Error> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
 
@@ -989,7 +1000,7 @@ pub fn delete_run_step(checkpoint_id: String, pool: State<DbPool>) -> Result<(),
 pub fn reorder_run_steps(
     run_id: String,
     checkpoint_ids: Vec<String>,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<Vec<orchestrator::RunStep>, Error> {
     reorder_run_steps_with_pool(run_id, checkpoint_ids, pool.inner())
 }
@@ -1061,12 +1072,12 @@ pub(crate) fn reorder_run_steps_with_pool(
 #[tauri::command]
 pub async fn start_run(
     run_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<RunExecutionSummary, Error> {
     let pool = pool.inner().clone();
     let handle = tauri::async_runtime::spawn_blocking(move || -> Result<_, Error> {
-        let record = orchestrator::start_run(&pool, &run_id)
-            .map_err(|err| Error::Api(err.to_string()))?;
+        let record =
+            orchestrator::start_run(&pool, &run_id).map_err(|err| Error::Api(err.to_string()))?;
 
         let conn = pool.get()?;
         let step_proofs = load_step_proof_summaries(&conn, &run_id)?;
@@ -1086,14 +1097,14 @@ pub async fn start_run(
 }
 
 #[tauri::command]
-pub fn clone_run(run_id: String, pool: State<DbPool>) -> Result<String, Error> {
+pub fn clone_run(run_id: String, pool: State<'_, DbPool>) -> Result<String, Error> {
     orchestrator::clone_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
 }
 
 #[tauri::command]
 pub fn estimate_run_cost(
     run_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
 ) -> Result<orchestrator::RunCostEstimates, Error> {
     let conn = pool.get()?;
     orchestrator::estimate_run_cost(conn.deref(), &run_id)
@@ -1101,7 +1112,11 @@ pub fn estimate_run_cost(
 }
 
 #[tauri::command]
-pub fn update_policy(project_id: String, policy: Policy, pool: State<DbPool>) -> Result<(), Error> {
+pub fn update_policy(
+    project_id: String,
+    policy: Policy,
+    pool: State<'_, DbPool>,
+) -> Result<(), Error> {
     let conn = pool.get()?;
     store::policies::upsert(&conn, &project_id, &policy)
 }
@@ -1158,7 +1173,7 @@ pub(crate) fn emit_car_to_base_dir(
 #[tauri::command]
 pub fn emit_car(
     run_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
     app_handle: AppHandle,
 ) -> Result<String, Error> {
     let base_dir = app_handle
@@ -1172,7 +1187,7 @@ pub fn emit_car(
 #[tauri::command]
 pub fn export_project(
     project_id: String,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
     app_handle: AppHandle,
 ) -> Result<String, Error> {
     let base_dir = app_handle
@@ -1186,7 +1201,7 @@ pub fn export_project(
 #[tauri::command]
 pub fn import_project(
     args: ImportProjectArgs,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
     app_handle: AppHandle,
 ) -> Result<portability::ProjectImportSummary, Error> {
     let ImportProjectArgs {
@@ -1222,7 +1237,7 @@ pub fn import_project(
 #[tauri::command]
 pub fn import_car(
     args: ImportCarArgs,
-    pool: State<DbPool>,
+    pool: State<'_, DbPool>,
     app_handle: AppHandle,
 ) -> Result<replay::ReplayReport, Error> {
     let ImportCarArgs {

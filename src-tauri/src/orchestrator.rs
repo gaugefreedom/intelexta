@@ -1,4 +1,5 @@
 // src-tauri/src/orchestrator.rs
+use crate::api::RunStepRequest;
 use crate::{governance, provenance, store, DbPool};
 use anyhow::{anyhow, Context};
 use chrono::Utc;
@@ -14,7 +15,6 @@ use std::net::TcpStream;
 use std::ops::Deref;
 use std::time::Duration;
 use uuid::Uuid;
-use crate::api::RunStepRequest; 
 
 const STUB_MODEL_ID: &str = "stub-model";
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
@@ -662,7 +662,6 @@ pub fn create_run(
 
     Ok(run_id)
 }
-
 
 fn persist_checkpoint(
     conn: &Connection,
@@ -1451,8 +1450,7 @@ pub(crate) fn start_run_with_client(
                 message: None,
             };
 
-            let persisted = persist_checkpoint(&tx, &signing_key, &checkpoint_insert)?;
-            prev_chain = persisted.curr_chain;
+            persist_checkpoint(&tx, &signing_key, &checkpoint_insert)?;
             break;
         }
 
@@ -2110,6 +2108,4 @@ mod tests {
             })
         }
     }
-
-    
 }
