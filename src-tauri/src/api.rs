@@ -716,8 +716,16 @@ pub fn get_policy(project_id: String, pool: State<DbPool>) -> Result<Policy, Err
 }
 
 #[tauri::command]
-pub fn replay_run(run_id: String, pool: State<DbPool>) -> Result<replay::ReplayReport, Error> {
-    replay_run_with_pool(run_id, pool.inner())
+pub async fn replay_run(
+    run_id: String,
+    pool: State<DbPool>,
+) -> Result<replay::ReplayReport, Error> {
+    let pool = pool.inner().clone();
+    let handle = tauri::async_runtime::spawn_blocking(move || replay_run_with_pool(run_id, &pool));
+    let result = handle
+        .await
+        .map_err(|err| Error::Api(format!("replay run task failed: {err}")))?;
+    result
 }
 
 pub(crate) fn replay_run_with_pool(
@@ -1051,12 +1059,24 @@ pub(crate) fn reorder_run_steps_with_pool(
 }
 
 #[tauri::command]
-pub fn start_run(run_id: String, pool: State<DbPool>) -> Result<RunExecutionSummary, Error> {
-    let record = orchestrator::start_run(pool.inner(), &run_id)
-        .map_err(|err| Error::Api(err.to_string()))?;
+pub async fn start_run(
+    run_id: String,
+    pool: State<DbPool>,
+) -> Result<RunExecutionSummary, Error> {
+    let pool = pool.inner().clone();
+    let handle = tauri::async_runtime::spawn_blocking(move || -> Result<_, Error> {
+        let record = orchestrator::start_run(&pool, &run_id)
+            .map_err(|err| Error::Api(err.to_string()))?;
 
-    let conn = pool.get()?;
-    let step_proofs = load_step_proof_summaries(&conn, &run_id)?;
+        let conn = pool.get()?;
+        let step_proofs = load_step_proof_summaries(&conn, &run_id)?;
+
+        Ok((record, step_proofs))
+    });
+    let result = handle
+        .await
+        .map_err(|err| Error::Api(format!("start run task failed: {err}")))?;
+    let (record, step_proofs) = result?;
 
     Ok(RunExecutionSummary {
         id: record.id,
