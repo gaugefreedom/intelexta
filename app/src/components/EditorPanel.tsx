@@ -639,9 +639,9 @@ export default function EditorPanel({
         `USD: ${costEstimates.estimatedUsd.toFixed(2)} / ${costEstimates.budgetUsd.toFixed(2)}`,
       );
     }
-    if (costEstimates.exceedsGCo2e) {
+    if (costEstimates.exceedsNatureCost) {
       messages.push(
-        `Carbon: ${costEstimates.estimatedGCo2e.toFixed(2)} g / ${costEstimates.budgetGCo2e.toFixed(2)} g`,
+        `Nature Cost: ${costEstimates.estimatedNatureCost.toFixed(2)} / ${costEstimates.budgetNatureCost.toFixed(2)}`,
       );
     }
     return messages;
@@ -1421,7 +1421,7 @@ export default function EditorPanel({
                     </ul>
                     <div>
                       Estimated usage totals {costEstimates.estimatedTokens.toLocaleString()} tokens (~
-                      ${costEstimates.estimatedUsd.toFixed(2)}, {costEstimates.estimatedGCo2e.toFixed(2)} gCO₂e).
+                      ${costEstimates.estimatedUsd.toFixed(2)}, {costEstimates.estimatedNatureCost.toFixed(2)} Nature Cost).
                       Adjust checkpoint token budgets or update the project policy before launching this run.
                     </div>
                   </div>

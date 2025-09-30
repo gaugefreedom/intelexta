@@ -469,7 +469,7 @@ fn update_policy_persists_values() -> Result<()> {
         allow_network: true,
         budget_tokens: 512,
         budget_usd: 4.25,
-        budget_g_co2e: 0.75,
+        budget_nature_cost: 0.75,
     };
 
     {

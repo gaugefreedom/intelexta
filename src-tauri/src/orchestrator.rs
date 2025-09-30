@@ -19,6 +19,10 @@ use uuid::Uuid;
 const STUB_MODEL_ID: &str = "stub-model";
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
 
+// External API provider prefixes
+const CLAUDE_MODEL_PREFIX: &str = "claude-";
+const CLAUDE_API_PLACEHOLDER_KEY: &str = "sk-ant-placeholder-key-not-configured";
+
 #[derive(Serialize)]
 struct CheckpointBody<'a> {
     run_id: &'a str,
@@ -221,18 +225,18 @@ pub struct LlmGeneration {
 pub struct RunCostEstimates {
     pub estimated_tokens: u64,
     pub estimated_usd: f64,
-    pub estimated_g_co2e: f64,
+    pub estimated_nature_cost: f64,
     pub budget_tokens: u64,
     pub budget_usd: f64,
-    pub budget_g_co2e: f64,
+    pub budget_nature_cost: f64,
     pub exceeds_tokens: bool,
     pub exceeds_usd: bool,
-    pub exceeds_g_co2e: bool,
+    pub exceeds_nature_cost: bool,
 }
 
 impl RunCostEstimates {
     fn exceeds_any(&self) -> bool {
-        self.exceeds_tokens || self.exceeds_usd || self.exceeds_g_co2e
+        self.exceeds_tokens || self.exceeds_usd || self.exceeds_nature_cost
     }
 }
 
@@ -249,32 +253,21 @@ fn estimate_costs_with_policy(
 ) -> RunCostEstimates {
     let token_budget = policy.budget_tokens;
     let estimated_tokens = projected_tokens;
-    let tokens_f64 = estimated_tokens as f64;
 
-    let usd_per_token = if token_budget > 0 {
-        policy.budget_usd / token_budget as f64
-    } else {
-        0.0
-    };
-    let co2_per_token = if token_budget > 0 {
-        policy.budget_g_co2e / token_budget as f64
-    } else {
-        0.0
-    };
-
-    let estimated_usd = usd_per_token * tokens_f64;
-    let estimated_g_co2e = co2_per_token * tokens_f64;
+    // Use governance module functions for cost estimation
+    let estimated_usd = governance::estimate_usd_cost(estimated_tokens);
+    let estimated_nature_cost = governance::estimate_nature_cost(estimated_tokens);
 
     RunCostEstimates {
         estimated_tokens,
         estimated_usd,
-        estimated_g_co2e,
+        estimated_nature_cost,
         budget_tokens: token_budget,
         budget_usd: policy.budget_usd,
-        budget_g_co2e: policy.budget_g_co2e,
+        budget_nature_cost: policy.budget_nature_cost,
         exceeds_tokens: estimated_tokens > token_budget,
         exceeds_usd: estimated_usd > policy.budget_usd,
-        exceeds_g_co2e: estimated_g_co2e > policy.budget_g_co2e,
+        exceeds_nature_cost: estimated_nature_cost > policy.budget_nature_cost,
     }
 }
 
@@ -351,9 +344,20 @@ struct OllamaModelEntry {
 
 pub fn list_local_models() -> anyhow::Result<Vec<String>> {
     let mut models = fetch_ollama_models().unwrap_or_default();
+
+    // Add stub model for testing
     if !models.iter().any(|m| m == STUB_MODEL_ID) {
         models.insert(0, STUB_MODEL_ID.to_string());
     }
+
+    // Add Claude API models (mock implementations)
+    let claude_models = vec![
+        "claude-3-5-sonnet-20241022".to_string(),
+        "claude-3-5-haiku-20241022".to_string(),
+        "claude-3-opus-20240229".to_string(),
+    ];
+    models.extend(claude_models);
+
     if models.is_empty() {
         models.push(STUB_MODEL_ID.to_string());
     }
@@ -1132,6 +1136,15 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
 
     let signing_key = ensure_project_signing_key(&conn, &stored_run.project_id)?;
 
+    // Enforce network policy for interactive checkpoints
+    let policy = store::policies::get(&conn, &stored_run.project_id)?;
+    if let Err(network_incident) = governance::enforce_network_policy(&policy) {
+        return Err(anyhow!(format!(
+            "Network access denied by project policy: {}",
+            network_incident.details
+        )));
+    }
+
     let LlmGeneration { response, usage } =
         llm_client.stream_generate(&config.model, &llm_prompt)?;
     let sanitized_llm_prompt = sanitize_payload(&llm_prompt);
@@ -1397,7 +1410,10 @@ pub(crate) fn start_run_with_client(
             cumulative_usage_tokens.saturating_add(projected_remaining_tokens);
         let projected_costs = estimate_costs_with_policy(&policy, projected_total_tokens);
 
-        if projected_costs.exceeds_any() {
+        // Check blocking budget violations (tokens and USD)
+        let has_blocking_violation = projected_costs.exceeds_tokens || projected_costs.exceeds_usd;
+
+        if has_blocking_violation {
             let mut issues = Vec::new();
             if projected_costs.exceeds_tokens {
                 issues.push(format!(
@@ -1409,12 +1425,6 @@ pub(crate) fn start_run_with_client(
                 issues.push(format!(
                     "USD {:.2} > {:.2}",
                     projected_costs.estimated_usd, projected_costs.budget_usd
-                ));
-            }
-            if projected_costs.exceeds_g_co2e {
-                issues.push(format!(
-                    "CO₂ {:.2} g > {:.2} g",
-                    projected_costs.estimated_g_co2e, projected_costs.budget_g_co2e
                 ));
             }
 
@@ -1452,6 +1462,73 @@ pub(crate) fn start_run_with_client(
 
             persist_checkpoint(&tx, &signing_key, &checkpoint_insert)?;
             break;
+        }
+
+        // Handle Nature Cost warning (non-blocking)
+        if projected_costs.exceeds_nature_cost {
+            let warning = governance::Incident {
+                kind: "nature_cost_warning".into(),
+                severity: "warn".into(),
+                details: format!(
+                    "Nature Cost {:.2} exceeds budget {:.2} for checkpoint {} (execution continues)",
+                    projected_costs.estimated_nature_cost, projected_costs.budget_nature_cost, config.id
+                ),
+            };
+            let warning_value = serde_json::to_value(&warning)?;
+
+            let warning_checkpoint = CheckpointInsert {
+                run_id,
+                run_execution_id: execution_record.id.as_str(),
+                checkpoint_config_id: Some(config.id.as_str()),
+                parent_checkpoint_id: None,
+                turn_index: None,
+                kind: "Incident",
+                timestamp: &timestamp,
+                incident: Some(&warning_value),
+                inputs_sha256: None,
+                outputs_sha256: None,
+                prev_chain: prev_chain.as_str(),
+                usage_tokens: 0,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                semantic_digest: None,
+                prompt_payload: None,
+                output_payload: None,
+                message: None,
+            };
+
+            let warning_persisted = persist_checkpoint(&tx, &signing_key, &warning_checkpoint)?;
+            prev_chain = warning_persisted.curr_chain;
+            // Continue execution despite warning
+        }
+
+        // Check network policy before executing non-stub checkpoints
+        if config.model != STUB_MODEL_ID {
+            if let Err(network_incident) = governance::enforce_network_policy(&policy) {
+                let incident_value = serde_json::to_value(&network_incident)?;
+                let checkpoint_insert = CheckpointInsert {
+                    run_id,
+                    run_execution_id: execution_record.id.as_str(),
+                    checkpoint_config_id: Some(config.id.as_str()),
+                    parent_checkpoint_id: None,
+                    turn_index: None,
+                    kind: "Incident",
+                    timestamp: &timestamp,
+                    incident: Some(&incident_value),
+                    inputs_sha256: None,
+                    outputs_sha256: None,
+                    prev_chain: prev_chain.as_str(),
+                    usage_tokens: 0,
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    semantic_digest: None,
+                    prompt_payload: None,
+                    output_payload: None,
+                    message: None,
+                };
+                persist_checkpoint(&tx, &signing_key, &checkpoint_insert)?;
+                break;
+            }
         }
 
         let execution = execute_checkpoint(config, stored_run.seed, llm_client)?;
@@ -1569,6 +1646,8 @@ fn execute_checkpoint(
             config.order_index,
             &config.prompt,
         ))
+    } else if config.model.starts_with(CLAUDE_MODEL_PREFIX) {
+        execute_claude_mock_checkpoint(&config.model, &config.prompt)
     } else {
         execute_llm_checkpoint(&config.model, &config.prompt, llm_client)
     }
@@ -1603,6 +1682,43 @@ fn execute_stub_checkpoint(run_seed: u64, order_index: i64, prompt: &str) -> Nod
         prompt_payload: Some(prompt_payload),
         output_payload: Some(output_payload),
     }
+}
+
+fn execute_claude_mock_checkpoint(
+    model: &str,
+    prompt: &str,
+) -> anyhow::Result<NodeExecution> {
+    // Mock Claude API response - requires network access policy
+    // In production, would use actual Claude API with user-configured key
+    let mock_response = format!(
+        "[MOCK CLAUDE RESPONSE - Model: {}]\n\nThis is a simulated response from Claude. \
+        In production, this would make a real API call to Anthropic's servers using your configured API key.\n\n\
+        Your prompt was: {}",
+        model,
+        if prompt.len() > 100 { &format!("{}...", &prompt[..100]) } else { prompt }
+    );
+
+    let inputs_hex = provenance::sha256_hex(prompt.as_bytes());
+    let outputs_hex = provenance::sha256_hex(mock_response.as_bytes());
+    let semantic_digest = provenance::semantic_digest(&mock_response);
+    let prompt_payload = sanitize_payload(prompt);
+    let output_payload = sanitize_payload(&mock_response);
+
+    // Estimate token usage based on text length (rough approximation)
+    let prompt_tokens = (prompt.len() / 4).max(1) as u64;
+    let completion_tokens = (mock_response.len() / 4).max(1) as u64;
+
+    Ok(NodeExecution {
+        inputs_sha256: Some(inputs_hex),
+        outputs_sha256: Some(outputs_hex),
+        semantic_digest: Some(semantic_digest),
+        usage: TokenUsage {
+            prompt_tokens,
+            completion_tokens,
+        },
+        prompt_payload: Some(prompt_payload),
+        output_payload: Some(output_payload),
+    })
 }
 
 fn execute_llm_checkpoint(

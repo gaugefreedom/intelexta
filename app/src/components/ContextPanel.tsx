@@ -72,9 +72,9 @@ export default function ContextPanel({
         `USD: ${costEstimates.estimatedUsd.toFixed(2)} / ${costEstimates.budgetUsd.toFixed(2)}`,
       );
     }
-    if (costEstimates.exceedsGCo2e) {
+    if (costEstimates.exceedsNatureCost) {
       messages.push(
-        `Carbon: ${costEstimates.estimatedGCo2e.toFixed(2)} g / ${costEstimates.budgetGCo2e.toFixed(2)} g`,
+        `Nature Cost: ${costEstimates.estimatedNatureCost.toFixed(2)} / ${costEstimates.budgetNatureCost.toFixed(2)}`,
       );
     }
     return messages;
@@ -492,12 +492,12 @@ export default function ContextPanel({
               />
             </label>
             <label style={{ display: "flex", flexDirection: 'column', gap: '4px', fontSize: '0.8rem' }}>
-              Carbon Budget (gCO₂e)
+              Nature Cost
               <input
                 type="number"
                 min={0} step={0.01}
-                value={policy.budgetGCo2e}
-                onChange={handleNumberChange("budgetGCo2e")}
+                value={policy.budgetNatureCost}
+                onChange={handleNumberChange("budgetNatureCost")}
               />
             </label>
           </div>

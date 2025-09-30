@@ -243,7 +243,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         0.0
     };
     let co2_per_token = if policy.budget_tokens > 0 {
-        policy.budget_g_co2e / policy.budget_tokens as f64
+        policy.budget_nature_cost / policy.budget_tokens as f64
     } else {
         0.0
     };

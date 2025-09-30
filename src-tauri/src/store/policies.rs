@@ -9,7 +9,7 @@ pub struct Policy {
     pub allow_network: bool,
     pub budget_tokens: u64,
     pub budget_usd: f64,
-    pub budget_g_co2e: f64,
+    pub budget_nature_cost: f64, // Renamed from budget_g_co2e
 }
 
 impl Default for Policy {
@@ -18,7 +18,7 @@ impl Default for Policy {
             allow_network: false,
             budget_tokens: 1_000,
             budget_usd: 10.0,
-            budget_g_co2e: 1.0,
+            budget_nature_cost: 100.0, // Higher default, more flexible metric
         }
     }
 }

@@ -155,19 +155,19 @@ export interface Policy {
   allowNetwork: boolean;
   budgetTokens: number;
   budgetUsd: number;
-  budgetGCo2e: number;
+  budgetNatureCost: number;
 }
 
 export interface RunCostEstimates {
   estimatedTokens: number;
   estimatedUsd: number;
-  estimatedGCo2e: number;
+  estimatedNatureCost: number;
   budgetTokens: number;
   budgetUsd: number;
-  budgetGCo2e: number;
+  budgetNatureCost: number;
   exceedsTokens: boolean;
   exceedsUsd: boolean;
-  exceedsGCo2e: boolean;
+  exceedsNatureCost: boolean;
 }
 
 export interface RunStepConfig {
