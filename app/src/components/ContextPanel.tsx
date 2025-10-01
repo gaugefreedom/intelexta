@@ -8,9 +8,11 @@ import {
   exportProject,
   importProject,
   importCar,
+  getCheckpointDetails,
   type ProjectImportSummary,
   type ReplayReport,
   type ImportedCarSnapshot,
+  type CheckpointDetails,
   ProofBadgeKind,
 } from "../lib/api.js";
 import {
@@ -19,6 +21,7 @@ import {
   buttonDisabled,
   combineButtonStyles,
 } from "../styles/common.js";
+import CheckpointDetailsPanel from "./CheckpointDetailsPanel.js";
 
 export interface CarCheckpointRow {
   id: string;
@@ -32,16 +35,23 @@ export interface CarCheckpointRow {
 export function buildCarCheckpointRows(
   snapshot: ImportedCarSnapshot,
 ): CarCheckpointRow[] {
-  return snapshot.checkpoints.map((checkpoint, index) => {
-    return {
+  const seen = new Set<string>();
+  const rows: CarCheckpointRow[] = [];
+  for (const checkpoint of snapshot.checkpoints) {
+    if (seen.has(checkpoint.id)) {
+      continue;
+    }
+    seen.add(checkpoint.id);
+    rows.push({
       id: checkpoint.id,
-      order: index + 1,
+      order: rows.length + 1,
       turnIndex: checkpoint.turnIndex ?? null,
       currChain: checkpoint.currChain ?? null,
       prevChain: checkpoint.prevChain ?? null,
       signature: checkpoint.signature ?? null,
-    } satisfies CarCheckpointRow;
-  });
+    });
+  }
+  return rows;
 }
 
 interface ContextPanelProps {
@@ -78,6 +88,11 @@ export default function ContextPanel({
   const [carReplayReport, setCarReplayReport] = React.useState<ReplayReport | null>(null);
   const [carImportStatus, setCarImportStatus] = React.useState<string | null>(null);
   const [carSnapshot, setCarSnapshot] = React.useState<ImportedCarSnapshot | null>(null);
+  const [carCheckpointDetailsOpen, setCarCheckpointDetailsOpen] = React.useState<boolean>(false);
+  const [carCheckpointDetailsId, setCarCheckpointDetailsId] = React.useState<string | null>(null);
+  const [carCheckpointDetails, setCarCheckpointDetails] = React.useState<CheckpointDetails | null>(null);
+  const [carCheckpointDetailsLoading, setCarCheckpointDetailsLoading] = React.useState<boolean>(false);
+  const [carCheckpointDetailsError, setCarCheckpointDetailsError] = React.useState<string | null>(null);
 
   const projectFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const carFileInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -294,11 +309,20 @@ export default function ContextPanel({
     [onPolicyUpdated],
   );
 
+  const resetCarCheckpointDetails = React.useCallback(() => {
+    setCarCheckpointDetailsOpen(false);
+    setCarCheckpointDetailsId(null);
+    setCarCheckpointDetails(null);
+    setCarCheckpointDetailsError(null);
+    setCarCheckpointDetailsLoading(false);
+  }, []);
+
   const handleImportCarReceipt = React.useCallback(() => {
     setCarImportError(null);
     setCarReplayReport(null);
     setCarImportStatus(null);
     setCarSnapshot(null);
+    resetCarCheckpointDetails();
 
     const input = carFileInputRef.current;
     if (input) {
@@ -307,7 +331,7 @@ export default function ContextPanel({
     } else {
       setCarImportError("File picker not available.");
     }
-  }, []);
+  }, [resetCarCheckpointDetails]);
 
   const handleCarFileSelected = React.useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -322,6 +346,7 @@ export default function ContextPanel({
       setCarReplayReport(null);
       setCarImportStatus(null);
       setImportingCarReceipt(true);
+      resetCarCheckpointDetails();
 
       try {
         const buffer = await file.arrayBuffer();
@@ -331,7 +356,10 @@ export default function ContextPanel({
           bytes,
         });
         setCarReplayReport(result.replayReport);
-        setCarSnapshot(result.snapshot);
+        setCarSnapshot({
+          ...result.snapshot,
+          checkpoints: [...result.snapshot.checkpoints],
+        });
         setCarImportStatus(
           `Imported CAR ${result.snapshot.carId} for run ${result.snapshot.runId}.`,
         );
@@ -345,7 +373,7 @@ export default function ContextPanel({
         setImportingCarReceipt(false);
       }
     },
-    [onPolicyUpdated],
+    [onPolicyUpdated, resetCarCheckpointDetails],
   );
 
   const carReplayFeedback = React.useMemo(() => {
@@ -445,6 +473,63 @@ export default function ContextPanel({
     }
     return buildCarCheckpointRows(carSnapshot);
   }, [carSnapshot]);
+
+  React.useEffect(() => {
+    if (!carCheckpointDetailsOpen) {
+      return;
+    }
+    if (!carCheckpointDetailsId) {
+      setCarCheckpointDetailsLoading(false);
+      setCarCheckpointDetails(null);
+      setCarCheckpointDetailsError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setCarCheckpointDetailsLoading(true);
+    setCarCheckpointDetailsError(null);
+    setCarCheckpointDetails(null);
+
+    getCheckpointDetails(carCheckpointDetailsId)
+      .then((details) => {
+        if (cancelled) {
+          return;
+        }
+        setCarCheckpointDetails(details);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        console.error("Failed to load checkpoint from CAR", err);
+        setCarCheckpointDetailsError(
+          err instanceof Error ? err.message : "Could not load checkpoint details.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCarCheckpointDetailsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [carCheckpointDetailsOpen, carCheckpointDetailsId]);
+
+  React.useEffect(() => {
+    resetCarCheckpointDetails();
+  }, [carSnapshot?.carId, resetCarCheckpointDetails]);
+
+  const handleOpenCarCheckpointDetails = React.useCallback((checkpointId: string) => {
+    setCarCheckpointDetailsId(checkpointId);
+    setCarCheckpointDetailsOpen(true);
+  }, []);
+
+  const handleCloseCarCheckpointDetails = React.useCallback(() => {
+    setCarCheckpointDetailsOpen(false);
+    setCarCheckpointDetailsId(null);
+  }, []);
 
   return (
     <div>
@@ -644,30 +729,55 @@ export default function ContextPanel({
                 CAR snapshot did not include checkpoint signatures.
               </span>
             ) : (
-              <div style={{ maxHeight: "40vh", overflowY: "auto", border: "1px solid #1f2937", borderRadius: "8px" }}>
+              <div
+                style={{
+                  maxHeight: "45vh",
+                  overflowY: "auto",
+                  border: "1px solid #1f2937",
+                  borderRadius: "8px",
+                  backgroundColor: "#111827",
+                }}
+              >
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid #333" }}>
-                      <th style={{ textAlign: "left", padding: "6px", width: "60px" }}>#</th>
-                      <th style={{ textAlign: "left", padding: "6px" }}>Checkpoint</th>
-                      <th style={{ textAlign: "left", padding: "6px", width: "80px" }}>Turn</th>
-                      <th style={{ textAlign: "left", padding: "6px" }}>Curr Chain</th>
-                      <th style={{ textAlign: "left", padding: "6px" }}>Signature</th>
+                      <th style={{ textAlign: "left", padding: "8px" }}>Checkpoint</th>
                     </tr>
                   </thead>
                   <tbody>
                     {carCheckpointRows.map((row) => {
-                      const chainPreview = row.currChain ? `${row.currChain.slice(0, 12)}…` : "—";
-                      const signaturePreview = row.signature ? `${row.signature.slice(0, 12)}…` : "—";
+                      const isSelected = carCheckpointDetailsOpen && carCheckpointDetailsId === row.id;
                       return (
-                        <tr key={`${row.order}-${row.id}`} style={{ borderBottom: "1px solid #222" }}>
-                          <td style={{ padding: "6px", verticalAlign: "top" }}>{row.order}</td>
-                          <td style={{ padding: "6px", verticalAlign: "top", fontFamily: "monospace" }}>{row.id}</td>
-                          <td style={{ padding: "6px", verticalAlign: "top" }}>
-                            {typeof row.turnIndex === "number" ? row.turnIndex : "—"}
+                        <tr key={`${row.order}-${row.id}`} style={{ borderBottom: "1px solid #1f2937" }}>
+                          <td style={{ padding: 0 }}>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenCarCheckpointDetails(row.id)}
+                              style={{
+                                width: "100%",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "12px",
+                                padding: "10px 12px",
+                                backgroundColor: isSelected ? "#1f2937" : "transparent",
+                                border: "none",
+                                color: "inherit",
+                                textAlign: "left",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>#{row.order}</span>
+                              <span
+                                style={{
+                                  fontFamily: "monospace",
+                                  fontSize: "0.8rem",
+                                  wordBreak: "break-all",
+                                }}
+                              >
+                                {row.id}
+                              </span>
+                            </button>
                           </td>
-                          <td style={{ padding: "6px", verticalAlign: "top", fontFamily: "monospace" }}>{chainPreview}</td>
-                          <td style={{ padding: "6px", verticalAlign: "top", fontFamily: "monospace" }}>{signaturePreview}</td>
                         </tr>
                       );
                     })}
@@ -677,6 +787,15 @@ export default function ContextPanel({
             )}
           </div>
         )}
+        <CheckpointDetailsPanel
+          open={carCheckpointDetailsOpen}
+          onClose={handleCloseCarCheckpointDetails}
+          checkpointDetails={carCheckpointDetails}
+          loading={carCheckpointDetailsLoading}
+          error={carCheckpointDetailsError}
+          title="Checkpoint from CAR"
+          subtitle={carCheckpointDetailsId ?? undefined}
+        />
       </div>
     </div>
   );
