@@ -49,8 +49,8 @@ pub fn rename_project(
 
 #[tauri::command]
 pub fn delete_project(project_id: String, pool: State<'_, DbPool>) -> Result<(), Error> {
-    let conn = pool.get()?;
-    store::projects::delete(&conn, &project_id)?;
+    let mut conn = pool.get()?;
+    store::projects::delete(&mut conn, &project_id)?;
     if let Err(err) = provenance::delete_secret_key(&project_id) {
         eprintln!(
             "[intelexta] WARNING: Failed to delete provenance key for project {}: {}",

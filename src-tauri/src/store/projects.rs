@@ -53,7 +53,7 @@ pub fn rename(conn: &Connection, id: &str, name: &str) -> Result<Project, Error>
     Ok(project)
 }
 
-pub fn delete(conn: &Connection, id: &str) -> Result<(), Error> {
+pub fn delete(conn: &mut Connection, id: &str) -> Result<(), Error> {
     let tx = conn.transaction()?;
 
     tx.execute("DELETE FROM policies WHERE project_id = ?1", params![id])?;
