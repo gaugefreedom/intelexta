@@ -30,15 +30,18 @@ pub struct Car {
     pub provenance: Vec<ProvenanceClaim>,
     pub checkpoints: Vec<String>, // List of checkpoint IDs
     pub sgrade: SGrade,
+    pub signer_public_key: String,
     pub signatures: Vec<String>, // e.g., ["ed25519:..."]
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RunInfo {
     pub kind: String, // 'exact' | 'concordant' | 'interactive'
+    pub name: String,
     pub model: String,
     pub version: String,
     pub seed: u64,
+    pub steps: Vec<orchestrator::RunStep>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampler: Option<Sampler>, // Details for stochastic runs
 }
@@ -194,6 +197,16 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
     let stored_run = orchestrator::load_stored_run(conn, run_id)
         .map_err(|err| anyhow!("failed to load stored run: {err}"))?;
 
+    let project_pubkey: String = conn
+        .query_row(
+            "SELECT pubkey FROM projects WHERE id = ?1",
+            params![&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|err| anyhow!("failed to load project {project_id}: {err}"))?;
+
+    let run_steps = stored_run.steps.clone();
+
     let mut stmt = conn.prepare(
         "SELECT id, kind, timestamp, inputs_sha256, outputs_sha256, usage_tokens, parent_checkpoint_id, turn_index, prev_chain, curr_chain, signature
          FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
@@ -251,7 +264,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
     let estimated_g_co2e = co2_per_token * total_usage_tokens as f64;
 
     let mut provenance_claims = Vec::new();
-    let spec_canon = provenance::canonical_json(&stored_run.steps);
+    let spec_canon = provenance::canonical_json(&run_steps);
     let spec_hash = provenance::sha256_hex(&spec_canon);
     provenance_claims.push(ProvenanceClaim {
         claim_type: "config".to_string(),
@@ -274,7 +287,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
     }
 
     let model_identifier = format!("workflow:{}", stored_run.name);
-    let checkpoints_canon = provenance::canonical_json(&stored_run.steps);
+    let checkpoints_canon = provenance::canonical_json(&run_steps);
     let version_digest = provenance::sha256_hex(&checkpoints_canon);
     let had_incident = checkpoints
         .iter()
@@ -308,8 +321,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
     };
 
     let default_mode = stored_run.proof_mode.unwrap_or_default();
-    let has_concordant_checkpoint = stored_run
-        .steps
+    let has_concordant_checkpoint = run_steps
         .iter()
         .filter(|cfg| !cfg.is_interactive_chat())
         .any(|cfg| matches!(cfg.proof_mode, orchestrator::RunProofMode::Concordant));
@@ -335,9 +347,11 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         created_at: car_created_at,
         run: RunInfo {
             kind: run_kind,
+            name: stored_run.name.clone(),
             model: model_identifier,
             version: version_digest,
             seed: stored_run.seed,
+            steps: run_steps,
             sampler: None,
         },
         proof: Proof {
@@ -361,6 +375,7 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
         provenance: provenance_claims,
         checkpoints: checkpoint_ids,
         sgrade: calculate_s_grade(true, had_incident, true),
+        signer_public_key: project_pubkey,
         signatures: Vec::new(),
     };
 

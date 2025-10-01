@@ -16,6 +16,7 @@
     "provenance",
     "checkpoints",
     "sgrade",
+    "signer_public_key",
     "signatures"
   ],
   "properties": {
@@ -66,6 +67,11 @@
     "sgrade": {
       "$ref": "#/$defs/sgrade"
     },
+    "signer_public_key": {
+      "type": "string",
+      "description": "Base64 encoded public signing key used to author the CAR.",
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    },
     "signatures": {
       "type": "array",
       "description": "Detached signatures covering the canonical CAR body.",
@@ -82,9 +88,11 @@
       "additionalProperties": false,
       "required": [
         "kind",
+        "name",
         "model",
         "version",
-        "seed"
+        "seed",
+        "steps"
       ],
       "properties": {
         "kind": {
@@ -95,6 +103,11 @@
             "concordant",
             "interactive"
           ]
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name assigned to the run.",
+          "minLength": 1
         },
         "model": {
           "type": "string",
@@ -111,8 +124,77 @@
           "description": "Deterministic seed captured for reproducing stochastic behaviour.",
           "minimum": 0
         },
+        "steps": {
+          "type": "array",
+          "description": "Snapshot of the run definition at the time the CAR was produced.",
+          "items": {
+            "$ref": "#/$defs/run_step"
+          }
+        },
         "sampler": {
           "$ref": "#/$defs/sampler"
+        }
+      }
+    },
+    "run_step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "run_id",
+        "order_index",
+        "checkpoint_type",
+        "model",
+        "prompt",
+        "token_budget",
+        "proof_mode"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier of the configured run step.",
+          "minLength": 1
+        },
+        "run_id": {
+          "type": "string",
+          "description": "Identifier of the parent run.",
+          "minLength": 1
+        },
+        "order_index": {
+          "type": "integer",
+          "description": "Order in which the step executes."
+        },
+        "checkpoint_type": {
+          "type": "string",
+          "description": "Type of checkpoint produced by the step.",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "description": "Model requested by the step.",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Prompt material supplied to the model."
+        },
+        "token_budget": {
+          "type": "integer",
+          "description": "Maximum tokens allocated for the step.",
+          "minimum": 0
+        },
+        "proof_mode": {
+          "type": "string",
+          "description": "Proof requirement applied to the step.",
+          "enum": [
+            "exact",
+            "concordant"
+          ]
+        },
+        "epsilon": {
+          "type": "number",
+          "description": "Tolerance for concordant proof steps.",
+          "minimum": 0
         }
       }
     },
