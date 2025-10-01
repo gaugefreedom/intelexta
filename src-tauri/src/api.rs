@@ -32,6 +32,34 @@ pub fn create_project(name: String, pool: State<'_, DbPool>) -> Result<Project, 
     create_project_with_pool(name, pool.inner())
 }
 
+#[tauri::command]
+pub fn rename_project(
+    project_id: String,
+    name: String,
+    pool: State<'_, DbPool>,
+) -> Result<Project, Error> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Api("Project name cannot be empty".into()));
+    }
+    let conn = pool.get()?;
+    let project = store::projects::rename(&conn, &project_id, trimmed)?;
+    Ok(project)
+}
+
+#[tauri::command]
+pub fn delete_project(project_id: String, pool: State<'_, DbPool>) -> Result<(), Error> {
+    let conn = pool.get()?;
+    store::projects::delete(&conn, &project_id)?;
+    if let Err(err) = provenance::delete_secret_key(&project_id) {
+        eprintln!(
+            "[intelexta] WARNING: Failed to delete provenance key for project {}: {}",
+            project_id, err
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn create_project_with_pool(name: String, pool: &DbPool) -> Result<Project, Error> {
     let project_id = Uuid::new_v4().to_string();
     let kp = provenance::generate_keypair();

@@ -252,6 +252,14 @@ export async function createProject(name: string): Promise<Project> {
   return await invoke<Project>('create_project', { name });
 }
 
+export async function renameProject(projectId: string, name: string): Promise<Project> {
+  return await invoke<Project>('rename_project', { projectId, name });
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  await invoke('delete_project', { projectId });
+}
+
 export async function createRun(params: CreateRunParams): Promise<string> {
   return await invoke<string>('create_run', {
     projectId: params.projectId,

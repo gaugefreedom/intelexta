@@ -2,9 +2,11 @@
 import React from "react";
 import {
   createProject,
+  deleteProject,
   listProjects,
   listRuns,
   Project,
+  renameProject,
   RunSummary,
   type RunProofMode,
   type ExecutionStepProofSummary,
@@ -256,6 +258,68 @@ export default function ProjectTree({
     }
   }, [fetchProjects, onSelectProject]);
 
+  const handleRenameProject = React.useCallback(
+    async (project: Project) => {
+      const proposedName = prompt(
+        `Rename project "${project.name}":`,
+        project.name,
+      );
+      if (!proposedName) {
+        return;
+      }
+      const trimmed = proposedName.trim();
+      if (trimmed.length === 0 || trimmed === project.name) {
+        return;
+      }
+      try {
+        await renameProject(project.id, trimmed);
+        await fetchProjects();
+      } catch (err) {
+        console.error("Error renaming project:", err);
+        alert(`Error renaming project: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [fetchProjects],
+  );
+
+  const handleDeleteProject = React.useCallback(
+    async (project: Project) => {
+      const confirmation = prompt(
+        `Type the project name ("${project.name}") to permanently delete it and all associated runs. This action cannot be undone.`,
+      );
+      if (!confirmation || confirmation.trim() !== project.name) {
+        if (confirmation && confirmation.trim().length > 0) {
+          alert("Project name did not match. Deletion cancelled.");
+        }
+        return;
+      }
+      try {
+        await deleteProject(project.id);
+        setExpandedProjects((prev) => {
+          const next = new Set(prev);
+          next.delete(project.id);
+          return next;
+        });
+        setRunsByProject((prev) => {
+          const { [project.id]: _removed, ...rest } = prev;
+          return rest;
+        });
+        setSelectedProjectId((current) => {
+          if (current === project.id) {
+            onSelectProject(null);
+            return null;
+          }
+          return current;
+        });
+        await fetchProjects();
+      } catch (err) {
+        console.error("Error deleting project:", err);
+        alert(`Error deleting project: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [fetchProjects, onSelectProject],
+  );
+
   React.useEffect(() => {
     if (expandedProjects.size === 0) {
       return;
@@ -305,22 +369,56 @@ export default function ProjectTree({
                 >
                   {isExpanded ? "▾" : "▸"}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleProjectSelect(project.id)}
-                  style={combineButtonStyles(buttonGhost, {
-                    flex: 1,
-                    justifyContent: "flex-start",
-                    textAlign: "left",
-                    padding: "2px 6px",
-                    borderColor: "transparent",
-                    color: isSelected ? "#ffffff" : "#d4d4d4",
-                    fontWeight: isSelected ? 600 : 500,
-                    backgroundColor: "transparent",
-                  })}
-                >
-                  {project.name}
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px", flex: 1 }}>
+                  <button
+                    type="button"
+                    onClick={() => handleProjectSelect(project.id)}
+                    style={combineButtonStyles(buttonGhost, {
+                      flex: 1,
+                      justifyContent: "flex-start",
+                      textAlign: "left",
+                      padding: "2px 6px",
+                      borderColor: "transparent",
+                      color: isSelected ? "#ffffff" : "#d4d4d4",
+                      fontWeight: isSelected ? 600 : 500,
+                      backgroundColor: "transparent",
+                    })}
+                  >
+                    {project.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRenameProject(project)}
+                    style={combineButtonStyles(buttonGhost, {
+                      padding: "2px 4px",
+                      minWidth: "20px",
+                      width: "20px",
+                      justifyContent: "center",
+                      borderColor: "transparent",
+                      color: "#d4d4d4",
+                    })}
+                    aria-label={`Rename project ${project.name}`}
+                    title="Rename project"
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteProject(project)}
+                    style={combineButtonStyles(buttonGhost, {
+                      padding: "2px 4px",
+                      minWidth: "20px",
+                      width: "20px",
+                      justifyContent: "center",
+                      borderColor: "transparent",
+                      color: "#f48771",
+                    })}
+                    aria-label={`Delete project ${project.name}`}
+                    title="Delete project"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
               {isExpanded && (
                 <div style={{ marginLeft: "24px", marginTop: "4px" }}>

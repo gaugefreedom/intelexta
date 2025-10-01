@@ -99,6 +99,47 @@ pub fn load_secret(project_id: &str) -> anyhow::Result<String> {
     Ok(secret)
 }
 
+pub fn delete_secret(project_id: &str) -> anyhow::Result<()> {
+    initialize_backend();
+
+    if !USING_FALLBACK.load(Ordering::SeqCst) {
+        if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE_NAME, project_id) {
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(err) => {
+                    eprintln!(
+                        "[intelexta] WARNING: Failed to delete secret from system keychain ({}).",
+                        err
+                    );
+                }
+            }
+        }
+    }
+
+    match fallback_base_dir() {
+        Ok(base) => {
+            let path = base.join(format!("{}.key", project_id));
+            if path.exists() {
+                if let Err(err) = fs::remove_file(&path) {
+                    eprintln!(
+                        "[intelexta] WARNING: Unable to remove fallback key file at {} ({}).",
+                        path.display(),
+                        err
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "[intelexta] WARNING: Unable to determine fallback key path for deletion ({}).",
+                err
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn persist_secret_to_fallback(project_id: &str, secret_b64: &str) -> anyhow::Result<()> {
     let path = get_fallback_path(project_id)?;
     fs::write(&path, secret_b64).with_context(|| fallback_write_error(&path))?;
