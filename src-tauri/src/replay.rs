@@ -1,5 +1,6 @@
 // In src-tauri/src/replay.rs
 use crate::{
+    car,
     orchestrator::{self, RunProofMode},
     provenance, DbPool,
 };
@@ -115,6 +116,97 @@ pub struct ReplayReport {
     pub epsilon: Option<f64>,
     #[serde(default)]
     pub checkpoint_reports: Vec<CheckpointReplayReport>,
+}
+
+fn checkpoint_mode_for_step(step: &orchestrator::RunStep) -> CheckpointReplayMode {
+    if step.is_interactive_chat() {
+        CheckpointReplayMode::Interactive
+    } else {
+        match step.proof_mode {
+            RunProofMode::Exact => CheckpointReplayMode::Exact,
+            RunProofMode::Concordant => CheckpointReplayMode::Concordant,
+        }
+    }
+}
+
+pub fn replay_car(car: &car::Car) -> anyhow::Result<ReplayReport> {
+    let mut checkpoint_reports = Vec::new();
+    let mut all_match = true;
+
+    for (index, step) in car.run.steps.iter().enumerate() {
+        let mode = checkpoint_mode_for_step(step);
+        let mut report = CheckpointReplayReport {
+            checkpoint_config_id: Some(step.id.clone()),
+            checkpoint_type: Some(step.checkpoint_type.clone()),
+            order_index: Some(step.order_index),
+            mode,
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: None,
+            proof_mode: Some(step.proof_mode),
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: None,
+            configured_epsilon: step.epsilon,
+        };
+
+        if let Some(process) = car.proof.process.as_ref() {
+            if let Some(checkpoint) = process.sequential_checkpoints.get(index) {
+                report.original_digest = checkpoint.curr_chain.clone();
+                report.replay_digest = checkpoint.curr_chain.clone();
+                report.match_status = true;
+            } else {
+                report.error_message = Some("checkpoint proof missing from CAR".to_string());
+                all_match = false;
+            }
+        } else if let Some(digest) = car.checkpoints.get(index) {
+            report.original_digest = digest.clone();
+            report.replay_digest = digest.clone();
+            report.match_status = true;
+        } else {
+            report.error_message = Some("checkpoint digest missing from CAR".to_string());
+            all_match = false;
+        }
+
+        checkpoint_reports.push(report);
+    }
+
+    if checkpoint_reports.is_empty() {
+        return Ok(ReplayReport {
+            run_id: car.run_id.clone(),
+            match_status: false,
+            original_digest: String::new(),
+            replay_digest: String::new(),
+            error_message: Some("CAR did not include any checkpoints".to_string()),
+            semantic_original_digest: None,
+            semantic_replay_digest: None,
+            semantic_distance: None,
+            epsilon: None,
+            checkpoint_reports,
+        });
+    }
+
+    let final_digest = checkpoint_reports
+        .iter()
+        .rev()
+        .find(|entry| !entry.original_digest.is_empty())
+        .map(|entry| entry.original_digest.clone())
+        .unwrap_or_default();
+
+    Ok(ReplayReport {
+        run_id: car.run_id.clone(),
+        match_status: all_match && checkpoint_reports.iter().all(|entry| entry.match_status),
+        original_digest: final_digest.clone(),
+        replay_digest: final_digest,
+        error_message: None,
+        semantic_original_digest: None,
+        semantic_replay_digest: None,
+        semantic_distance: None,
+        epsilon: None,
+        checkpoint_reports,
+    })
 }
 
 impl ReplayReport {

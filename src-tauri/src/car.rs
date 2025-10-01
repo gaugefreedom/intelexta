@@ -18,7 +18,7 @@ use crate::{orchestrator, provenance, store};
 // These structs define the precise layout of the .car.json file, updated to support
 // multiple replay modes (Exact, Concordant, Interactive).
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Car {
     pub id: String, // "car:..." - sha256 of the canonical body
     pub run_id: String,
@@ -34,7 +34,7 @@ pub struct Car {
     pub signatures: Vec<String>, // e.g., ["ed25519:..."]
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RunInfo {
     pub kind: String, // 'exact' | 'concordant' | 'interactive'
     pub name: String,
@@ -46,14 +46,14 @@ pub struct RunInfo {
     pub sampler: Option<Sampler>, // Details for stochastic runs
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Sampler {
     pub temp: f32,
     pub top_p: f32,
     pub rng: String, // e.g., "pcg64"
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Proof {
     pub match_kind: String, // 'exact' | 'semantic' | 'process'
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,12 +68,12 @@ pub struct Proof {
     pub process: Option<ProcessProof>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProcessProof {
     pub sequential_checkpoints: Vec<ProcessCheckpointProof>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProcessCheckpointProof {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,7 +85,7 @@ pub struct ProcessCheckpointProof {
     pub signature: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PolicyRef {
     pub hash: String,      // A hash of the policy state at the time of the run
     pub egress: bool,      // Was network access allowed?
@@ -99,7 +99,7 @@ pub struct Budgets {
     pub g_co2e: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProvenanceClaim {
     pub claim_type: String, // "input", "output", "config"
     pub sha256: String,
@@ -107,13 +107,13 @@ pub struct ProvenanceClaim {
 
 // NOTE: The Replay struct is now replaced by the more detailed `Proof` struct.
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SGrade {
     pub score: u8, // 0-100
     pub components: SGradeComponents,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SGradeComponents {
     pub provenance: f32, // 0.0 - 1.0
     pub energy: f32,     // 0.0 - 1.0

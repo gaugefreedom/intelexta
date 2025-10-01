@@ -9,9 +9,13 @@
   },
   "include": [
     "src/components/CheckpointEditor.tsx",
+    "src/components/ContextPanel.tsx",
     "src/components/cloneRunHelpers.ts",
     "src/components/__tests__/checkpointEditor.test.ts",
     "src/components/__tests__/cloneRunHelpers.test.ts",
+    "src/components/__tests__/contextPanel.test.ts",
+    "src/lib/api.ts",
+    "src/lib/featureFlags.ts",
     "src/styles/common.ts",
     "src/test/node-shims.d.ts"
   ]

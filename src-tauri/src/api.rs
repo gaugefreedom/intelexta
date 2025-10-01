@@ -1278,7 +1278,7 @@ pub fn import_car(
     args: ImportCarArgs,
     pool: State<'_, DbPool>,
     app_handle: AppHandle,
-) -> Result<replay::ReplayReport, Error> {
+) -> Result<portability::CarImportResult, Error> {
     let ImportCarArgs {
         car_path,
         file_name,
