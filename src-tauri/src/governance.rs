@@ -11,7 +11,7 @@ pub struct Budgets {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Incident {
-    pub kind: String,     // "budget_exceeded", "network_denied", "nature_cost_warning", ...
+    pub kind: String, // "budget_exceeded", "network_denied", "nature_cost_warning", ...
     pub severity: String, // "error" | "warn" | "info"
     pub details: String,
 }

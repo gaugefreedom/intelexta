@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 const STUB_MODEL_ID: &str = "stub-model";
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
+const MAX_RUN_NAME_LENGTH: usize = 120;
 
 // External API provider prefixes
 const CLAUDE_MODEL_PREFIX: &str = "claude-";
@@ -618,10 +619,17 @@ pub fn create_run(
     let run_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     // Check if the provided name is empty.
-    let final_name = if name.trim().is_empty() {
-        "New run" // If so, use the simple, static default.
+    let sanitized_name = sanitize_run_name_input(name);
+    if !sanitized_name.is_empty() && sanitized_name.chars().count() > MAX_RUN_NAME_LENGTH {
+        return Err(anyhow!(format!(
+            "run name must be {} characters or fewer",
+            MAX_RUN_NAME_LENGTH
+        )));
+    }
+    let final_name = if sanitized_name.is_empty() {
+        "New run".to_string()
     } else {
-        name.trim() // Otherwise, use the provided name.
+        sanitized_name
     };
 
     {
@@ -631,7 +639,7 @@ pub fn create_run(
             params![
                 &run_id,
                 project_id,
-                final_name,
+                &final_name,
                 &now,
                 Option::<String>::None,
                 (seed as i64),
@@ -665,6 +673,73 @@ pub fn create_run(
     }
 
     Ok(run_id)
+}
+
+fn sanitize_run_name_input(value: &str) -> String {
+    let without_nulls: String = value.chars().filter(|&ch| ch != '\u{0}').collect();
+    let collapsed = without_nulls
+        .split_whitespace()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    collapsed.trim().to_string()
+}
+
+pub fn rename_run(pool: &DbPool, run_id: &str, name: &str) -> anyhow::Result<()> {
+    let sanitized = sanitize_run_name_input(name);
+    if sanitized.is_empty() {
+        return Err(anyhow!("run name cannot be empty"));
+    }
+    if sanitized.chars().count() > MAX_RUN_NAME_LENGTH {
+        return Err(anyhow!(format!(
+            "run name must be {} characters or fewer",
+            MAX_RUN_NAME_LENGTH
+        )));
+    }
+
+    let conn = pool.get()?;
+    let affected = conn.execute(
+        "UPDATE runs SET name = ?1 WHERE id = ?2",
+        params![sanitized, run_id],
+    )?;
+    if affected == 0 {
+        return Err(anyhow!(format!("run {run_id} not found")));
+    }
+    Ok(())
+}
+
+pub fn delete_run(pool: &DbPool, run_id: &str) -> anyhow::Result<()> {
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
+
+    tx.execute(
+        "DELETE FROM checkpoint_payloads WHERE checkpoint_id IN (SELECT id FROM checkpoints WHERE run_id = ?1)",
+        params![run_id],
+    )?;
+
+    tx.execute(
+        "DELETE FROM checkpoint_messages WHERE checkpoint_id IN (SELECT id FROM checkpoints WHERE run_id = ?1)",
+        params![run_id],
+    )?;
+
+    tx.execute("DELETE FROM receipts WHERE run_id = ?1", params![run_id])?;
+
+    tx.execute("DELETE FROM checkpoints WHERE run_id = ?1", params![run_id])?;
+
+    tx.execute(
+        "DELETE FROM run_executions WHERE run_id = ?1",
+        params![run_id],
+    )?;
+
+    tx.execute("DELETE FROM run_steps WHERE run_id = ?1", params![run_id])?;
+
+    let affected = tx.execute("DELETE FROM runs WHERE id = ?1", params![run_id])?;
+    if affected == 0 {
+        return Err(anyhow!(format!("run {run_id} not found")));
+    }
+
+    tx.commit()?;
+    Ok(())
 }
 
 fn persist_checkpoint(
@@ -1684,10 +1759,7 @@ fn execute_stub_checkpoint(run_seed: u64, order_index: i64, prompt: &str) -> Nod
     }
 }
 
-fn execute_claude_mock_checkpoint(
-    model: &str,
-    prompt: &str,
-) -> anyhow::Result<NodeExecution> {
+fn execute_claude_mock_checkpoint(model: &str, prompt: &str) -> anyhow::Result<NodeExecution> {
     // Mock Claude API response - requires network access policy
     // In production, would use actual Claude API with user-configured key
     let mock_response = format!(
