@@ -1,6 +1,6 @@
 // In app/src/lib/api.ts
 import { invoke } from '@tauri-apps/api/core';
-import { interactiveFeatureEnabled } from './featureFlags';
+import { interactiveFeatureEnabled } from './featureFlags.js';
 
 export interface Project {
   id: string;
@@ -133,6 +133,102 @@ export interface ReplayReport {
   semanticDistance?: number | null;
   epsilon?: number | null;
   checkpointReports: CheckpointReplayReport[];
+}
+
+export interface CarSampler {
+  temp: number;
+  topP: number;
+  rng: string;
+}
+
+export interface CarProcessCheckpointProof {
+  id: string;
+  parentCheckpointId?: string | null;
+  turnIndex?: number | null;
+  prevChain: string;
+  currChain: string;
+  signature: string;
+}
+
+export interface CarProcessProof {
+  sequentialCheckpoints: CarProcessCheckpointProof[];
+}
+
+export interface CarProof {
+  matchKind: string;
+  epsilon?: number | null;
+  distanceMetric?: string | null;
+  originalSemanticDigest?: string | null;
+  replaySemanticDigest?: string | null;
+  process?: CarProcessProof | null;
+}
+
+export interface CarPolicyRef {
+  hash: string;
+  egress: boolean;
+  estimator: string;
+}
+
+export interface CarBudgets {
+  usd: number;
+  tokens: number;
+  gCo2e: number;
+}
+
+export interface CarProvenanceClaim {
+  claimType: string;
+  sha256: string;
+}
+
+export interface CarSGradeComponents {
+  provenance: number;
+  energy: number;
+  replay: number;
+  consent: number;
+  incidents: number;
+}
+
+export interface CarSGrade {
+  score: number;
+  components: CarSGradeComponents;
+}
+
+export interface ImportedCarCheckpointSnapshot {
+  id: string;
+  parentCheckpointId?: string | null;
+  turnIndex?: number | null;
+  prevChain?: string | null;
+  currChain?: string | null;
+  signature?: string | null;
+}
+
+export interface CarRunInfo {
+  kind: string;
+  name: string;
+  model: string;
+  version: string;
+  seed: number;
+  steps: RunStepConfig[];
+  sampler?: CarSampler | null;
+}
+
+export interface ImportedCarSnapshot {
+  carId: string;
+  runId: string;
+  createdAt: string;
+  run: CarRunInfo;
+  proof: CarProof;
+  policyRef: CarPolicyRef;
+  budgets: CarBudgets;
+  provenance: CarProvenanceClaim[];
+  checkpoints: ImportedCarCheckpointSnapshot[];
+  sgrade: CarSGrade;
+  signerPublicKey: string;
+}
+
+export interface CarImportResult {
+  replayReport: ReplayReport;
+  snapshot: ImportedCarSnapshot;
 }
 
 export interface ProjectImportSummary {
@@ -413,6 +509,6 @@ export async function importProject(payload: FileImportPayload): Promise<Project
   return await invoke<ProjectImportSummary>('import_project', { args: payload });
 }
 
-export async function importCar(payload: FileImportPayload): Promise<ReplayReport> {
-  return await invoke<ReplayReport>('import_car', { args: payload });
+export async function importCar(payload: FileImportPayload): Promise<CarImportResult> {
+  return await invoke<CarImportResult>('import_car', { args: payload });
 }

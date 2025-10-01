@@ -127,6 +127,45 @@ pub struct ProjectImportSummary {
     pub incidents_generated: usize,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedCarCheckpointSnapshot {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_checkpoint_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_chain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curr_chain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedCarSnapshot {
+    pub car_id: String,
+    pub run_id: String,
+    pub created_at: String,
+    pub run: car::RunInfo,
+    pub proof: car::Proof,
+    pub policy_ref: car::PolicyRef,
+    pub budgets: car::Budgets,
+    pub provenance: Vec<car::ProvenanceClaim>,
+    pub checkpoints: Vec<ImportedCarCheckpointSnapshot>,
+    pub sgrade: car::SGrade,
+    pub signer_public_key: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CarImportResult {
+    pub replay_report: replay::ReplayReport,
+    pub snapshot: ImportedCarSnapshot,
+}
+
 fn sanitize_for_file(input: &str) -> String {
     let mut sanitized = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -517,12 +556,12 @@ pub fn export_project_archive(
 fn decode_verifying_key(pubkey_b64: &str) -> Result<VerifyingKey, Error> {
     let bytes = STANDARD
         .decode(pubkey_b64)
-        .map_err(|err| Error::Api(format!("invalid project pubkey: {err}")))?;
+        .map_err(|err| Error::Api(format!("invalid verifying key: {err}")))?;
     let array: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = bytes
         .try_into()
-        .map_err(|_| Error::Api("project pubkey has invalid length".to_string()))?;
+        .map_err(|_| Error::Api("verifying key has invalid length".to_string()))?;
     VerifyingKey::from_bytes(&array)
-        .map_err(|err| Error::Api(format!("invalid verifying key: {err}")))
+        .map_err(|err| Error::Api(format!("invalid verifying key material: {err}")))
 }
 
 fn signature_valid(
@@ -956,31 +995,16 @@ pub fn import_project_archive(
 }
 
 pub fn import_car_file(
-    pool: &DbPool,
+    _pool: &DbPool,
     car_path: &Path,
     base_dir: &Path,
-) -> Result<replay::ReplayReport, Error> {
+) -> Result<CarImportResult, Error> {
     let data = fs::read_to_string(car_path)
         .map_err(|err| Error::Api(format!("failed to read CAR {}: {err}", car_path.display())))?;
     let car: car::Car = serde_json::from_str(&data)
         .map_err(|err| Error::Api(format!("failed to parse CAR: {err}")))?;
 
-    let conn = pool.get()?;
-    let (project_id, pubkey): (String, String) = conn
-        .query_row(
-            "SELECT projects.id, projects.pubkey FROM runs JOIN projects ON projects.id = runs.project_id WHERE runs.id = ?1",
-            params![&car.run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|err| match err {
-            rusqlite::Error::QueryReturnedNoRows => Error::Api(format!(
-                "run {} referenced by CAR not found",
-                car.run_id
-            )),
-            other => other.into(),
-        })?;
-
-    let verifying_key = decode_verifying_key(&pubkey)?;
+    let verifying_key = decode_verifying_key(&car.signer_public_key)?;
 
     for signature in &car.signatures {
         let Some(encoded) = signature.strip_prefix("ed25519:") else {
@@ -994,31 +1018,80 @@ pub fn import_car_file(
         }
     }
 
-    let receipts_dir = base_dir.join(&project_id).join("receipts");
-    fs::create_dir_all(&receipts_dir).map_err(|err| {
+    if let Some(process) = car.proof.process.as_ref() {
+        for checkpoint in &process.sequential_checkpoints {
+            let Some(encoded) = checkpoint.signature.strip_prefix("ed25519:") else {
+                continue;
+            };
+            if !signature_valid(&verifying_key, &checkpoint.curr_chain, encoded)? {
+                return Err(Error::Api(format!(
+                    "checkpoint {} failed signature verification",
+                    checkpoint.id
+                )));
+            }
+        }
+    }
+
+    let cars_dir = base_dir.join("cars");
+    fs::create_dir_all(&cars_dir).map_err(|err| {
         Error::Api(format!(
-            "failed to create receipts dir {}: {err}",
-            receipts_dir.display()
+            "failed to create CAR storage dir {}: {err}",
+            cars_dir.display()
         ))
     })?;
-    let dest_path = receipts_dir.join(format!("{}.car.json", car.id));
+
+    let sanitized_id = sanitize_for_file(&car.id);
+    let dest_path = cars_dir.join(format!("{}.car.json", sanitized_id));
     fs::write(&dest_path, data)
         .map_err(|err| Error::Api(format!("failed to copy CAR to workspace: {err}")))?;
 
-    conn.execute(
-        "INSERT INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade)
-         VALUES (?1, ?2, CURRENT_TIMESTAMP, ?3, ?4, ?5, ?6)
-         ON CONFLICT(id) DO UPDATE SET run_id = excluded.run_id, created_at = excluded.created_at, file_path = excluded.file_path,
-             match_kind = excluded.match_kind, epsilon = excluded.epsilon, s_grade = excluded.s_grade",
-        params![
-            &car.id,
-            &car.run_id,
-            dest_path.to_string_lossy(),
-            &car.proof.match_kind,
-            &car.proof.epsilon,
-            i64::from(car.sgrade.score),
-        ],
-    )?;
+    let replay_report = replay::replay_car(&car)
+        .map_err(|err| Error::Api(format!("failed to replay CAR {}: {err}", car.id)))?;
 
-    crate::api::replay_run_with_pool(car.run_id.clone(), pool)
+    let checkpoints = if let Some(process) = car.proof.process.clone() {
+        process
+            .sequential_checkpoints
+            .into_iter()
+            .map(|checkpoint| ImportedCarCheckpointSnapshot {
+                id: checkpoint.id,
+                parent_checkpoint_id: checkpoint.parent_checkpoint_id,
+                turn_index: checkpoint.turn_index,
+                prev_chain: Some(checkpoint.prev_chain),
+                curr_chain: Some(checkpoint.curr_chain),
+                signature: Some(checkpoint.signature),
+            })
+            .collect()
+    } else {
+        car.checkpoints
+            .iter()
+            .cloned()
+            .map(|id| ImportedCarCheckpointSnapshot {
+                id,
+                parent_checkpoint_id: None,
+                turn_index: None,
+                prev_chain: None,
+                curr_chain: None,
+                signature: None,
+            })
+            .collect()
+    };
+
+    let snapshot = ImportedCarSnapshot {
+        car_id: car.id.clone(),
+        run_id: car.run_id.clone(),
+        created_at: car.created_at.to_rfc3339(),
+        run: car.run.clone(),
+        proof: car.proof.clone(),
+        policy_ref: car.policy_ref.clone(),
+        budgets: car.budgets.clone(),
+        provenance: car.provenance.clone(),
+        checkpoints,
+        sgrade: car.sgrade.clone(),
+        signer_public_key: car.signer_public_key.clone(),
+    };
+
+    Ok(CarImportResult {
+        replay_report,
+        snapshot,
+    })
 }
