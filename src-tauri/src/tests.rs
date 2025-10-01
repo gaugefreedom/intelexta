@@ -320,6 +320,26 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
         )?;
     }
 
+    let _run_step_id = Uuid::new_v4().to_string();
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                &_run_step_id,
+                &run_id,
+                0_i64,
+                "Step",
+                "stub-model",
+                "interactive prompt",
+                256_i64,
+                orchestrator::RunProofMode::Exact.as_str(),
+                Option::<f64>::None,
+            ],
+        )?;
+    }
+
     #[derive(Serialize)]
     struct TestCheckpointBody<'a> {
         run_id: &'a str,
@@ -407,6 +427,15 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
         car::build_car(&conn, &run_id)?
     };
 
+    let stored_run_snapshot = {
+        let conn = pool.get()?;
+        orchestrator::load_stored_run(&conn, &run_id)?
+    };
+    assert!(
+        !stored_run_snapshot.steps.is_empty(),
+        "expected run definition to contain at least one step"
+    );
+
     assert_eq!(car.proof.match_kind, "process");
     let process = car.proof.process.as_ref().expect("process proof metadata");
     assert_eq!(
@@ -425,7 +454,10 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
         assert_eq!(entry.curr_chain, expected.4);
         assert_eq!(entry.signature, expected.5);
     }
-    assert_eq!(car.steps, inserted_ids);
+    assert_eq!(car.checkpoints, inserted_ids);
+    assert_eq!(car.run.name, stored_run_snapshot.name);
+    assert_eq!(car.run.steps, stored_run_snapshot.steps);
+    assert_eq!(car.signer_public_key, project.pubkey);
 
     let base_dir = std::env::temp_dir().join(format!("intelexta-process-tests-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&base_dir)?;
@@ -433,6 +465,9 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
     assert!(emitted_path.exists());
     let persisted: car::Car = serde_json::from_str(&std::fs::read_to_string(&emitted_path)?)?;
     assert_eq!(persisted.proof.match_kind, "process");
+    assert_eq!(persisted.run.name, stored_run_snapshot.name);
+    assert_eq!(persisted.run.steps, stored_run_snapshot.steps);
+    assert_eq!(persisted.signer_public_key, project.pubkey);
 
     let report = replay::replay_interactive_run(run_id.clone(), &pool)?;
     assert!(report.match_status);
