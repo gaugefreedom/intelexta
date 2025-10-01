@@ -41,6 +41,8 @@ fn main() {
     #[cfg(feature = "interactive")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         api::create_project,
+        api::rename_project,
+        api::delete_project,
         api::list_projects,
         api::list_local_models,
         api::create_run,
@@ -70,6 +72,8 @@ fn main() {
     #[cfg(not(feature = "interactive"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         api::create_project,
+        api::rename_project,
+        api::delete_project,
         api::list_projects,
         api::list_local_models,
         api::create_run,

@@ -32,6 +32,10 @@ pub fn load_secret_key(project_id: &str) -> anyhow::Result<SigningKey> {
     Ok(sk)
 }
 
+pub fn delete_secret_key(project_id: &str) -> anyhow::Result<()> {
+    keychain::delete_secret(project_id)
+}
+
 pub fn public_key_from_secret(sk: &SigningKey) -> String {
     let pk: VerifyingKey = sk.verifying_key();
     STANDARD.encode(pk.as_bytes())
