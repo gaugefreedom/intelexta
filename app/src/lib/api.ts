@@ -276,6 +276,14 @@ export async function listRuns(projectId: string): Promise<RunSummary[]> {
   return await invoke<RunSummary[]>('list_runs', { projectId });
 }
 
+export async function renameRun(runId: string, name: string): Promise<void> {
+  await invoke('rename_run', { runId, name });
+}
+
+export async function deleteRun(runId: string): Promise<void> {
+  await invoke('delete_run', { runId });
+}
+
 export async function listCheckpoints(
   runExecutionId?: string | null,
 ): Promise<CheckpointSummary[]> {

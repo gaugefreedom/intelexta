@@ -117,6 +117,17 @@ pub fn create_run(
     .map_err(|err| Error::Api(err.to_string()))
 }
 
+#[tauri::command]
+pub fn rename_run(run_id: String, name: String, pool: State<'_, DbPool>) -> Result<(), Error> {
+    orchestrator::rename_run(pool.inner(), &run_id, &name)
+        .map_err(|err| Error::Api(err.to_string()))
+}
+
+#[tauri::command]
+pub fn delete_run(run_id: String, pool: State<'_, DbPool>) -> Result<(), Error> {
+    orchestrator::delete_run(pool.inner(), &run_id).map_err(|err| Error::Api(err.to_string()))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunStepRequest {

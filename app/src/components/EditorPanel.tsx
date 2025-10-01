@@ -14,6 +14,8 @@ import {
   reorderRunSteps,
   RunStepRequest,
   createRun,
+  renameRun,
+  deleteRun,
   startRun,
   cloneRun,
   estimateRunCost,
@@ -87,6 +89,25 @@ function formatTimestampLabel(value: string): string {
 }
 
 const MAX_RUN_NAME_LENGTH = 120;
+
+const inlineRunActionButtonStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "#9cdcfe",
+  cursor: "pointer",
+  padding: 0,
+  margin: 0,
+  fontSize: "0.9rem",
+  lineHeight: 1,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const inlineRunActionButtonDisabledStyle: React.CSSProperties = {
+  opacity: 0.5,
+  cursor: "not-allowed",
+};
 
 function sanitizeRunName(value: string): string {
   return value.replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
@@ -564,6 +585,8 @@ export default function EditorPanel({
   const [executingRun, setExecutingRun] = React.useState(false);
   const [creatingRun, setCreatingRun] = React.useState(false);
   const [cloningRun, setCloningRun] = React.useState(false);
+  const [renamingRun, setRenamingRun] = React.useState(false);
+  const [deletingRun, setDeletingRun] = React.useState(false);
   const [newRunName, setNewRunName] = React.useState("");
   const [newRunNameError, setNewRunNameError] = React.useState<string | null>(null);
 
@@ -1187,6 +1210,87 @@ export default function EditorPanel({
     selectedRun,
   ]);
 
+  const handleRenameRun = React.useCallback(async () => {
+    if (!selectedRun) {
+      return;
+    }
+    const proposedName = prompt(`Rename run "${selectedRun.name}":`, selectedRun.name);
+    if (proposedName === null) {
+      return;
+    }
+    const sanitized = sanitizeRunName(proposedName);
+    if (sanitized.length === 0) {
+      setErrorMessage("Run name cannot be empty.");
+      return;
+    }
+    if (sanitized.length > MAX_RUN_NAME_LENGTH) {
+      setErrorMessage(`Run name must be ${MAX_RUN_NAME_LENGTH} characters or fewer.`);
+      return;
+    }
+    if (sanitized === selectedRun.name) {
+      return;
+    }
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setRenamingRun(true);
+    try {
+      await renameRun(selectedRun.id, sanitized);
+      setRuns((previous) =>
+        previous.map((run) => (run.id === selectedRun.id ? { ...run, name: sanitized } : run)),
+      );
+      setStatusMessage("Run renamed.");
+      onRunsMutated?.();
+    } catch (err) {
+      console.error("Failed to rename run", err);
+      const message = err instanceof Error ? err.message : "Unable to rename run.";
+      setErrorMessage(message);
+    } finally {
+      setRenamingRun(false);
+    }
+  }, [selectedRun, onRunsMutated]);
+
+  const handleDeleteRun = React.useCallback(async () => {
+    if (!selectedRun) {
+      return;
+    }
+    const confirmation = prompt(
+      `Type the run name ("${selectedRun.name}") to permanently delete it. This action cannot be undone.`,
+    );
+    if (confirmation === null) {
+      return;
+    }
+    const normalized = sanitizeRunName(confirmation);
+    if (normalized !== selectedRun.name) {
+      if (normalized.length > 0) {
+        setErrorMessage("Run name did not match. Deletion cancelled.");
+      }
+      return;
+    }
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setDeletingRun(true);
+    try {
+      await deleteRun(selectedRun.id);
+      let fallbackRunId: string | null = null;
+      let fallbackExecutionId: string | null = null;
+      setRuns((previous) => {
+        const filtered = previous.filter((run) => run.id !== selectedRun.id);
+        fallbackRunId = filtered[0]?.id ?? null;
+        fallbackExecutionId = filtered[0]?.executions?.[0]?.id ?? null;
+        return filtered;
+      });
+      onSelectRun(fallbackRunId, fallbackExecutionId ?? null);
+      setStatusMessage("Run deleted.");
+      onRunsMutated?.();
+    } catch (err) {
+      console.error("Failed to delete run", err);
+      const message = err instanceof Error ? err.message : "Unable to delete run.";
+      setErrorMessage(message);
+    } finally {
+      setDeletingRun(false);
+    }
+  }, [selectedRun, onSelectRun, onRunsMutated]);
+
   const handleOpenInteractiveCheckpoint = React.useCallback(
     (config: RunStepConfig) => {
       if (!selectedRunId || !interactiveSupport) {
@@ -1203,8 +1307,8 @@ export default function EditorPanel({
     setConversationContext(null);
   }, []);
 
-  const runActionPending = executingRun || cloningRun;
-  const executeDisabled = !selectedRunId || executingRun;
+  const runActionPending = executingRun || cloningRun || renamingRun || deletingRun;
+  const executeDisabled = !selectedRunId || executingRun || deletingRun;
   const cloneRunDisabled = isCloneRunDisabled(
     selectedRunId,
     runActionPending,
@@ -1310,7 +1414,48 @@ export default function EditorPanel({
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "8px" }}>
                   <div>
                     <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Name</div>
-                    <div>{selectedRun.name}</div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span>{selectedRun.name}</span>
+                      <div style={{ display: "inline-flex", gap: "4px" }}>
+                        <button
+                          type="button"
+                          onClick={handleRenameRun}
+                          disabled={renamingRun || deletingRun}
+                          title="Rename run"
+                          aria-label={`Rename run "${selectedRun.name}"`}
+                          style={{
+                            ...inlineRunActionButtonStyle,
+                            ...(renamingRun || deletingRun
+                              ? inlineRunActionButtonDisabledStyle
+                              : {}),
+                          }}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDeleteRun}
+                          disabled={deletingRun || renamingRun}
+                          title="Delete run"
+                          aria-label={`Delete run "${selectedRun.name}"`}
+                          style={{
+                            ...inlineRunActionButtonStyle,
+                            ...(deletingRun || renamingRun
+                              ? inlineRunActionButtonDisabledStyle
+                              : {}),
+                          }}
+                        >
+                          ✖️
+                        </button>
+                      </div>
+                    </div>
                   </div>
                   <div>
                     <div style={{ fontSize: "0.75rem", color: "#9cdcfe" }}>Created</div>
