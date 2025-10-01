@@ -403,7 +403,7 @@ export default function CheckpointDetailsPanel({
                   wordBreak: "break-all",
                 }}
               >
-                {checkpointDetails.executionId}
+                {checkpointDetails.runExecutionId}
               </dd>
               <dt>Kind</dt>
               <dd style={{ margin: 0 }}>{checkpointDetails.kind}</dd>
