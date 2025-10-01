@@ -8,9 +8,14 @@ import {
   exportProject,
   importProject,
   importCar,
+  listRuns,
+  listCheckpoints,
+  getCheckpointDetails,
   type ProjectImportSummary,
   type ReplayReport,
-  type RunProofMode,
+  type CheckpointSummary,
+  type CheckpointDetails,
+  type RunSummary,
   ProofBadgeKind,
 } from "../lib/api";
 import {
@@ -19,6 +24,7 @@ import {
   buttonDisabled,
   combineButtonStyles,
 } from "../styles/common.js";
+import CheckpointDetailsPanel, { formatIncidentMessage } from "./CheckpointDetailsPanel";
 
 interface ContextPanelProps {
   projectId: string;
@@ -53,6 +59,16 @@ export default function ContextPanel({
   const [carImportError, setCarImportError] = React.useState<string | null>(null);
   const [carReplayReport, setCarReplayReport] = React.useState<ReplayReport | null>(null);
   const [carImportStatus, setCarImportStatus] = React.useState<string | null>(null);
+  const [carReplayRun, setCarReplayRun] = React.useState<RunSummary | null>(null);
+  const [carReplayExecutionId, setCarReplayExecutionId] = React.useState<string | null>(null);
+  const [carCheckpoints, setCarCheckpoints] = React.useState<CheckpointSummary[]>([]);
+  const [carCheckpointsLoading, setCarCheckpointsLoading] = React.useState<boolean>(false);
+  const [carCheckpointsError, setCarCheckpointsError] = React.useState<string | null>(null);
+  const [carDetailsOpen, setCarDetailsOpen] = React.useState<boolean>(false);
+  const [carSelectedCheckpointId, setCarSelectedCheckpointId] = React.useState<string | null>(null);
+  const [carCheckpointDetails, setCarCheckpointDetails] = React.useState<CheckpointDetails | null>(null);
+  const [carDetailsLoading, setCarDetailsLoading] = React.useState<boolean>(false);
+  const [carDetailsError, setCarDetailsError] = React.useState<string | null>(null);
 
   const projectFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const carFileInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -272,6 +288,16 @@ export default function ContextPanel({
     setCarImportError(null);
     setCarReplayReport(null);
     setCarImportStatus(null);
+    setCarReplayRun(null);
+    setCarReplayExecutionId(null);
+    setCarCheckpoints([]);
+    setCarCheckpointsError(null);
+    setCarDetailsOpen(false);
+    setCarSelectedCheckpointId(null);
+    setCarCheckpointDetails(null);
+    setCarDetailsLoading(false);
+    setCarDetailsError(null);
+    setCarCheckpointsLoading(false);
 
     const input = carFileInputRef.current;
     if (input) {
@@ -409,6 +435,139 @@ export default function ContextPanel({
       checkpoints: checkpointMessages,
     };
   }, [carReplayReport]);
+
+  React.useEffect(() => {
+    setCarReplayRun(null);
+    setCarReplayExecutionId(null);
+    setCarCheckpoints([]);
+    setCarCheckpointsError(null);
+    setCarSelectedCheckpointId(null);
+    setCarDetailsOpen(false);
+    setCarCheckpointDetails(null);
+    setCarDetailsError(null);
+    setCarDetailsLoading(false);
+
+    if (!carReplayReport) {
+      setCarCheckpointsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCarCheckpointsLoading(true);
+
+    const loadCheckpoints = async () => {
+      try {
+        const runs = await listRuns(projectId);
+        if (cancelled) {
+          return;
+        }
+        const matchingRun = runs.find((run) => run.id === carReplayReport.runId) ?? null;
+        if (!matchingRun) {
+          setCarCheckpointsError(
+            `Run ${carReplayReport.runId} was not found in this project after importing the CAR.`,
+          );
+          return;
+        }
+
+        setCarReplayRun(matchingRun);
+        const executions = [...(matchingRun.executions ?? [])];
+        if (executions.length === 0) {
+          setCarCheckpointsError("Imported CAR run has no recorded executions.");
+          return;
+        }
+
+        executions.sort((a, b) => {
+          const left = new Date(a.createdAt).getTime();
+          const right = new Date(b.createdAt).getTime();
+          return Number.isNaN(right) || Number.isNaN(left) ? 0 : right - left;
+        });
+        const latestExecution = executions[0];
+        setCarReplayExecutionId(latestExecution.id);
+
+        const checkpoints = await listCheckpoints(latestExecution.id);
+        if (cancelled) {
+          return;
+        }
+        setCarCheckpoints(checkpoints);
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        console.error("Failed to load checkpoints for imported CAR", err);
+        const message = err instanceof Error ? err.message : String(err);
+        setCarCheckpointsError(`Could not load checkpoints for imported CAR: ${message}`);
+      } finally {
+        if (!cancelled) {
+          setCarCheckpointsLoading(false);
+        }
+      }
+    };
+
+    void loadCheckpoints();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [carReplayReport, projectId]);
+
+  React.useEffect(() => {
+    if (!carDetailsOpen || !carSelectedCheckpointId) {
+      return;
+    }
+    let cancelled = false;
+    setCarDetailsLoading(true);
+    setCarDetailsError(null);
+    setCarCheckpointDetails(null);
+    getCheckpointDetails(carSelectedCheckpointId)
+      .then((details) => {
+        if (!cancelled) {
+          setCarCheckpointDetails(details);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error("Failed to load checkpoint details for imported CAR", err);
+          const message = err instanceof Error ? err.message : String(err);
+          setCarDetailsError(`Could not load checkpoint details: ${message}`);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCarDetailsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [carDetailsOpen, carSelectedCheckpointId]);
+
+  React.useEffect(() => {
+    if (
+      carDetailsOpen &&
+      carSelectedCheckpointId &&
+      !carCheckpoints.some((entry) => entry.id === carSelectedCheckpointId)
+    ) {
+      setCarDetailsOpen(false);
+      setCarSelectedCheckpointId(null);
+      setCarCheckpointDetails(null);
+      setCarDetailsError(null);
+      setCarDetailsLoading(false);
+    }
+  }, [carCheckpoints, carDetailsOpen, carSelectedCheckpointId]);
+
+  const handleOpenCarCheckpoint = React.useCallback((checkpointId: string) => {
+    setCarSelectedCheckpointId(checkpointId);
+    setCarDetailsOpen(true);
+  }, []);
+
+  const handleCloseCarCheckpoint = React.useCallback(() => {
+    setCarDetailsOpen(false);
+    setCarSelectedCheckpointId(null);
+    setCarCheckpointDetails(null);
+    setCarDetailsError(null);
+    setCarDetailsLoading(false);
+  }, []);
 
   return (
     <div>
@@ -594,7 +753,104 @@ export default function ContextPanel({
             Imported CAR for run {carReplayReport.runId}.
           </span>
         )}
+        {carReplayReport && (
+          <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ fontSize: "0.85rem", color: "#9cdcfe" }}>
+              Run {carReplayRun ? `${carReplayRun.name} (${carReplayRun.id})` : carReplayReport.runId}
+              {carReplayExecutionId ? ` · Execution ${carReplayExecutionId}` : ""}
+            </div>
+            {carCheckpointsLoading ? (
+              <span style={{ fontSize: "0.8rem", color: "#cbd5f5" }}>Loading checkpoints from imported CAR…</span>
+            ) : carCheckpointsError ? (
+              <span style={{ fontSize: "0.8rem", color: "#f48771" }}>{carCheckpointsError}</span>
+            ) : carCheckpoints.length === 0 ? (
+              <span style={{ fontSize: "0.8rem", color: "#808080" }}>
+                No checkpoints were recorded for this execution.
+              </span>
+            ) : (
+              <>
+                <div style={{ maxHeight: "40vh", overflowY: "auto", border: "1px solid #1f2937", borderRadius: "8px" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #333" }}>
+                        <th style={{ textAlign: "left", padding: "6px", width: "180px" }}>Timestamp</th>
+                        <th style={{ textAlign: "left", padding: "6px", width: "100px" }}>Kind</th>
+                        <th style={{ textAlign: "left", padding: "6px" }}>Summary</th>
+                        <th style={{ textAlign: "right", padding: "6px", width: "80px" }}>Usage</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {carCheckpoints.map((checkpoint) => {
+                        const isIncident = checkpoint.kind === "Incident";
+                        const summary = isIncident
+                          ? formatIncidentMessage(checkpoint.incident)
+                          : checkpoint.message?.body ?? "—";
+                        const isSelected = checkpoint.id === carSelectedCheckpointId;
+                        const rowStyle: React.CSSProperties = {
+                          borderBottom: "1px solid #222",
+                          backgroundColor: isSelected ? "#1f2937" : isIncident ? "#2d1616" : undefined,
+                          cursor: "pointer",
+                        };
+                        if (isSelected) {
+                          rowStyle.boxShadow = "inset 3px 0 0 #9cdcfe";
+                        }
+                        return (
+                          <tr
+                            key={checkpoint.id}
+                            onClick={() => handleOpenCarCheckpoint(checkpoint.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                handleOpenCarCheckpoint(checkpoint.id);
+                              }
+                            }}
+                            role="button"
+                            tabIndex={0}
+                            aria-pressed={isSelected}
+                            style={rowStyle}
+                          >
+                            <td style={{ padding: "6px", verticalAlign: "top" }}>
+                              {new Date(checkpoint.timestamp).toLocaleString()}
+                            </td>
+                            <td style={{ padding: "6px", verticalAlign: "top" }}>
+                              <div style={{ fontWeight: 600 }}>{checkpoint.kind}</div>
+                            </td>
+                            <td
+                              style={{
+                                padding: "6px",
+                                verticalAlign: "top",
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                maxWidth: "220px",
+                              }}
+                            >
+                              {summary}
+                            </td>
+                            <td style={{ padding: "6px", textAlign: "right", verticalAlign: "top" }}>
+                              {checkpoint.usageTokens}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <span style={{ fontSize: "0.75rem", color: "#a6a6a6" }}>
+                  Click a checkpoint row to inspect prompts, responses, and digests.
+                </span>
+              </>
+            )}
+          </div>
+        )}
       </div>
+      <CheckpointDetailsPanel
+        open={carDetailsOpen}
+        onClose={handleCloseCarCheckpoint}
+        checkpointDetails={carCheckpointDetails}
+        loading={carDetailsLoading}
+        error={carDetailsError}
+      />
     </div>
   );
 }
