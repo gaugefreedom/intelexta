@@ -145,6 +145,14 @@ pub struct ImportedCarCheckpointSnapshot {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportedCarBudgets {
+    pub usd: f64,
+    pub tokens: u64,
+    pub nature_cost: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportedCarSnapshot {
     pub car_id: String,
     pub run_id: String,
@@ -152,7 +160,7 @@ pub struct ImportedCarSnapshot {
     pub run: car::RunInfo,
     pub proof: car::Proof,
     pub policy_ref: car::PolicyRef,
-    pub budgets: car::Budgets,
+    pub budgets: ImportedCarBudgets,
     pub provenance: Vec<car::ProvenanceClaim>,
     pub checkpoints: Vec<ImportedCarCheckpointSnapshot>,
     pub sgrade: car::SGrade,
@@ -1076,6 +1084,12 @@ pub fn import_car_file(
             .collect()
     };
 
+    let budgets = ImportedCarBudgets {
+        usd: car.budgets.usd,
+        tokens: car.budgets.tokens,
+        nature_cost: car.budgets.nature_cost,
+    };
+
     let snapshot = ImportedCarSnapshot {
         car_id: car.id.clone(),
         run_id: car.run_id.clone(),
@@ -1083,7 +1097,7 @@ pub fn import_car_file(
         run: car.run.clone(),
         proof: car.proof.clone(),
         policy_ref: car.policy_ref.clone(),
-        budgets: car.budgets.clone(),
+        budgets,
         provenance: car.provenance.clone(),
         checkpoints,
         sgrade: car.sgrade.clone(),

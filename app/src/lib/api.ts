@@ -172,7 +172,7 @@ export interface CarPolicyRef {
 export interface CarBudgets {
   usd: number;
   tokens: number;
-  gCo2e: number;
+  natureCost: number;
 }
 
 export interface CarProvenanceClaim {

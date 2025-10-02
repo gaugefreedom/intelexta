@@ -64,7 +64,7 @@ test("buildCarCheckpointRows preserves checkpoint order and metadata", () => {
     budgets: {
       usd: 0,
       tokens: 256,
-      gCo2e: 0,
+      natureCost: 0,
     },
     provenance: [],
     checkpoints: [
