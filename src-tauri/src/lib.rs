@@ -46,6 +46,9 @@ pub mod replay;
 pub mod runtime;
 pub mod store;
 
+// Document processing module (converted from sci-llm-data-prep)
+pub mod document_processing;
+
 // === Core Data Structures for Sprint 0 ===
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

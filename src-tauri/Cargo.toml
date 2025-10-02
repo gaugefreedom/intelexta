@@ -39,6 +39,13 @@ serde_jcs = "0.1.0"
 hex = "0.4.3"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
+# Document processing dependencies
+regex = "1.10"
+walkdir = "2.4"
+
+[dev-dependencies]
+tempfile = "3.8"
+
 
 # THIS SECTION REPLACES YOUR OLD [build-dependencies]
 [build-dependencies]
