@@ -214,11 +214,18 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
         }
         exec_id.to_string()
     } else {
-        orchestrator::load_latest_run_execution(conn, run_id)
-            .map(|record| record.id)
+        let latest_execution = orchestrator::load_latest_run_execution(conn, run_id)
             .map_err(|err| {
                 anyhow!("failed to resolve latest run execution for run {run_id}: {err}")
-            })?
+            })?;
+
+        let Some(record) = latest_execution else {
+            return Err(anyhow!(
+                "failed to resolve latest run execution for run {run_id}: not found"
+            ));
+        };
+
+        record.id
     };
 
     let project_pubkey: String = conn
