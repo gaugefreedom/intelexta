@@ -1163,6 +1163,7 @@ pub fn update_policy(
 // --- MERGED AND FIXED emit_car FUNCTIONALITY ---
 pub(crate) fn emit_car_to_base_dir(
     run_id: &str,
+    run_execution_id: Option<&str>,
     pool: &DbPool,
     base_dir: &Path,
 ) -> Result<PathBuf, Error> {
@@ -1178,7 +1179,8 @@ pub(crate) fn emit_car_to_base_dir(
             other => Error::from(other),
         })?;
 
-    let car = car::build_car(&conn, run_id).map_err(|err| Error::Api(err.to_string()))?;
+    let car = car::build_car(&conn, run_id, run_execution_id)
+        .map_err(|err| Error::Api(err.to_string()))?;
 
     let receipts_dir = base_dir.join(&project_id).join("receipts");
     std::fs::create_dir_all(&receipts_dir)
@@ -1219,7 +1221,7 @@ pub fn emit_car(
         .path()
         .app_local_data_dir()
         .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
-    let path = emit_car_to_base_dir(&run_id, pool.inner(), &base_dir)?;
+    let path = emit_car_to_base_dir(&run_id, None, pool.inner(), &base_dir)?;
     Ok(path.to_string_lossy().to_string())
 }
 

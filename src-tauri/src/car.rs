@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -182,7 +182,7 @@ struct CheckpointRow {
     signature: String,
 }
 
-pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
+pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>) -> Result<Car> {
     let (project_id, run_created_at): (String, String) = conn
         .query_row(
             "SELECT project_id, created_at FROM runs WHERE id = ?1",
@@ -197,6 +197,30 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
     let stored_run = orchestrator::load_stored_run(conn, run_id)
         .map_err(|err| anyhow!("failed to load stored run: {err}"))?;
 
+    let execution_id = if let Some(exec_id) = run_execution_id {
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT run_id FROM run_executions WHERE id = ?1",
+                params![exec_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let owner =
+            owner.ok_or_else(|| anyhow!("run execution {exec_id} not found for run {run_id}"))?;
+        if owner != run_id {
+            return Err(anyhow!(
+                "run execution {exec_id} does not belong to run {run_id}"
+            ));
+        }
+        exec_id.to_string()
+    } else {
+        orchestrator::load_latest_run_execution(conn, run_id)
+            .map(|record| record.id)
+            .map_err(|err| {
+                anyhow!("failed to resolve latest run execution for run {run_id}: {err}")
+            })?
+    };
+
     let project_pubkey: String = conn
         .query_row(
             "SELECT pubkey FROM projects WHERE id = ?1",
@@ -209,9 +233,9 @@ pub fn build_car(conn: &Connection, run_id: &str) -> Result<Car> {
 
     let mut stmt = conn.prepare(
         "SELECT id, kind, timestamp, inputs_sha256, outputs_sha256, usage_tokens, parent_checkpoint_id, turn_index, prev_chain, curr_chain, signature
-         FROM checkpoints WHERE run_id = ?1 ORDER BY timestamp ASC",
+         FROM checkpoints WHERE run_id = ?1 AND run_execution_id = ?2 ORDER BY timestamp ASC",
     )?;
-    let rows = stmt.query_map(params![run_id], |row| {
+    let rows = stmt.query_map(params![run_id, &execution_id], |row| {
         let ts: String = row.get(2)?;
         let parsed_ts = DateTime::parse_from_rfc3339(&ts)
             .map(|dt| dt.with_timezone(&Utc))
