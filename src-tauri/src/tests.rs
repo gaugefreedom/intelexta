@@ -340,6 +340,15 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
         )?;
     }
 
+    let run_execution_id = format!("{}-exec", run_id);
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO run_executions (id, run_id, created_at) VALUES (?1, ?2, ?3)",
+            params![&run_execution_id, &run_id, &created_at.to_rfc3339()],
+        )?;
+    }
+
     #[derive(Serialize)]
     struct TestCheckpointBody<'a> {
         run_id: &'a str,
@@ -388,10 +397,11 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
         {
             let conn = pool.get()?;
             conn.execute(
-                "INSERT INTO checkpoints (id, run_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14)",
+                "INSERT INTO checkpoints (id, run_id, run_execution_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, semantic_digest, prompt_tokens, completion_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, ?14, ?15)",
                 params![
                     &checkpoint_id,
                     &run_id,
+                    &run_execution_id,
                     parent_id.as_deref(),
                     i64::from(turn),
                     "Step",
@@ -424,7 +434,7 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
 
     let car = {
         let conn = pool.get()?;
-        car::build_car(&conn, &run_id)?
+        car::build_car(&conn, &run_id, Some(run_execution_id.as_str()))?
     };
 
     let stored_run_snapshot = {
@@ -461,7 +471,8 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
 
     let base_dir = std::env::temp_dir().join(format!("intelexta-process-tests-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&base_dir)?;
-    let emitted_path = api::emit_car_to_base_dir(&run_id, &pool, &base_dir)?;
+    let emitted_path =
+        api::emit_car_to_base_dir(&run_id, Some(run_execution_id.as_str()), &pool, &base_dir)?;
     assert!(emitted_path.exists());
     let persisted: car::Car = serde_json::from_str(&std::fs::read_to_string(&emitted_path)?)?;
     assert_eq!(persisted.proof.match_kind, "process");
@@ -477,6 +488,189 @@ fn interactive_run_emits_process_proof_and_replays() -> Result<()> {
 
     let api_report = api::replay_run_with_pool(run_id.clone(), &pool)?;
     assert_eq!(api_report, report);
+
+    Ok(())
+}
+
+#[test]
+fn build_car_filters_checkpoints_by_run_execution() -> Result<()> {
+    init_keyring_mock();
+    let pool = setup_pool()?;
+    let project = api::create_project_with_pool("CAR Execution Filter".into(), &pool)?;
+
+    let run_id = Uuid::new_v4().to_string();
+    let created_at = Utc::now();
+
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO runs (id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6, ?7, ?8)",
+            params![
+                &run_id,
+                &project.id,
+                "execution-filter",
+                &created_at.to_rfc3339(),
+                5_i64,
+                1_000_i64,
+                "stub-model",
+                orchestrator::RunProofMode::Exact.as_str(),
+            ],
+        )?;
+    }
+
+    let run_step_id = Uuid::new_v4().to_string();
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                &run_step_id,
+                &run_id,
+                0_i64,
+                "Step",
+                "stub-model",
+                "filter prompt",
+                512_i64,
+                orchestrator::RunProofMode::Exact.as_str(),
+                Option::<f64>::None,
+            ],
+        )?;
+    }
+
+    let first_execution_id = format!("{}-exec-1", run_id);
+    let second_execution_id = format!("{}-exec-2", run_id);
+
+    {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO run_executions (id, run_id, created_at) VALUES (?1, ?2, ?3)",
+            params![
+                &first_execution_id,
+                &run_id,
+                &(created_at - Duration::minutes(2)).to_rfc3339(),
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO run_executions (id, run_id, created_at) VALUES (?1, ?2, ?3)",
+            params![
+                &second_execution_id,
+                &run_id,
+                &(created_at - Duration::minutes(1)).to_rfc3339(),
+            ],
+        )?;
+    }
+
+    fn insert_checkpoint_record(
+        conn: &rusqlite::Connection,
+        run_id: &str,
+        execution_id: &str,
+        timestamp: chrono::DateTime<Utc>,
+        offset: i64,
+    ) -> Result<String> {
+        let checkpoint_id = Uuid::new_v4().to_string();
+        let timestamp_str = timestamp.to_rfc3339();
+        let prev_chain = format!("prev-chain-{}-{}", execution_id, offset);
+        let curr_chain = format!("curr-chain-{}-{}", execution_id, offset);
+        let signature = format!("sig-{}-{}", execution_id, offset);
+        let inputs = format!("sha-in-{}-{}", execution_id, offset);
+        let outputs = format!("sha-out-{}-{}", execution_id, offset);
+        let usage_tokens: i64 = 100 + offset;
+        let prompt_tokens: i64 = 10 + offset;
+        let completion_tokens: i64 = 5 + offset;
+
+        conn.execute(
+            "INSERT INTO checkpoints (id, run_id, run_execution_id, checkpoint_config_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp, inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, prompt_tokens, completion_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                &checkpoint_id,
+                run_id,
+                execution_id,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<i64>::None,
+                "Step",
+                Option::<String>::None,
+                &timestamp_str,
+                Some(inputs),
+                Some(outputs),
+                &prev_chain,
+                &curr_chain,
+                &signature,
+                usage_tokens,
+                prompt_tokens,
+                completion_tokens,
+            ],
+        )?;
+
+        Ok(checkpoint_id)
+    }
+
+    let first_checkpoint_ids = {
+        let conn = pool.get()?;
+        let base = created_at - Duration::minutes(2);
+        let mut ids = Vec::new();
+        for offset in 0..2 {
+            let offset_i64 = i64::from(offset);
+            let timestamp = base + Duration::seconds(offset_i64);
+            ids.push(insert_checkpoint_record(
+                &conn,
+                &run_id,
+                &first_execution_id,
+                timestamp,
+                offset_i64,
+            )?);
+        }
+        ids
+    };
+
+    let second_checkpoint_ids = {
+        let conn = pool.get()?;
+        let base = created_at - Duration::minutes(1);
+        let mut ids = Vec::new();
+        for offset in 0..2 {
+            let offset_i64 = i64::from(offset);
+            let timestamp = base + Duration::seconds(10 + offset_i64);
+            ids.push(insert_checkpoint_record(
+                &conn,
+                &run_id,
+                &second_execution_id,
+                timestamp,
+                offset_i64,
+            )?);
+        }
+        ids
+    };
+
+    let car_first = {
+        let conn = pool.get()?;
+        car::build_car(&conn, &run_id, Some(first_execution_id.as_str()))?
+    };
+
+    let car_second = {
+        let conn = pool.get()?;
+        car::build_car(&conn, &run_id, Some(second_execution_id.as_str()))?
+    };
+
+    let car_latest = {
+        let conn = pool.get()?;
+        car::build_car(&conn, &run_id, None)?
+    };
+
+    assert_eq!(car_first.checkpoints, first_checkpoint_ids);
+    assert!(car_first
+        .checkpoints
+        .iter()
+        .all(|id| !second_checkpoint_ids.contains(id)));
+
+    assert_eq!(car_second.checkpoints, second_checkpoint_ids);
+    assert!(car_second
+        .checkpoints
+        .iter()
+        .all(|id| !first_checkpoint_ids.contains(id)));
+
+    assert_eq!(car_latest.checkpoints, second_checkpoint_ids);
 
     Ok(())
 }
