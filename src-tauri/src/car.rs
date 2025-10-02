@@ -89,14 +89,14 @@ pub struct ProcessCheckpointProof {
 pub struct PolicyRef {
     pub hash: String,      // A hash of the policy state at the time of the run
     pub egress: bool,      // Was network access allowed?
-    pub estimator: String, // e.g., "gCO₂e = tokens * grid_intensity(model, region)"
+    pub estimator: String, // e.g., "nature_cost = tokens * grid_intensity(model, region)"
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Budgets {
     pub usd: f64,
     pub tokens: u64,
-    pub g_co2e: f64,
+    pub nature_cost: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -279,13 +279,13 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
     } else {
         0.0
     };
-    let co2_per_token = if policy.budget_tokens > 0 {
+    let nature_cost_per_token = if policy.budget_tokens > 0 {
         policy.budget_nature_cost / policy.budget_tokens as f64
     } else {
         0.0
     };
     let estimated_usd = usd_per_token * total_usage_tokens as f64;
-    let estimated_g_co2e = co2_per_token * total_usage_tokens as f64;
+    let estimated_nature_cost = nature_cost_per_token * total_usage_tokens as f64;
 
     let mut provenance_claims = Vec::new();
     let spec_canon = provenance::canonical_json(&run_steps);
@@ -389,12 +389,12 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
         policy_ref: PolicyRef {
             hash: format!("sha256:{policy_hash}"),
             egress: policy.allow_network,
-            estimator: format!("usage_tokens * {:.6} g/token", co2_per_token),
+            estimator: format!("usage_tokens * {:.6} nature_cost/token", nature_cost_per_token),
         },
         budgets: Budgets {
             usd: estimated_usd,
             tokens: total_usage_tokens,
-            g_co2e: estimated_g_co2e,
+            nature_cost: estimated_nature_cost,
         },
         provenance: provenance_claims,
         checkpoints: checkpoint_ids,

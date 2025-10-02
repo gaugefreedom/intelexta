@@ -302,7 +302,7 @@
         },
         "estimator": {
           "type": "string",
-          "description": "Computation used to derive the gCO₂e estimate for the run.",
+          "description": "Computation used to derive the nature cost estimate for the run.",
           "minLength": 1
         }
       }
@@ -313,7 +313,7 @@
       "required": [
         "usd",
         "tokens",
-        "g_co2e"
+        "nature_cost"
       ],
       "properties": {
         "usd": {
@@ -326,9 +326,9 @@
           "description": "Total tokens billed for the run.",
           "minimum": 0
         },
-        "g_co2e": {
+        "nature_cost": {
           "type": "number",
-          "description": "Estimated grams of CO₂ equivalent attributed to the run.",
+          "description": "Estimated nature cost attributed to the run.",
           "minimum": 0
         }
       }
