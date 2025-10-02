@@ -32,6 +32,11 @@ export interface CarCheckpointRow {
   signature?: string | null;
 }
 
+export interface CarSnapshotSummary {
+  title: string;
+  subtitle: string | null;
+}
+
 export function buildCarCheckpointRows(
   snapshot: ImportedCarSnapshot,
 ): CarCheckpointRow[] {
@@ -52,6 +57,21 @@ export function buildCarCheckpointRows(
     });
   }
   return rows;
+}
+
+export function buildCarSnapshotSummary(
+  snapshot: ImportedCarSnapshot,
+): CarSnapshotSummary {
+  const title = `CAR ${snapshot.carId}`;
+  let subtitle: string | null = null;
+
+  if (snapshot.run?.name) {
+    subtitle = `Run ${snapshot.run.name} (${snapshot.runId})`;
+  } else if (snapshot.runId) {
+    subtitle = `Run ${snapshot.runId}`;
+  }
+
+  return { title, subtitle };
 }
 
 interface ContextPanelProps {
@@ -474,6 +494,47 @@ export default function ContextPanel({
     return buildCarCheckpointRows(carSnapshot);
   }, [carSnapshot]);
 
+  const carSnapshotSummary = React.useMemo(() => {
+    if (!carSnapshot) {
+      return null;
+    }
+    return buildCarSnapshotSummary(carSnapshot);
+  }, [carSnapshot]);
+
+  const carSnapshotMetadata = React.useMemo(() => {
+    if (!carSnapshot) {
+      return [] as string[];
+    }
+
+    const metadata: string[] = [];
+    metadata.push(`Generated ${new Date(carSnapshot.createdAt).toLocaleString()}`);
+
+    if (carSnapshot.proof?.matchKind) {
+      const label =
+        carSnapshot.proof.matchKind.charAt(0).toUpperCase() +
+        carSnapshot.proof.matchKind.slice(1);
+      metadata.push(`Proof mode ${label}`);
+    }
+
+    const replayMessage = carReplayFeedback?.overallMessage ?? (() => {
+      if (!carReplayReport) {
+        return null;
+      }
+      const base = carReplayReport.matchStatus ? "Replay PASS" : "Replay FAIL";
+      return carReplayReport.errorMessage ? `${base} — ${carReplayReport.errorMessage}` : base;
+    })();
+
+    if (replayMessage) {
+      metadata.push(replayMessage);
+    }
+
+    return metadata;
+  }, [carSnapshot, carReplayFeedback, carReplayReport]);
+
+  const carReplayCheckpointMessages = React.useMemo(() => {
+    return carReplayFeedback?.checkpoints ?? [];
+  }, [carReplayFeedback]);
+
   React.useEffect(() => {
     if (!carCheckpointDetailsOpen) {
       return;
@@ -693,37 +754,56 @@ export default function ContextPanel({
           </ul>
         )}
         {carImportStatus && (<span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{carImportStatus}</span>)}
-        {carReplayFeedback && (
-          <div style={{ fontSize: "0.85rem", display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span style={{ color: carReplayFeedback.overallTone === "success" ? "#a5d6a7" : "#f48771" }}>
-              {carReplayFeedback.overallMessage}
-            </span>
-            {carReplayFeedback.checkpoints.length > 0 && (
-              <ul style={{ margin: 0, paddingLeft: "1.2rem", listStyleType: "disc" }}>
-                {carReplayFeedback.checkpoints.map((entry) => (
-                  <li key={entry.key} style={{ color: entry.tone === "success" ? "#a5d6a7" : "#f48771" }}>
-                    {entry.message}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
         {carImportError && (<span style={{ color: "#f48771", fontSize: "0.85rem" }}>{carImportError}</span>)}
-        {carReplayReport && !carReplayFeedback && (
-          <span style={{ fontSize: "0.85rem", color: "#cbd5f5" }}>
-            Imported CAR for run {carReplayReport.runId}.
-          </span>
-        )}
-        {carReplayReport && carSnapshot && (
-          <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "8px" }}>
-            <div style={{ fontSize: "0.85rem", color: "#9cdcfe", display: "flex", flexWrap: "wrap", gap: "4px" }}>
-              <span>Run {carSnapshot.run.name} ({carSnapshot.runId})</span>
-              <span>· CAR {carSnapshot.carId}</span>
+        {carReplayReport && carSnapshot && carSnapshotSummary && (
+          <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div
+              style={{
+                fontSize: "0.95rem",
+                fontWeight: 600,
+                color: "#cbd5f5",
+                fontFamily: "monospace",
+                wordBreak: "break-all",
+              }}
+            >
+              {carSnapshotSummary.title}
             </div>
-            <div style={{ fontSize: "0.75rem", color: "#cbd5f5" }}>
-              Generated {new Date(carSnapshot.createdAt).toLocaleString()} · Proof mode {carSnapshot.proof.matchKind}
-            </div>
+            {carSnapshotSummary.subtitle && (
+              <div style={{ fontSize: "0.8rem", color: "#9ca3af" }}>
+                {carSnapshotSummary.subtitle}
+              </div>
+            )}
+            {(carSnapshotMetadata.length > 0 || carReplayCheckpointMessages.length > 0) && (
+              <details
+                style={{
+                  backgroundColor: "#111827",
+                  border: "1px solid #1f2937",
+                  borderRadius: "8px",
+                  padding: "8px 12px",
+                  fontSize: "0.8rem",
+                  color: "#cbd5f5",
+                }}
+              >
+                <summary style={{ cursor: "pointer", fontWeight: 500 }}>Snapshot details</summary>
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }}>
+                  {carSnapshotMetadata.map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+                  {carReplayCheckpointMessages.length > 0 && (
+                    <ul style={{ margin: 0, paddingLeft: "1.2rem", listStyleType: "disc", display: "flex", flexDirection: "column", gap: "4px" }}>
+                      {carReplayCheckpointMessages.map((entry) => (
+                        <li
+                          key={entry.key}
+                          style={{ color: entry.tone === "success" ? "#a5d6a7" : "#f48771" }}
+                        >
+                          {entry.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </details>
+            )}
             {carCheckpointRows.length === 0 ? (
               <span style={{ fontSize: "0.8rem", color: "#808080" }}>
                 CAR snapshot did not include checkpoint signatures.
@@ -766,16 +846,21 @@ export default function ContextPanel({
                                 cursor: "pointer",
                               }}
                             >
-                              <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>#{row.order}</span>
-                              <span
-                                style={{
-                                  fontFamily: "monospace",
-                                  fontSize: "0.8rem",
-                                  wordBreak: "break-all",
-                                }}
-                              >
-                                {row.id}
-                              </span>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>
+                                  Checkpoint #{row.order}
+                                </span>
+                                <code
+                                  style={{
+                                    fontFamily: "monospace",
+                                    fontSize: "0.8rem",
+                                    wordBreak: "break-all",
+                                    color: "inherit",
+                                  }}
+                                >
+                                  {row.id}
+                                </code>
+                              </div>
                             </button>
                           </td>
                         </tr>

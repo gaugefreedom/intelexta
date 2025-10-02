@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import test from "node:test";
-import { buildCarCheckpointRows } from "../ContextPanel.js";
+import { buildCarCheckpointRows, buildCarSnapshotSummary } from "../ContextPanel.js";
 import type { ImportedCarSnapshot } from "../../lib/api.js";
 
 test("buildCarCheckpointRows preserves checkpoint order and metadata", () => {
@@ -115,5 +115,85 @@ test("buildCarCheckpointRows preserves checkpoint order and metadata", () => {
     currChain: "curr-2",
     prevChain: "curr-1",
     signature: "ed25519:sig-2",
+  });
+});
+
+test("buildCarSnapshotSummary emphasises CAR id and run label when provided", () => {
+  const snapshot: ImportedCarSnapshot = {
+    carId: "car:uvw789",
+    runId: "run-123",
+    createdAt: "2024-01-02T00:00:00Z",
+    run: {
+      kind: "exact",
+      name: "demo-run",
+      model: "stub",
+      version: "v1",
+      seed: 1,
+      steps: [],
+      sampler: null,
+    },
+    proof: {
+      matchKind: "exact",
+      epsilon: null,
+      distanceMetric: null,
+      originalSemanticDigest: null,
+      replaySemanticDigest: null,
+      process: { sequentialCheckpoints: [] },
+    },
+    policyRef: { hash: "sha256:def", egress: false, estimator: "" },
+    budgets: { usd: 0, tokens: 0, natureCost: 0 },
+    provenance: [],
+    checkpoints: [],
+    sgrade: {
+      score: 100,
+      components: { provenance: 1, energy: 1, replay: 1, consent: 1, incidents: 1 },
+    },
+    signerPublicKey: "ZmFrZV9rZXk=",
+  };
+
+  const summary = buildCarSnapshotSummary(snapshot);
+  assert.deepStrictEqual(summary, {
+    title: "CAR car:uvw789",
+    subtitle: "Run demo-run (run-123)",
+  });
+});
+
+test("buildCarSnapshotSummary falls back to run id when run name missing", () => {
+  const snapshot: ImportedCarSnapshot = {
+    carId: "car:uvw789",
+    runId: "run-123",
+    createdAt: "2024-01-02T00:00:00Z",
+    run: {
+      kind: "exact",
+      name: "",
+      model: "stub",
+      version: "v1",
+      seed: 1,
+      steps: [],
+      sampler: null,
+    },
+    proof: {
+      matchKind: "exact",
+      epsilon: null,
+      distanceMetric: null,
+      originalSemanticDigest: null,
+      replaySemanticDigest: null,
+      process: { sequentialCheckpoints: [] },
+    },
+    policyRef: { hash: "sha256:def", egress: false, estimator: "" },
+    budgets: { usd: 0, tokens: 0, natureCost: 0 },
+    provenance: [],
+    checkpoints: [],
+    sgrade: {
+      score: 100,
+      components: { provenance: 1, energy: 1, replay: 1, consent: 1, incidents: 1 },
+    },
+    signerPublicKey: "ZmFrZV9rZXk=",
+  };
+
+  const summary = buildCarSnapshotSummary(snapshot);
+  assert.deepStrictEqual(summary, {
+    title: "CAR car:uvw789",
+    subtitle: "Run run-123",
   });
 });
