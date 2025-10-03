@@ -286,7 +286,8 @@ fn simulate_stub_checkpoint(run_seed: u64, config: &orchestrator::RunStep) -> (S
     let mut output = b"hello".to_vec();
     output.extend_from_slice(&run_seed.to_le_bytes());
     output.extend_from_slice(&config.order_index.to_le_bytes());
-    let prompt_hash = provenance::sha256_hex(config.prompt.as_bytes());
+    let prompt = config.prompt.as_deref().unwrap_or("");
+    let prompt_hash = provenance::sha256_hex(prompt.as_bytes());
     output.extend_from_slice(prompt_hash.as_bytes());
     let outputs_hex = provenance::sha256_hex(&output);
     let semantic_source = hex::encode(&output);
@@ -329,11 +330,13 @@ pub(crate) fn replay_exact_checkpoint(
     }
     report.original_digest = original_digest.clone();
 
-    let replay_digest = if config.model == "stub-model" {
+    let replay_digest = if config.model.as_deref() == Some("stub-model") {
         let (outputs_hex, _) = simulate_stub_checkpoint(run.seed, config);
         outputs_hex
     } else {
-        let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
+        let model = config.model.as_deref().unwrap_or("");
+        let prompt = config.prompt.as_deref().unwrap_or("");
+        let generation = orchestrator::replay_llm_generation(model, prompt)?;
         provenance::sha256_hex(generation.response.as_bytes())
     };
 
@@ -382,10 +385,12 @@ pub(crate) fn replay_concordant_checkpoint(
     };
     report.semantic_original_digest = Some(original_semantic.clone());
 
-    let (replay_digest, replay_semantic) = if config.model == "stub-model" {
+    let (replay_digest, replay_semantic) = if config.model.as_deref() == Some("stub-model") {
         simulate_stub_checkpoint(run.seed, config)
     } else {
-        let generation = orchestrator::replay_llm_generation(&config.model, &config.prompt)?;
+        let model = config.model.as_deref().unwrap_or("");
+        let prompt = config.prompt.as_deref().unwrap_or("");
+        let generation = orchestrator::replay_llm_generation(model, prompt)?;
         let outputs_hex = provenance::sha256_hex(generation.response.as_bytes());
         let semantic = provenance::semantic_digest(&generation.response);
         (outputs_hex, semantic)

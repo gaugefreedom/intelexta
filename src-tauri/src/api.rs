@@ -131,17 +131,27 @@ pub fn delete_run(run_id: String, pool: State<'_, DbPool>) -> Result<(), Error> 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunStepRequest {
-    pub model: String,
-    pub prompt: String,
+    #[serde(default)]
+    pub step_type: Option<String>, // "llm" or "document_ingestion", defaults to "llm"
+    // LLM step fields (optional for document ingestion steps)
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
     pub token_budget: u64,
-    #[serde(default)]
-    pub checkpoint_type: Option<String>,
-    #[serde(default)]
-    pub order_index: Option<i64>,
     #[serde(default)]
     pub proof_mode: orchestrator::RunProofMode,
     #[serde(default)]
     pub epsilon: Option<f64>,
+    // Document ingestion config (as JSON string)
+    #[serde(default)]
+    pub config_json: Option<String>,
+    // Common fields
+    #[serde(default)]
+    pub checkpoint_type: Option<String>,
+    #[serde(default)]
+    pub order_index: Option<i64>,
 }
 
 #[tauri::command]
@@ -157,12 +167,14 @@ pub fn create_run_step(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateRunStepRequest {
+    pub step_type: Option<String>,
     pub model: Option<String>,
     pub prompt: Option<String>,
     pub token_budget: Option<u64>,
     pub checkpoint_type: Option<String>,
     pub proof_mode: Option<orchestrator::RunProofMode>,
     pub epsilon: Option<f64>,
+    pub config_json: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -458,6 +470,33 @@ pub fn get_checkpoint_details(
     get_checkpoint_details_with_pool(checkpoint_id, pool.inner())
 }
 
+/// Download full checkpoint artifact (for large document ingestion outputs)
+/// Returns the full canonical JSON if it was truncated in the database
+#[tauri::command]
+pub fn download_checkpoint_artifact(
+    checkpoint_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<String, Error> {
+    let conn = pool.get()?;
+
+    // Get the checkpoint payload
+    let output_payload: Option<String> = conn
+        .query_row(
+            "SELECT output_payload FROM checkpoint_payloads WHERE checkpoint_id = ?1",
+            params![&checkpoint_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let payload = output_payload.ok_or_else(|| {
+        Error::Api(format!("No payload found for checkpoint {}", checkpoint_id))
+    })?;
+
+    // For now, just return the payload as-is
+    // In the future, this could check if a full artifact file exists on disk
+    Ok(payload)
+}
+
 #[cfg(feature = "interactive")]
 #[tauri::command]
 pub fn open_interactive_checkpoint_session(
@@ -709,9 +748,9 @@ pub fn finalize_interactive_checkpoint(
 }
 
 fn load_run_step(conn: &Connection, checkpoint_id: &str) -> Result<orchestrator::RunStep, Error> {
-    let row: Option<(String, i64, String, String, String, i64, String, Option<f64>)> = conn
+    let row: Option<(String, i64, String, String, Option<String>, Option<String>, i64, String, Option<f64>, Option<String>)> = conn
         .query_row(
-            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE id = ?1",
+            "SELECT run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json FROM run_steps WHERE id = ?1",
             params![checkpoint_id],
             |row| Ok((
                 row.get(0)?,
@@ -722,6 +761,8 @@ fn load_run_step(conn: &Connection, checkpoint_id: &str) -> Result<orchestrator:
                 row.get(5)?,
                 row.get(6)?,
                 row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
             )),
         )
         .optional()?;
@@ -730,17 +771,19 @@ fn load_run_step(conn: &Connection, checkpoint_id: &str) -> Result<orchestrator:
         run_id,
         order_index,
         checkpoint_type,
+        step_type,
         model,
         prompt,
         token_budget_raw,
         proof_mode_raw,
         epsilon,
+        config_json,
     ) = row.ok_or_else(|| Error::Api(format!("checkpoint config {checkpoint_id} not found")))?;
 
     let proof_mode =
         orchestrator::RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
             Error::from(rusqlite::Error::FromSqlConversionFailure(
-                6,
+                7,
                 rusqlite::types::Type::Text,
                 Box::new(err),
             ))
@@ -751,11 +794,13 @@ fn load_run_step(conn: &Connection, checkpoint_id: &str) -> Result<orchestrator:
         run_id,
         order_index,
         checkpoint_type,
+        step_type,
         model,
         prompt,
         token_budget: token_budget_raw.max(0) as u64,
         proof_mode,
         epsilon,
+        config_json,
     })
 }
 
@@ -913,15 +958,15 @@ pub(crate) fn list_run_steps_with_pool(
 ) -> Result<Vec<orchestrator::RunStep>, Error> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
-        "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
+        "SELECT id, run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
     )?;
     let rows = stmt.query_map(params![&run_id], |row| {
-        let token_budget: i64 = row.get(6)?;
-        let proof_mode_raw: String = row.get(7)?;
+        let token_budget: i64 = row.get(7)?;
+        let proof_mode_raw: String = row.get(8)?;
         let proof_mode =
             orchestrator::RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    7,
+                    8,
                     rusqlite::types::Type::Text,
                     Box::new(err),
                 )
@@ -931,11 +976,13 @@ pub(crate) fn list_run_steps_with_pool(
             run_id: row.get(1)?,
             order_index: row.get(2)?,
             checkpoint_type: row.get(3)?,
-            model: row.get(4)?,
-            prompt: row.get(5)?,
+            step_type: row.get(4)?,
+            model: row.get(5)?,
+            prompt: row.get(6)?,
             token_budget: token_budget.max(0) as u64,
             proof_mode,
-            epsilon: row.get(8)?,
+            epsilon: row.get(9)?,
+            config_json: row.get(10)?,
         })
     })?;
 
@@ -957,11 +1004,14 @@ pub fn update_run_step(
     let tx = conn.transaction()?;
     let mut config = load_run_step(&tx, &checkpoint_id)?;
 
+    if let Some(step_type) = updates.step_type {
+        config.step_type = step_type;
+    }
     if let Some(model) = updates.model {
-        config.model = model;
+        config.model = Some(model);
     }
     if let Some(prompt) = updates.prompt {
-        config.prompt = prompt;
+        config.prompt = Some(prompt);
     }
     if let Some(token_budget) = updates.token_budget {
         config.token_budget = token_budget;
@@ -974,6 +1024,9 @@ pub fn update_run_step(
     }
     if let Some(epsilon) = updates.epsilon {
         config.epsilon = Some(epsilon);
+    }
+    if let Some(config_json) = updates.config_json {
+        config.config_json = Some(config_json);
     }
     if config.proof_mode.is_concordant() {
         let value = config
@@ -990,14 +1043,16 @@ pub fn update_run_step(
     }
 
     tx.execute(
-        "UPDATE run_steps SET model = ?1, prompt = ?2, token_budget = ?3, checkpoint_type = ?4, proof_mode = ?5, epsilon = ?6, updated_at = CURRENT_TIMESTAMP WHERE id = ?7",
+        "UPDATE run_steps SET step_type = ?1, model = ?2, prompt = ?3, token_budget = ?4, checkpoint_type = ?5, proof_mode = ?6, epsilon = ?7, config_json = ?8, updated_at = CURRENT_TIMESTAMP WHERE id = ?9",
         params![
+            &config.step_type,
             &config.model,
             &config.prompt,
             (config.token_budget as i64),
             &config.checkpoint_type,
             config.proof_mode.as_str(),
             config.epsilon,
+            &config.config_json,
             &checkpoint_id,
         ],
     )?;

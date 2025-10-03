@@ -271,11 +271,13 @@ export interface RunStepConfig {
   runId: string;
   orderIndex: number;
   checkpointType: string;
-  model: string;
-  prompt: string;
+  stepType: string; // "llm" or "document_ingestion"
+  model?: string | null;
+  prompt?: string | null;
   tokenBudget: number;
   proofMode: RunProofMode;
   epsilon?: number | null;
+  configJson?: string | null;
 }
 
 export interface InteractiveCheckpointSession {
@@ -299,14 +301,26 @@ export type FinalizeInteractiveCheckpoint = (
   checkpointId: string,
 ) => Promise<void>;
 
+export interface DocumentIngestionConfig {
+  sourcePath: string;
+  format: string; // "pdf", "latex", "docx", "txt"
+  privacyStatus: string;
+  outputStorage?: string;
+}
+
 export interface RunStepRequest {
-  model: string;
-  prompt: string;
-  tokenBudget: number;
-  checkpointType?: string;
-  orderIndex?: number;
+  stepType?: string; // "llm" or "document_ingestion"
+  // LLM fields
+  model?: string;
+  prompt?: string;
+  tokenBudget?: number;
   proofMode?: RunProofMode;
   epsilon?: number | null;
+  // Document ingestion fields
+  configJson?: string;
+  // Common fields
+  checkpointType?: string;
+  orderIndex?: number;
 }
 
 export interface HelloRunSpec {

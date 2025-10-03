@@ -13,6 +13,7 @@ import {
   deleteRunStep,
   reorderRunSteps,
   RunStepRequest,
+  DocumentIngestionConfig,
   createRun,
   renameRun,
   deleteRun,
@@ -499,17 +500,37 @@ function sanitizeCheckpointFormValue(
   value: CheckpointFormValue,
   modelOptions: string[],
 ): RunStepRequest {
-  const fallbackModel = modelOptions[0] ?? "stub-model";
-  const model = normalizeModelSelection(value.model, modelOptions, fallbackModel);
   const checkpointType = sanitizeLabelForRequest(value.checkpointType, "Step");
-  const prompt = sanitizePromptForRequest(value.prompt);
-  const tokenBudget = clampTokenBudget(value.tokenBudget);
+
+  if (value.stepType === "document_ingestion") {
+    // Document ingestion step
+    const config: DocumentIngestionConfig = {
+      sourcePath: value.sourcePath || "",
+      format: value.format || "pdf",
+      privacyStatus: value.privacyStatus || "public",
+    };
+
+    return {
+      stepType: "document_ingestion",
+      checkpointType,
+      configJson: JSON.stringify(config),
+      tokenBudget: 0,
+    };
+  }
+
+  // LLM step (default)
+  const fallbackModel = modelOptions[0] ?? "stub-model";
+  const model = normalizeModelSelection(value.model || "", modelOptions, fallbackModel);
+  const prompt = sanitizePromptForRequest(value.prompt || "");
+  const tokenBudget = clampTokenBudget(value.tokenBudget || 0);
   const proofMode = value.proofMode === "concordant" ? "concordant" : "exact";
   const epsilon =
     proofMode === "concordant" && typeof value.epsilon === "number" && Number.isFinite(value.epsilon)
       ? Math.min(Math.max(value.epsilon, 0), 1)
       : null;
+
   return {
+    stepType: "llm",
     model,
     prompt,
     tokenBudget,

@@ -39,8 +39,23 @@ export default function CheckpointListItem({
   onOpenInteractive,
 }: CheckpointListItemProps) {
   const orderLabel = config.orderIndex + 1;
-  const promptPreview = truncatePrompt(config.prompt);
+  const isDocumentIngestion = config.stepType === 'document_ingestion';
   const isInteractive = config.checkpointType.trim().toLowerCase() === 'interactivechat'.toLowerCase();
+
+  // Generate preview based on step type
+  let promptPreview = '';
+  if (isDocumentIngestion && config.configJson) {
+    try {
+      const docConfig = JSON.parse(config.configJson);
+      promptPreview = `Document: ${docConfig.sourcePath} (${docConfig.format})`;
+    } catch {
+      promptPreview = 'Document ingestion';
+    }
+  } else if (config.prompt) {
+    promptPreview = truncatePrompt(config.prompt);
+  } else {
+    promptPreview = '(no prompt)';
+  }
 
   return (
     <div
@@ -91,19 +106,43 @@ export default function CheckpointListItem({
         </div>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", fontSize: "0.9rem" }}>
-        <span>
-          <strong>Model:</strong> {config.model}
-        </span>
-        <span>
-          <strong>Token Budget:</strong> {config.tokenBudget.toLocaleString()}
-        </span>
-        <span>
-          <strong>Proof Mode:</strong> {config.proofMode === "concordant" ? "Concordant" : "Exact"}
-        </span>
-        {config.proofMode === "concordant" && (
-          <span>
-            <strong>Epsilon:</strong> {typeof config.epsilon === "number" ? config.epsilon.toFixed(3) : "—"}
-          </span>
+        {isDocumentIngestion ? (
+          <>
+            {config.configJson && (() => {
+              try {
+                const docConfig = JSON.parse(config.configJson);
+                return (
+                  <>
+                    <span>
+                      <strong>Format:</strong> {docConfig.format?.toUpperCase() || 'Unknown'}
+                    </span>
+                    <span>
+                      <strong>Privacy:</strong> {docConfig.privacyStatus || 'Unknown'}
+                    </span>
+                  </>
+                );
+              } catch {
+                return null;
+              }
+            })()}
+          </>
+        ) : (
+          <>
+            <span>
+              <strong>Model:</strong> {config.model || 'Unknown'}
+            </span>
+            <span>
+              <strong>Token Budget:</strong> {config.tokenBudget.toLocaleString()}
+            </span>
+            <span>
+              <strong>Proof Mode:</strong> {config.proofMode === "concordant" ? "Concordant" : "Exact"}
+            </span>
+            {config.proofMode === "concordant" && (
+              <span>
+                <strong>Epsilon:</strong> {typeof config.epsilon === "number" ? config.epsilon.toFixed(3) : "—"}
+              </span>
+            )}
+          </>
         )}
       </div>
       <div style={{ fontSize: "0.85rem", color: "#c8c8c8" }}>{promptPreview}</div>

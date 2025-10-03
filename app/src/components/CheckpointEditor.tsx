@@ -8,12 +8,18 @@ import {
 } from "../styles/common.js";
 
 export interface CheckpointFormValue {
+  stepType: string; // "llm" or "document_ingestion"
   checkpointType: string;
-  model: string;
-  tokenBudget: number;
-  prompt: string;
-  proofMode: RunProofMode;
-  epsilon: number | null;
+  // LLM fields
+  model?: string;
+  tokenBudget?: number;
+  prompt?: string;
+  proofMode?: RunProofMode;
+  epsilon?: number | null;
+  // Document ingestion fields
+  sourcePath?: string;
+  format?: string;
+  privacyStatus?: string;
 }
 
 interface CheckpointEditorProps {
@@ -86,12 +92,15 @@ export default function CheckpointEditor({
 
   const defaultModel = mergedModels[0] ?? "stub-model";
 
+  const [stepType, setStepType] = React.useState(
+    initialValue?.stepType ?? "llm",
+  );
   const [checkpointType, setCheckpointType] = React.useState(
     initialValue?.checkpointType ?? "Step",
   );
   const [model, setModel] = React.useState(initialValue?.model ?? defaultModel);
   const [tokenBudget, setTokenBudget] = React.useState(
-    initialValue ? String(initialValue.tokenBudget) : "1000",
+    initialValue && initialValue.tokenBudget ? String(initialValue.tokenBudget) : "1000",
   );
   const [prompt, setPrompt] = React.useState(initialValue?.prompt ?? "");
   const [proofMode, setProofMode] = React.useState<RunProofMode>(
@@ -106,6 +115,14 @@ export default function CheckpointEditor({
     }
     return null;
   });
+
+  // Document ingestion fields
+  const [sourcePath, setSourcePath] = React.useState(initialValue?.sourcePath ?? "");
+  const [format, setFormat] = React.useState(initialValue?.format ?? "pdf");
+  const [privacyStatus, setPrivacyStatus] = React.useState(
+    initialValue?.privacyStatus ?? "public",
+  );
+
   const [error, setError] = React.useState<string | null>(null);
   const proofModeFieldName = React.useId();
 
@@ -141,6 +158,27 @@ export default function CheckpointEditor({
       return;
     }
 
+    setError(null);
+
+    if (stepType === "document_ingestion") {
+      // Validate document ingestion fields
+      const cleanedPath = sourcePath.trim();
+      if (!cleanedPath) {
+        setError("Document path is required.");
+        return;
+      }
+
+      await onSubmit({
+        stepType: "document_ingestion",
+        checkpointType: cleanedType,
+        sourcePath: cleanedPath,
+        format,
+        privacyStatus,
+      });
+      return;
+    }
+
+    // LLM step validation
     const cleanedModel = sanitizeLabel(model || defaultModel);
     if (!cleanedModel) {
       setError("Model is required.");
@@ -173,8 +211,8 @@ export default function CheckpointEditor({
       epsilonValue = clampNormalizedEpsilon(epsilon as number);
     }
 
-    setError(null);
     await onSubmit({
+      stepType: "llm",
       checkpointType: cleanedType,
       model: cleanedModel,
       tokenBudget: parsedBudget,
@@ -201,6 +239,18 @@ export default function CheckpointEditor({
       }}
     >
       <div style={{ fontSize: "1rem", fontWeight: 600 }}>{headerLabel}</div>
+
+      <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+        Step Type
+        <select
+          value={stepType}
+          onChange={(event) => setStepType(event.target.value as "llm" | "document_ingestion")}
+        >
+          <option value="llm">LLM Prompt</option>
+          <option value="document_ingestion">Document Ingestion</option>
+        </select>
+      </label>
+
       <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
         Checkpoint Name
         <input
@@ -210,111 +260,156 @@ export default function CheckpointEditor({
           placeholder="Enter checkpoint name"
         />
       </label>
-      <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        Model
-        <select value={model} onChange={(event) => setModel(event.target.value)}>
-          {mergedModels.map((modelId) => (
-            <option key={modelId} value={modelId}>
-              {modelId}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        Token Budget
-        <input
-          type="number"
-          min={0}
-          step={1}
-          value={tokenBudget}
-          onChange={(event) => setTokenBudget(event.target.value)}
-        />
-      </label>
-      <fieldset
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "8px",
-          padding: 0,
-          border: "none",
-          margin: 0,
-        }}
-      >
-        <legend style={{ marginBottom: "4px" }}>Proof configuration</legend>
-        <div style={{ display: "flex", gap: "12px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-            <input
-              type="radio"
-              name={proofModeFieldName}
-              value="exact"
-              checked={proofMode === "exact"}
-              onChange={() => {
-                setProofMode("exact");
-                setError(null);
-              }}
-            />
-            Exact
+
+      {stepType === "llm" ? (
+        <>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Model
+            <select value={model} onChange={(event) => setModel(event.target.value)}>
+              {mergedModels.map((modelId) => (
+                <option key={modelId} value={modelId}>
+                  {modelId}
+                </option>
+              ))}
+            </select>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Token Budget
             <input
-              type="radio"
-              name={proofModeFieldName}
-              value="concordant"
-              checked={proofMode === "concordant"}
-              onChange={() => {
-                setProofMode("concordant");
-                setError(null);
-                setEpsilon((current) =>
-                  isValidNormalizedEpsilon(current)
-                    ? clampNormalizedEpsilon(current as number)
-                    : DEFAULT_CONCORDANT_EPSILON,
-                );
-              }}
-            />
-            Concordant
-          </label>
-        </div>
-        {proofMode === "concordant" && (
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <input
-              type="range"
+              type="number"
               min={0}
-              max={1}
-              step={0.01}
-              value={clampNormalizedEpsilon(
-                isValidNormalizedEpsilon(epsilon) ? (epsilon as number) : DEFAULT_CONCORDANT_EPSILON,
-              )}
-              onChange={(event) => {
-                const nextValue = Number(event.target.value);
-                setEpsilon(clampNormalizedEpsilon(nextValue));
-                setError(null);
-              }}
+              step={1}
+              value={tokenBudget}
+              onChange={(event) => setTokenBudget(event.target.value)}
             />
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>
-              ε =
-              {" "}
-              {clampNormalizedEpsilon(
-                isValidNormalizedEpsilon(epsilon) ? (epsilon as number) : DEFAULT_CONCORDANT_EPSILON,
-              ).toFixed(2)}
-            </span>
-          </div>
-        )}
-      </fieldset>
-      {proofMode === "concordant" && !canSubmitCurrent ? (
-        <div style={{ color: "#f48771", fontSize: "0.85rem" }}>
-          Adjust the epsilon slider to a value between 0 and 1 before saving this concordant
-          checkpoint.
-        </div>
-      ) : null}
-      <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        Prompt
-        <textarea
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          rows={6}
-          style={{ fontFamily: "monospace" }}
-        />
-      </label>
+          </label>
+        </>
+      ) : (
+        <>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Document Path
+            <input
+              type="text"
+              value={sourcePath}
+              onChange={(event) => setSourcePath(event.target.value)}
+              placeholder="/path/to/document.pdf"
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Format
+            <select value={format} onChange={(event) => setFormat(event.target.value)}>
+              <option value="pdf">PDF</option>
+              <option value="latex">LaTeX</option>
+              <option value="docx">DOCX (not yet supported)</option>
+              <option value="txt">TXT (not yet supported)</option>
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Privacy Status
+            <select
+              value={privacyStatus}
+              onChange={(event) => setPrivacyStatus(event.target.value)}
+            >
+              <option value="public">Public</option>
+              <option value="consent_obtained_anonymized">Consent Obtained (Anonymized)</option>
+              <option value="internal">Internal</option>
+            </select>
+          </label>
+        </>
+      )}
+
+      {stepType === "llm" && (
+        <>
+          <fieldset
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+              padding: 0,
+              border: "none",
+              margin: 0,
+            }}
+          >
+            <legend style={{ marginBottom: "4px" }}>Proof configuration</legend>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <input
+                  type="radio"
+                  name={proofModeFieldName}
+                  value="exact"
+                  checked={proofMode === "exact"}
+                  onChange={() => {
+                    setProofMode("exact");
+                    setError(null);
+                  }}
+                />
+                Exact
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <input
+                  type="radio"
+                  name={proofModeFieldName}
+                  value="concordant"
+                  checked={proofMode === "concordant"}
+                  onChange={() => {
+                    setProofMode("concordant");
+                    setError(null);
+                    setEpsilon((current) =>
+                      isValidNormalizedEpsilon(current)
+                        ? clampNormalizedEpsilon(current as number)
+                        : DEFAULT_CONCORDANT_EPSILON,
+                    );
+                  }}
+                />
+                Concordant
+              </label>
+            </div>
+            {proofMode === "concordant" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={clampNormalizedEpsilon(
+                    isValidNormalizedEpsilon(epsilon)
+                      ? (epsilon as number)
+                      : DEFAULT_CONCORDANT_EPSILON,
+                  )}
+                  onChange={(event) => {
+                    const nextValue = Number(event.target.value);
+                    setEpsilon(clampNormalizedEpsilon(nextValue));
+                    setError(null);
+                  }}
+                />
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  ε ={" "}
+                  {clampNormalizedEpsilon(
+                    isValidNormalizedEpsilon(epsilon)
+                      ? (epsilon as number)
+                      : DEFAULT_CONCORDANT_EPSILON,
+                  ).toFixed(2)}
+                </span>
+              </div>
+            )}
+          </fieldset>
+          {proofMode === "concordant" && !canSubmitCurrent ? (
+            <div style={{ color: "#f48771", fontSize: "0.85rem" }}>
+              Adjust the epsilon slider to a value between 0 and 1 before saving this concordant
+              checkpoint.
+            </div>
+          ) : null}
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Prompt
+            <textarea
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              rows={6}
+              style={{ fontFamily: "monospace" }}
+            />
+          </label>
+        </>
+      )}
       {error && <div style={{ color: "#f48771", fontSize: "0.85rem" }}>{error}</div>}
       <div style={{ display: "flex", gap: "8px" }}>
         <button

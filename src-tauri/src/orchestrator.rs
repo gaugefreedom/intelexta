@@ -19,10 +19,22 @@ use uuid::Uuid;
 const STUB_MODEL_ID: &str = "stub-model";
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
 const MAX_RUN_NAME_LENGTH: usize = 120;
+const MAX_PAYLOAD_PREVIEW_SIZE: usize = 65_536; // 64KB preview limit
 
 // External API provider prefixes
 const CLAUDE_MODEL_PREFIX: &str = "claude-";
 const CLAUDE_API_PLACEHOLDER_KEY: &str = "sk-ant-placeholder-key-not-configured";
+
+/// Configuration for document ingestion steps
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentIngestionConfig {
+    pub source_path: String,
+    pub format: String, // "pdf", "latex", "docx", "txt"
+    pub privacy_status: String, // "public", "consent_obtained_anonymized", etc.
+    #[serde(default)]
+    pub output_storage: String, // "database" or "file", defaults to "database"
+}
 
 #[derive(Serialize)]
 struct CheckpointBody<'a> {
@@ -133,20 +145,34 @@ fn default_checkpoint_type() -> String {
     "Step".to_string()
 }
 
+fn default_step_type() -> String {
+    "llm".to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunStepTemplate {
-    pub model: String,
-    pub prompt: String,
-    pub token_budget: u64,
+    #[serde(default = "default_step_type")]
+    pub step_type: String,
+    // LLM step fields (optional for document ingestion steps)
     #[serde(default)]
-    pub order_index: Option<i64>,
-    #[serde(default = "default_checkpoint_type")]
-    pub checkpoint_type: String,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub token_budget: u64,
     #[serde(default)]
     pub proof_mode: RunProofMode,
     #[serde(default)]
     pub epsilon: Option<f64>,
+    // Document ingestion config (as JSON string)
+    #[serde(default)]
+    pub config_json: Option<String>,
+    // Common fields
+    #[serde(default)]
+    pub order_index: Option<i64>,
+    #[serde(default = "default_checkpoint_type")]
+    pub checkpoint_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -156,17 +182,35 @@ pub struct RunStep {
     pub run_id: String,
     pub order_index: i64,
     pub checkpoint_type: String,
-    pub model: String,
-    pub prompt: String,
+    #[serde(default = "default_step_type")]
+    pub step_type: String,
+    // LLM step fields (optional for document ingestion steps)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default)]
     pub token_budget: u64,
+    #[serde(default)]
     pub proof_mode: RunProofMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epsilon: Option<f64>,
+    // Document ingestion config (as JSON string)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_json: Option<String>,
 }
 
 impl RunStep {
     pub fn is_interactive_chat(&self) -> bool {
         self.checkpoint_type.eq_ignore_ascii_case("InteractiveChat")
+    }
+
+    pub fn is_llm_step(&self) -> bool {
+        self.step_type == "llm"
+    }
+
+    pub fn is_document_ingestion(&self) -> bool {
+        self.step_type == "document_ingestion"
     }
 }
 
@@ -654,17 +698,19 @@ pub fn create_run(
             let checkpoint_id = Uuid::new_v4().to_string();
             let order_index = template.order_index.unwrap_or(index as i64);
             tx.execute(
-                "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                 params![
                     &checkpoint_id,
                     &run_id,
                     order_index,
                     &template.checkpoint_type,
+                    &template.step_type,
                     &template.model,
                     &template.prompt,
                     (template.token_budget as i64),
                     template.proof_mode.as_str(),
                     template.epsilon,
+                    &template.config_json,
                 ],
             )?;
         }
@@ -846,24 +892,26 @@ fn sum_checkpoint_token_usage(
 
 fn load_run_steps(conn: &Connection, run_id: &str) -> anyhow::Result<Vec<RunStep>> {
     let mut stmt = conn.prepare(
-        "SELECT id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
+        "SELECT id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
     )?;
     let rows = stmt.query_map(params![run_id], |row| {
-        let token_budget: i64 = row.get(5)?;
-        let proof_mode_str: String = row.get(6)?;
+        let token_budget: i64 = row.get(6)?;
+        let proof_mode_str: String = row.get(7)?;
         let proof_mode = RunProofMode::try_from(proof_mode_str.as_str()).map_err(|err| {
-            rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(err))
+            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(err))
         })?;
         Ok(RunStep {
             id: row.get(0)?,
             run_id: run_id.to_string(),
             order_index: row.get(1)?,
             checkpoint_type: row.get(2)?,
-            model: row.get(3)?,
-            prompt: row.get(4)?,
+            step_type: row.get(3)?,
+            model: row.get(4)?,
+            prompt: row.get(5)?,
             token_budget: token_budget.max(0) as u64,
             proof_mode,
-            epsilon: row.get(7)?,
+            epsilon: row.get(8)?,
+            config_json: row.get(9)?,
         })
     })?;
 
@@ -886,9 +934,9 @@ fn load_checkpoint_config_by_id(
     conn: &Connection,
     checkpoint_id: &str,
 ) -> anyhow::Result<Option<RunStep>> {
-    let row: Option<(String, i64, String, String, String, i64, String, Option<f64>)> = conn
+    let row: Option<(String, i64, String, String, Option<String>, Option<String>, i64, String, Option<f64>, Option<String>)> = conn
         .query_row(
-            "SELECT run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon FROM run_steps WHERE id = ?1",
+            "SELECT run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json FROM run_steps WHERE id = ?1",
             params![checkpoint_id],
             |row| Ok((
                 row.get(0)?,
@@ -899,6 +947,8 @@ fn load_checkpoint_config_by_id(
                 row.get(5)?,
                 row.get(6)?,
                 row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
             )),
         )
         .optional()?;
@@ -907,18 +957,20 @@ fn load_checkpoint_config_by_id(
         run_id,
         order_index,
         checkpoint_type,
+        step_type,
         model,
         prompt,
         token_budget_raw,
         proof_mode_raw,
         epsilon,
+        config_json,
     )) = row
     else {
         return Ok(None);
     };
 
     let proof_mode = RunProofMode::try_from(proof_mode_raw.as_str()).map_err(|err| {
-        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(err))
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(err))
     })?;
 
     Ok(Some(RunStep {
@@ -926,11 +978,13 @@ fn load_checkpoint_config_by_id(
         run_id,
         order_index,
         checkpoint_type,
+        step_type,
         model,
         prompt,
         token_budget: token_budget_raw.max(0) as u64,
         proof_mode,
         epsilon,
+        config_json,
     }))
 }
 
@@ -1207,7 +1261,14 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
 
     let transcript =
         load_interactive_messages(&conn, run_id, &run_execution_id, checkpoint_config_id)?;
-    let llm_prompt = build_interactive_prompt(&config.prompt, &transcript, trimmed_prompt);
+
+    // Interactive checkpoints must have prompt and model
+    let config_prompt = config.prompt.as_ref()
+        .ok_or_else(|| anyhow!("interactive checkpoint missing prompt"))?;
+    let config_model = config.model.as_ref()
+        .ok_or_else(|| anyhow!("interactive checkpoint missing model"))?;
+
+    let llm_prompt = build_interactive_prompt(config_prompt, &transcript, trimmed_prompt);
 
     let signing_key = ensure_project_signing_key(&conn, &stored_run.project_id)?;
 
@@ -1221,7 +1282,7 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
     }
 
     let LlmGeneration { response, usage } =
-        llm_client.stream_generate(&config.model, &llm_prompt)?;
+        llm_client.stream_generate(config_model, &llm_prompt)?;
     let sanitized_llm_prompt = sanitize_payload(&llm_prompt);
     let sanitized_response = sanitize_payload(&response);
 
@@ -1578,7 +1639,7 @@ pub(crate) fn start_run_with_client(
         }
 
         // Check network policy before executing non-stub checkpoints
-        if config.model != STUB_MODEL_ID {
+        if config.model.as_deref() != Some(STUB_MODEL_ID) {
             if let Err(network_incident) = governance::enforce_network_policy(&policy) {
                 let incident_value = serde_json::to_value(&network_incident)?;
                 let checkpoint_insert = CheckpointInsert {
@@ -1686,13 +1747,15 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
         .steps
         .iter()
         .map(|cfg| RunStepTemplate {
+            step_type: cfg.step_type.clone(),
             model: cfg.model.clone(),
             prompt: cfg.prompt.clone(),
             token_budget: cfg.token_budget,
-            order_index: Some(cfg.order_index),
-            checkpoint_type: cfg.checkpoint_type.clone(),
             proof_mode: cfg.proof_mode,
             epsilon: cfg.epsilon,
+            config_json: cfg.config_json.clone(),
+            order_index: Some(cfg.order_index),
+            checkpoint_type: cfg.checkpoint_type.clone(),
         })
         .collect();
 
@@ -1710,21 +1773,111 @@ pub fn clone_run(pool: &DbPool, source_run_id: &str) -> anyhow::Result<String> {
     )
 }
 
+/// Truncate a string to a maximum size for database storage
+fn truncate_payload(content: &str, max_size: usize) -> String {
+    if content.len() <= max_size {
+        return content.to_string();
+    }
+
+    let truncated = &content[..max_size];
+    format!("{}... [TRUNCATED - {} total bytes]", truncated, content.len())
+}
+
+/// Execute a document ingestion checkpoint
+fn execute_document_ingestion_checkpoint(
+    config_json: &str,
+) -> anyhow::Result<NodeExecution> {
+    use crate::document_processing;
+
+    // Parse the configuration
+    let ingestion_config: DocumentIngestionConfig = serde_json::from_str(config_json)
+        .context("Failed to parse document ingestion config")?;
+
+    // Process the document based on format
+    let canonical_doc = match ingestion_config.format.to_lowercase().as_str() {
+        "pdf" => {
+            document_processing::process_pdf_to_canonical(
+                &ingestion_config.source_path,
+                Some(ingestion_config.privacy_status.clone())
+            )?
+        }
+        "tex" | "latex" => {
+            document_processing::process_latex_to_canonical(
+                &ingestion_config.source_path,
+                Some(ingestion_config.privacy_status.clone())
+            )?
+        }
+        unsupported => {
+            return Err(anyhow!(
+                "Unsupported document format: {}. Supported formats: pdf, latex",
+                unsupported
+            ));
+        }
+    };
+
+    // Serialize to JSON
+    let canonical_json = serde_json::to_string_pretty(&canonical_doc)
+        .context("Failed to serialize canonical document")?;
+
+    // Create preview for database storage
+    let preview = truncate_payload(&canonical_json, MAX_PAYLOAD_PREVIEW_SIZE);
+
+    // Compute provenance hashes
+    let inputs_sha256 = provenance::sha256_hex(ingestion_config.source_path.as_bytes());
+    let outputs_sha256 = provenance::sha256_hex(canonical_json.as_bytes());
+
+    // Use document_id as semantic digest
+    let semantic_digest = canonical_doc.document_id.clone();
+
+    // Create input description
+    let prompt_payload = format!(
+        "Document: {} (format: {}, privacy: {})",
+        ingestion_config.source_path,
+        ingestion_config.format,
+        ingestion_config.privacy_status
+    );
+
+    Ok(NodeExecution {
+        inputs_sha256: Some(inputs_sha256),
+        outputs_sha256: Some(outputs_sha256),
+        semantic_digest: Some(semantic_digest),
+        usage: TokenUsage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+        },
+        prompt_payload: Some(prompt_payload),
+        output_payload: Some(preview),
+    })
+}
+
 fn execute_checkpoint(
     config: &RunStep,
     run_seed: u64,
     llm_client: &dyn LlmClient,
 ) -> anyhow::Result<NodeExecution> {
-    if config.model == STUB_MODEL_ID {
+    // Check if this is a document ingestion step
+    if config.is_document_ingestion() {
+        let config_json = config.config_json.as_ref()
+            .ok_or_else(|| anyhow!("Document ingestion step missing config_json"))?;
+        return execute_document_ingestion_checkpoint(config_json);
+    }
+
+    // For LLM steps, model and prompt must be present
+    let model = config.model.as_ref()
+        .ok_or_else(|| anyhow!("LLM step missing model"))?;
+    let prompt = config.prompt.as_ref()
+        .ok_or_else(|| anyhow!("LLM step missing prompt"))?;
+
+    if model == STUB_MODEL_ID {
         Ok(execute_stub_checkpoint(
             run_seed,
             config.order_index,
-            &config.prompt,
+            prompt,
         ))
-    } else if config.model.starts_with(CLAUDE_MODEL_PREFIX) {
-        execute_claude_mock_checkpoint(&config.model, &config.prompt)
+    } else if model.starts_with(CLAUDE_MODEL_PREFIX) {
+        execute_claude_mock_checkpoint(model, prompt)
     } else {
-        execute_llm_checkpoint(&config.model, &config.prompt, llm_client)
+        execute_llm_checkpoint(model, prompt, llm_client)
     }
 }
 
@@ -1904,15 +2057,19 @@ pub fn create_run_step(
 
     let step_id = Uuid::new_v4().to_string();
     let RunStepRequest {
+        step_type,
         model,
         prompt,
         token_budget,
         proof_mode,
         epsilon,
+        config_json,
         ..
     } = config;
 
-    // Validate epsilon for concordant mode.
+    let step_type = step_type.unwrap_or_else(|| "llm".to_string());
+
+    // Validate epsilon for concordant mode (only for LLM steps).
     let validated_epsilon = if proof_mode.is_concordant() {
         let value = epsilon.ok_or_else(|| anyhow!("concordant steps require an epsilon"))?;
         if !value.is_finite() || value < 0.0 {
@@ -1925,17 +2082,19 @@ pub fn create_run_step(
 
     // Insert the new step into the database.
     tx.execute(
-        "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         params![
             &step_id,
             run_id,
             order_index,
             &checkpoint_type,
+            &step_type,
             &model,
             &prompt,
             (token_budget as i64),
             proof_mode.as_str(),
             validated_epsilon,
+            &config_json,
         ],
     )?;
 
@@ -1947,11 +2106,13 @@ pub fn create_run_step(
         run_id: run_id.to_string(),
         order_index,
         checkpoint_type,
+        step_type,
         model,
         prompt,
         token_budget,
         proof_mode,
         epsilon: validated_epsilon,
+        config_json,
     })
 }
 

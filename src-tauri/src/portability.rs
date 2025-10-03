@@ -270,18 +270,18 @@ fn load_runs_for_export(
 
         let checkpoint_configs = {
             let mut stmt = conn.prepare(
-                "SELECT id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon
+                "SELECT id, run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json
                  FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
             )?;
             let rows = stmt.query_map(params![&run.id], |row| {
-                let token_budget: i64 = row.get(6)?;
-                let proof_mode_raw: String = row.get(7)?;
+                let token_budget: i64 = row.get(7)?;
+                let proof_mode_raw: String = row.get(8)?;
                 let proof_mode = crate::orchestrator::RunProofMode::try_from(
                     proof_mode_raw.as_str(),
                 )
                 .map_err(|err| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        7,
+                        8,
                         rusqlite::types::Type::Text,
                         Box::new(err),
                     )
@@ -291,11 +291,13 @@ fn load_runs_for_export(
                     run_id: row.get(1)?,
                     order_index: row.get(2)?,
                     checkpoint_type: row.get(3)?,
-                    model: row.get(4)?,
-                    prompt: row.get(5)?,
+                    step_type: row.get(4)?,
+                    model: row.get(5)?,
+                    prompt: row.get(6)?,
                     token_budget: token_budget.max(0) as u64,
                     proof_mode,
-                    epsilon: row.get(8)?,
+                    epsilon: row.get(9)?,
+                    config_json: row.get(10)?,
                 })
             })?;
             let mut configs = Vec::new();
