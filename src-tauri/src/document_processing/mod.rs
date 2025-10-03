@@ -31,7 +31,7 @@ pub use schemas::{
     LatexIntermediate,
 };
 
-pub use extractors::{PdfExtractor, LatexExtractor};
+pub use extractors::{PdfExtractor, LatexExtractor, TxtExtractor, DocxExtractor};
 pub use processors::CanonicalProcessor;
 pub use utils::{find_files_by_extension, get_relative_path, ensure_dir_exists};
 
@@ -72,6 +72,46 @@ pub fn process_latex_to_canonical(
     let canonical = CanonicalProcessor::process_latex_intermediate(
         intermediate,
         latex_path,
+        privacy_status,
+    )?;
+
+    Ok(canonical)
+}
+
+/// High-level API for processing plain text to canonical format
+pub fn process_txt_to_canonical(
+    txt_path: impl AsRef<Path>,
+    privacy_status: Option<String>,
+) -> Result<CanonicalDocument> {
+    let txt_path = txt_path.as_ref();
+
+    // Extract from TXT (returns PdfIntermediate format)
+    let intermediate = TxtExtractor::extract(txt_path)?;
+
+    // Convert to canonical (reuse PDF processor since format is the same)
+    let canonical = CanonicalProcessor::process_pdf_intermediate(
+        intermediate,
+        txt_path,
+        privacy_status,
+    )?;
+
+    Ok(canonical)
+}
+
+/// High-level API for processing DOCX to canonical format
+pub fn process_docx_to_canonical(
+    docx_path: impl AsRef<Path>,
+    privacy_status: Option<String>,
+) -> Result<CanonicalDocument> {
+    let docx_path = docx_path.as_ref();
+
+    // Extract from DOCX (returns PdfIntermediate format)
+    let intermediate = DocxExtractor::extract(docx_path)?;
+
+    // Convert to canonical (reuse PDF processor since format is the same)
+    let canonical = CanonicalProcessor::process_pdf_intermediate(
+        intermediate,
+        docx_path,
         privacy_status,
     )?;
 

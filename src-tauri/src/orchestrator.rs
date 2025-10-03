@@ -1807,9 +1807,21 @@ pub(crate) fn execute_document_ingestion_checkpoint(
                 Some(ingestion_config.privacy_status.clone())
             )?
         }
+        "txt" => {
+            document_processing::process_txt_to_canonical(
+                &ingestion_config.source_path,
+                Some(ingestion_config.privacy_status.clone())
+            )?
+        }
+        "docx" | "doc" => {
+            document_processing::process_docx_to_canonical(
+                &ingestion_config.source_path,
+                Some(ingestion_config.privacy_status.clone())
+            )?
+        }
         unsupported => {
             return Err(anyhow!(
-                "Unsupported document format: {}. Supported formats: pdf, latex",
+                "Unsupported document format: {}. Supported formats: pdf, latex, txt, docx",
                 unsupported
             ));
         }

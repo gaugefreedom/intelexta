@@ -352,8 +352,8 @@ export default function CheckpointEditor({
             <select value={format} onChange={(event) => setFormat(event.target.value)}>
               <option value="pdf">PDF</option>
               <option value="latex">LaTeX</option>
-              <option value="docx">DOCX (not yet supported)</option>
-              <option value="txt">TXT (not yet supported)</option>
+              <option value="txt">TXT</option>
+              <option value="docx">DOCX</option>
             </select>
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
