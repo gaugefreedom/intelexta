@@ -250,13 +250,13 @@ impl TokenUsage {
     }
 }
 
-struct NodeExecution {
-    inputs_sha256: Option<String>,
-    outputs_sha256: Option<String>,
-    semantic_digest: Option<String>,
-    usage: TokenUsage,
-    prompt_payload: Option<String>,
-    output_payload: Option<String>,
+pub(crate) struct NodeExecution {
+    pub(crate) inputs_sha256: Option<String>,
+    pub(crate) outputs_sha256: Option<String>,
+    pub(crate) semantic_digest: Option<String>,
+    pub(crate) usage: TokenUsage,
+    pub(crate) prompt_payload: Option<String>,
+    pub(crate) output_payload: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1784,7 +1784,7 @@ fn truncate_payload(content: &str, max_size: usize) -> String {
 }
 
 /// Execute a document ingestion checkpoint
-fn execute_document_ingestion_checkpoint(
+pub(crate) fn execute_document_ingestion_checkpoint(
     config_json: &str,
 ) -> anyhow::Result<NodeExecution> {
     use crate::document_processing;

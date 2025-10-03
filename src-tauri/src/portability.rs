@@ -67,6 +67,8 @@ struct CheckpointPayloadExport {
 struct CheckpointExport {
     id: String,
     run_id: String,
+    #[serde(default)]
+    run_execution_id: Option<String>,
     checkpoint_config_id: Option<String>,
     parent_checkpoint_id: Option<String>,
     turn_index: Option<u32>,
@@ -98,7 +100,7 @@ struct ReceiptExport {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct RunExport {
+pub(crate) struct RunExport {
     run: RunRecord,
     checkpoint_configs: Vec<crate::orchestrator::RunStep>,
     checkpoints: Vec<CheckpointExport>,
@@ -106,7 +108,7 @@ struct RunExport {
 }
 
 #[derive(Debug)]
-struct CarAttachment {
+pub(crate) struct CarAttachment {
     zip_path: String,
     bytes: Vec<u8>,
 }
@@ -206,7 +208,7 @@ fn append_entry(
     });
 }
 
-fn load_project(conn: &Connection, project_id: &str) -> Result<Project, Error> {
+pub(crate) fn load_project(conn: &Connection, project_id: &str) -> Result<Project, Error> {
     conn.query_row(
         "SELECT id, name, created_at, pubkey FROM projects WHERE id = ?1",
         params![project_id],
@@ -227,7 +229,7 @@ fn load_project(conn: &Connection, project_id: &str) -> Result<Project, Error> {
     })
 }
 
-fn load_runs_for_export(
+pub(crate) fn load_runs_for_export(
     conn: &Connection,
     project_id: &str,
 ) -> Result<(Vec<RunExport>, Vec<CarAttachment>), Error> {
@@ -318,7 +320,7 @@ fn load_runs_for_export(
 
         let checkpoints = {
             let mut stmt = conn.prepare(
-                "SELECT c.id, c.run_id, c.checkpoint_config_id, c.parent_checkpoint_id, c.turn_index, c.kind,
+                "SELECT c.id, c.run_id, c.run_execution_id, c.checkpoint_config_id, c.parent_checkpoint_id, c.turn_index, c.kind,
                         c.incident_json, c.timestamp, c.inputs_sha256, c.outputs_sha256, c.prev_chain, c.curr_chain,
                         c.signature, c.usage_tokens, c.prompt_tokens, c.completion_tokens, c.semantic_digest,
                         m.role, m.body, m.created_at, m.updated_at,
@@ -331,46 +333,47 @@ fn load_runs_for_export(
             )?;
 
             let rows = stmt.query_map(params![&run.id], |row| {
-                let incident_json: Option<String> = row.get(6)?;
+                let incident_json: Option<String> = row.get(7)?;
                 let incident = incident_json
                     .map(|payload| serde_json::from_str(&payload))
                     .transpose()
                     .map_err(|err| {
-                        rusqlite::Error::FromSqlConversionFailure(6, Type::Text, Box::new(err))
+                        rusqlite::Error::FromSqlConversionFailure(7, Type::Text, Box::new(err))
                     })?;
                 let turn_index = row
-                    .get::<_, Option<i64>>(4)?
+                    .get::<_, Option<i64>>(5)?
                     .map(|value| value.max(0) as u32);
-                let usage_tokens: i64 = row.get(13)?;
-                let prompt_tokens: i64 = row.get(14)?;
-                let completion_tokens: i64 = row.get(15)?;
-                let message_role: Option<String> = row.get(17)?;
-                let message_body: Option<String> = row.get(18)?;
-                let message_created_at: Option<String> = row.get(19)?;
-                let message_updated_at: Option<String> = row.get(20)?;
-                let payload_prompt: Option<String> = row.get(21)?;
-                let payload_output: Option<String> = row.get(22)?;
-                let payload_created: Option<String> = row.get(23)?;
-                let payload_updated: Option<String> = row.get(24)?;
+                let usage_tokens: i64 = row.get(14)?;
+                let prompt_tokens: i64 = row.get(15)?;
+                let completion_tokens: i64 = row.get(16)?;
+                let message_role: Option<String> = row.get(18)?;
+                let message_body: Option<String> = row.get(19)?;
+                let message_created_at: Option<String> = row.get(20)?;
+                let message_updated_at: Option<String> = row.get(21)?;
+                let payload_prompt: Option<String> = row.get(22)?;
+                let payload_output: Option<String> = row.get(23)?;
+                let payload_created: Option<String> = row.get(24)?;
+                let payload_updated: Option<String> = row.get(25)?;
 
                 Ok(CheckpointExport {
                     id: row.get(0)?,
                     run_id: row.get(1)?,
-                    checkpoint_config_id: row.get(2)?,
-                    parent_checkpoint_id: row.get(3)?,
+                    run_execution_id: Some(row.get(2)?),
+                    checkpoint_config_id: row.get(3)?,
+                    parent_checkpoint_id: row.get(4)?,
                     turn_index,
-                    kind: row.get(5)?,
+                    kind: row.get(6)?,
                     incident_json: incident,
-                    timestamp: row.get(7)?,
-                    inputs_sha256: row.get(8)?,
-                    outputs_sha256: row.get(9)?,
-                    prev_chain: row.get(10)?,
-                    curr_chain: row.get(11)?,
-                    signature: row.get(12)?,
+                    timestamp: row.get(8)?,
+                    inputs_sha256: row.get(9)?,
+                    outputs_sha256: row.get(10)?,
+                    prev_chain: row.get(11)?,
+                    curr_chain: row.get(12)?,
+                    signature: row.get(13)?,
                     usage_tokens: usage_tokens.max(0) as u64,
                     prompt_tokens: prompt_tokens.max(0) as u64,
                     completion_tokens: completion_tokens.max(0) as u64,
-                    semantic_digest: row.get(16)?,
+                    semantic_digest: row.get(17)?,
                     message: match (message_role, message_body, message_created_at) {
                         (Some(role), Some(body), Some(created_at)) => {
                             Some(CheckpointMessageExport {
@@ -457,6 +460,91 @@ fn load_runs_for_export(
     }
 
     Ok((exports, attachments))
+}
+
+/// Write project archive directly to the specified path
+pub fn write_project_archive_to_path(
+    export_path: &Path,
+    project: &Project,
+    policy: &Policy,
+    runs: &[RunExport],
+    attachments: &[CarAttachment],
+) -> Result<(), Error> {
+    let mut manifest_entries = Vec::new();
+    let mut pending_entries = Vec::new();
+
+    let project_json = serde_json::to_vec_pretty(&project)
+        .map_err(|err| Error::Api(format!("failed to serialize project: {err}")))?;
+    append_entry(
+        &mut pending_entries,
+        &mut manifest_entries,
+        "project.json".to_string(),
+        "project",
+        project_json,
+    );
+
+    let policy_json = serde_json::to_vec_pretty(&policy)
+        .map_err(|err| Error::Api(format!("failed to serialize policy: {err}")))?;
+    append_entry(
+        &mut pending_entries,
+        &mut manifest_entries,
+        "policy.json".to_string(),
+        "policy",
+        policy_json,
+    );
+
+    for run in runs {
+        let run_path = format!("runs/{}.json", run.run.id);
+        let run_json = serde_json::to_vec_pretty(run)
+            .map_err(|err| Error::Api(format!("failed to serialize run {}: {err}", run.run.id)))?;
+        append_entry(
+            &mut pending_entries,
+            &mut manifest_entries,
+            run_path,
+            "run",
+            run_json,
+        );
+    }
+
+    for attachment in attachments {
+        append_entry(
+            &mut pending_entries,
+            &mut manifest_entries,
+            attachment.zip_path.clone(),
+            "car",
+            attachment.bytes.clone(),
+        );
+    }
+
+    let manifest = ExportManifest {
+        version: 1,
+        project_id: project.id.clone(),
+        exported_at: Utc::now().to_rfc3339(),
+        entries: manifest_entries,
+    };
+    let manifest_json = serde_json::to_vec_pretty(&manifest)
+        .map_err(|err| Error::Api(format!("failed to serialize manifest: {err}")))?;
+
+    let file = fs::File::create(export_path)
+        .map_err(|err| Error::Api(format!("failed to create export file: {err}")))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    for entry in pending_entries {
+        zip.start_file(entry.path, options)
+            .map_err(|err| Error::Api(format!("failed to add zip entry: {err}")))?;
+        zip.write_all(&entry.bytes)
+            .map_err(|err| Error::Api(format!("failed to write zip entry: {err}")))?;
+    }
+
+    zip.start_file("manifest.json", options)
+        .map_err(|err| Error::Api(format!("failed to add manifest: {err}")))?;
+    zip.write_all(&manifest_json)
+        .map_err(|err| Error::Api(format!("failed to write manifest: {err}")))?;
+    zip.finish()
+        .map_err(|err| Error::Api(format!("failed to finalize export archive: {err}")))?;
+
+    Ok(())
 }
 
 pub fn export_project_archive(
@@ -710,7 +798,7 @@ pub fn import_project_archive(
 
     let runs_imported_count = run_exports.len();
 
-    for run in run_exports {
+    for mut run in run_exports {
         if run.run.project_id != project.id {
             return Err(Error::Api(format!(
                 "run {} references different project id {}",
@@ -735,6 +823,31 @@ pub fn import_project_archive(
             ],
         )?;
 
+        // Create a run_execution entry for this run (imported runs have a single execution)
+        // We need to determine the run_execution_id from checkpoints, or create a new one
+        let run_execution_id = if let Some(first_checkpoint) = run.checkpoints.first() {
+            first_checkpoint.run_execution_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+        } else {
+            // No checkpoints, create a new execution id
+            uuid::Uuid::new_v4().to_string()
+        };
+
+        tx.execute(
+            "INSERT INTO run_executions (id, run_id, created_at) VALUES (?1, ?2, ?3)",
+            params![
+                &run_execution_id,
+                &run.run.id,
+                &run.run.created_at,
+            ],
+        )?;
+
+        // For old exports that don't have run_execution_id, set it on all checkpoints
+        for checkpoint in &mut run.checkpoints {
+            if checkpoint.run_execution_id.is_none() {
+                checkpoint.run_execution_id = Some(run_execution_id.clone());
+            }
+        }
+
         let config_budgets: HashMap<_, _> = run
             .checkpoint_configs
             .iter()
@@ -743,18 +856,20 @@ pub fn import_project_archive(
 
         for config in &run.checkpoint_configs {
             tx.execute(
-                "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, model, prompt, token_budget, proof_mode, epsilon)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO run_steps (id, run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     &config.id,
                     &config.run_id,
                     config.order_index,
                     &config.checkpoint_type,
+                    &config.step_type,
                     &config.model,
                     &config.prompt,
                     config.token_budget as i64,
                     config.proof_mode.as_str(),
                     config.epsilon,
+                    &config.config_json,
                 ],
             )?;
         }
@@ -847,13 +962,14 @@ pub fn import_project_archive(
 
         for checkpoint in checkpoints {
             tx.execute(
-                "INSERT INTO checkpoints (id, run_id, checkpoint_config_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp,
+                "INSERT INTO checkpoints (id, run_id, run_execution_id, checkpoint_config_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp,
                                           inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, prompt_tokens,
                                           completion_tokens, semantic_digest)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                 params![
                     &checkpoint.id,
                     &checkpoint.run_id,
+                    checkpoint.run_execution_id.as_ref().expect("run_execution_id should be set"),
                     &checkpoint.checkpoint_config_id,
                     &checkpoint.parent_checkpoint_id,
                     checkpoint.turn_index.map(|value| value as i64),

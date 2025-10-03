@@ -1269,29 +1269,81 @@ pub(crate) fn emit_car_to_base_dir(
 #[tauri::command]
 pub fn emit_car(
     run_id: String,
+    output_path: Option<String>,
     pool: State<'_, DbPool>,
     app_handle: AppHandle,
 ) -> Result<String, Error> {
-    let base_dir = app_handle
-        .path()
-        .app_local_data_dir()
-        .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
-    let path = emit_car_to_base_dir(&run_id, None, pool.inner(), &base_dir)?;
-    Ok(path.to_string_lossy().to_string())
+    if let Some(custom_path) = output_path {
+        // User specified a custom path - save directly there
+        let conn = pool.get()?;
+        let car = car::build_car(&conn, &run_id, None)
+            .map_err(|err| Error::Api(err.to_string()))?;
+
+        let json = serde_json::to_string_pretty(&car)
+            .map_err(|err| Error::Api(format!("failed to serialize CAR: {err}")))?;
+        std::fs::write(&custom_path, json)
+            .map_err(|err| Error::Api(format!("failed to write CAR file: {err}")))?;
+
+        // Still record in database
+        let created_at = car.created_at.to_rfc3339();
+        conn.execute(
+            "INSERT INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &car.id,
+                &run_id,
+                &created_at,
+                &custom_path,
+                &car.proof.match_kind,
+                car.proof.epsilon,
+                i64::from(car.sgrade.score),
+            ],
+        )?;
+
+        Ok(custom_path)
+    } else {
+        // Use default location in app data
+        let base_dir = app_handle
+            .path()
+            .app_local_data_dir()
+            .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
+        let path = emit_car_to_base_dir(&run_id, None, pool.inner(), &base_dir)?;
+        Ok(path.to_string_lossy().to_string())
+    }
 }
 
 #[tauri::command]
 pub fn export_project(
     project_id: String,
+    output_path: Option<String>,
     pool: State<'_, DbPool>,
     app_handle: AppHandle,
 ) -> Result<String, Error> {
-    let base_dir = app_handle
-        .path()
-        .app_local_data_dir()
-        .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
-    let path = portability::export_project_archive(pool.inner(), &project_id, &base_dir)?;
-    Ok(path.to_string_lossy().to_string())
+    if let Some(custom_path) = output_path {
+        // User specified exact output path - export directly there
+        let custom_path_buf = PathBuf::from(&custom_path);
+        let conn = pool.get()?;
+        let project = portability::load_project(&conn, &project_id)?;
+        let policy = store::policies::get(&conn, &project_id)?;
+        let (runs, attachments) = portability::load_runs_for_export(&conn, &project_id)?;
+
+        portability::write_project_archive_to_path(
+            &custom_path_buf,
+            &project,
+            &policy,
+            &runs,
+            &attachments,
+        )?;
+
+        Ok(custom_path)
+    } else {
+        // Use default location in app data with nested structure
+        let base_dir = app_handle
+            .path()
+            .app_local_data_dir()
+            .map_err(|err| Error::Api(format!("failed to resolve app data dir: {err}")))?;
+        let path = portability::export_project_archive(pool.inner(), &project_id, &base_dir)?;
+        Ok(path.to_string_lossy().to_string())
+    }
 }
 
 #[tauri::command]

@@ -1655,12 +1655,14 @@ export default function EditorPanel({
             initialValue={
               activeEditor.mode === "edit"
                 ? {
+                    stepType: activeEditor.checkpoint.stepType,
                     checkpointType: activeEditor.checkpoint.checkpointType,
                     model: activeEditor.checkpoint.model,
                     tokenBudget: activeEditor.checkpoint.tokenBudget,
                     prompt: activeEditor.checkpoint.prompt,
                     proofMode: activeEditor.checkpoint.proofMode,
                     epsilon: activeEditor.checkpoint.epsilon ?? null,
+                    configJson: activeEditor.checkpoint.configJson,
                   }
                 : undefined
             }

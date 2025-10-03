@@ -328,27 +328,55 @@ export default function InspectorPanel({
     };
   }, [detailsOpen, selectedCheckpointId]);
 
-  const handleEmitCar = React.useCallback(() => {
+  const handleEmitCar = React.useCallback(async () => {
+    console.log('Emit CAR button clicked');
     if (!selectedRunIdWithCheckpoint) {
+      console.log('No run selected');
       return;
     }
-    setEmittingCar(true);
-    setEmitSuccess(null);
-    setEmitError(null);
-    setReplayReport(null);
-    setReplayError(null);
-    emitCar(selectedRunIdWithCheckpoint)
-      .then((path) => {
-        setEmitSuccess(`CAR file saved to ${path}`);
-      })
-      .catch((err) => {
-        console.error("Failed to emit CAR", err);
-        const message = err instanceof Error ? err.message : String(err);
-        setEmitError(`Failed to emit CAR: ${message}`);
-      })
-      .finally(() => {
-        setEmittingCar(false);
+
+    console.log('Importing dialog plugin...');
+    // Import save dialog
+    const { save } = await import('@tauri-apps/plugin-dialog');
+
+    try {
+      console.log('Opening save dialog...');
+      const savePath = await save({
+        defaultPath: `${selectedRunIdWithCheckpoint.replace(/:/g, '_')}.car.json`,
+        filters: [
+          { name: 'CAR Files', extensions: ['car.json', 'json'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
       });
+      console.log('Save dialog result:', savePath);
+
+      if (!savePath) {
+        // User cancelled
+        console.log('User cancelled save dialog');
+        return;
+      }
+
+      setEmittingCar(true);
+      setEmitSuccess(null);
+      setEmitError(null);
+      setReplayReport(null);
+      setReplayError(null);
+
+      emitCar(selectedRunIdWithCheckpoint, savePath)
+        .then((path) => {
+          setEmitSuccess(`CAR file saved to ${path}`);
+        })
+        .catch((err) => {
+          console.error("Failed to emit CAR", err);
+          const message = err instanceof Error ? err.message : String(err);
+          setEmitError(`Failed to emit CAR: ${message}`);
+        })
+        .finally(() => {
+          setEmittingCar(false);
+        });
+    } catch (err) {
+      console.error('Failed to show save dialog:', err);
+    }
   }, [selectedRunIdWithCheckpoint]);
 
   const handleReplayRun = React.useCallback(() => {

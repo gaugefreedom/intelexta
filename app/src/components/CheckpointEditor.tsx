@@ -6,6 +6,7 @@ import {
   buttonDisabled,
   combineButtonStyles,
 } from "../styles/common.js";
+import { open } from '@tauri-apps/plugin-dialog';
 
 export interface CheckpointFormValue {
   stepType: string; // "llm" or "document_ingestion"
@@ -20,6 +21,7 @@ export interface CheckpointFormValue {
   sourcePath?: string;
   format?: string;
   privacyStatus?: string;
+  configJson?: string;
 }
 
 interface CheckpointEditorProps {
@@ -131,6 +133,7 @@ export default function CheckpointEditor({
   }, [proofMode, epsilon]);
 
   React.useEffect(() => {
+    setStepType(initialValue?.stepType ?? "llm");
     setCheckpointType(initialValue?.checkpointType ?? "Step");
     setModel(initialValue?.model ?? defaultModel);
     setTokenBudget(initialValue ? String(initialValue.tokenBudget) : "1000");
@@ -143,8 +146,47 @@ export default function CheckpointEditor({
     } else {
       setEpsilon(null);
     }
+
+    // Parse document ingestion fields if present
+    if (initialValue?.stepType === "document_ingestion" && initialValue?.configJson) {
+      try {
+        const docConfig = JSON.parse(initialValue.configJson);
+        setSourcePath(docConfig.sourcePath ?? "");
+        setFormat(docConfig.format ?? "pdf");
+        setPrivacyStatus(docConfig.privacyStatus ?? "public");
+      } catch {
+        // If parsing fails, use defaults
+        setSourcePath("");
+        setFormat("pdf");
+        setPrivacyStatus("public");
+      }
+    }
+
     setError(null);
   }, [initialValue, defaultModel]);
+
+  const handleBrowseDocument = React.useCallback(async () => {
+    console.log('Browse button clicked');
+    try {
+      console.log('Opening file dialog...');
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          { name: 'Documents', extensions: ['pdf', 'tex', 'latex', 'docx', 'txt'] },
+          { name: 'PDF', extensions: ['pdf'] },
+          { name: 'LaTeX', extensions: ['tex', 'latex'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      });
+      console.log('Dialog result:', selected);
+      if (selected) {
+        setSourcePath(selected);
+      }
+    } catch (err) {
+      console.error('Failed to open file picker:', err);
+    }
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -288,12 +330,22 @@ export default function CheckpointEditor({
         <>
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             Document Path
-            <input
-              type="text"
-              value={sourcePath}
-              onChange={(event) => setSourcePath(event.target.value)}
-              placeholder="/path/to/document.pdf"
-            />
+            <div style={{ display: "flex", gap: "8px" }}>
+              <input
+                type="text"
+                value={sourcePath}
+                onChange={(event) => setSourcePath(event.target.value)}
+                placeholder="/path/to/document.pdf"
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                onClick={handleBrowseDocument}
+                style={buttonSecondary}
+              >
+                Browse
+              </button>
+            </div>
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             Format

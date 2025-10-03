@@ -9,7 +9,9 @@ use tauri::Manager;
 use intelexta::{api, keychain, runtime, store};
 
 fn main() {
-    let builder = tauri::Builder::default().setup(|app| {
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
         keychain::initialize_backend();
 
         runtime::initialize().expect("failed to initialize runtime");

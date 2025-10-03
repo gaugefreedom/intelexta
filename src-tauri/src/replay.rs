@@ -330,7 +330,16 @@ pub(crate) fn replay_exact_checkpoint(
     }
     report.original_digest = original_digest.clone();
 
-    let replay_digest = if config.model.as_deref() == Some("stub-model") {
+    let replay_digest = if config.is_document_ingestion() {
+        // For document ingestion, re-execute the processing
+        if let Some(config_json) = config.config_json.as_ref() {
+            let node = orchestrator::execute_document_ingestion_checkpoint(config_json)?;
+            node.outputs_sha256.unwrap_or_default()
+        } else {
+            report.error_message = Some("document ingestion config missing".to_string());
+            return Ok(report);
+        }
+    } else if config.model.as_deref() == Some("stub-model") {
         let (outputs_hex, _) = simulate_stub_checkpoint(run.seed, config);
         outputs_hex
     } else {
@@ -385,7 +394,19 @@ pub(crate) fn replay_concordant_checkpoint(
     };
     report.semantic_original_digest = Some(original_semantic.clone());
 
-    let (replay_digest, replay_semantic) = if config.model.as_deref() == Some("stub-model") {
+    let (replay_digest, replay_semantic) = if config.is_document_ingestion() {
+        // For document ingestion, re-execute the processing
+        if let Some(config_json) = config.config_json.as_ref() {
+            let node = orchestrator::execute_document_ingestion_checkpoint(config_json)?;
+            (
+                node.outputs_sha256.unwrap_or_default(),
+                node.semantic_digest.unwrap_or_default(),
+            )
+        } else {
+            report.error_message = Some("document ingestion config missing".to_string());
+            return Ok(report);
+        }
+    } else if config.model.as_deref() == Some("stub-model") {
         simulate_stub_checkpoint(run.seed, config)
     } else {
         let model = config.model.as_deref().unwrap_or("");

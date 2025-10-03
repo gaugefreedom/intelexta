@@ -507,16 +507,16 @@ export async function updatePolicy(projectId: string, policy: Policy): Promise<v
 }
 
 
-export async function emitCar(runId: string): Promise<string> {
-  return await invoke<string>('emit_car', { runId });
+export async function emitCar(runId: string, outputPath?: string): Promise<string> {
+  return await invoke<string>('emit_car', { runId, outputPath: outputPath ?? null });
 }
 
 export async function replayRun(runId: string): Promise<ReplayReport> {
   return await invoke<ReplayReport>('replay_run', { runId });
 }
 
-export async function exportProject(projectId: string): Promise<string> {
-  return await invoke<string>('export_project', { projectId });
+export async function exportProject(projectId: string, outputPath?: string): Promise<string> {
+  return await invoke<string>('export_project', { projectId, outputPath: outputPath ?? null });
 }
 
 export async function importProject(payload: FileImportPayload): Promise<ProjectImportSummary> {

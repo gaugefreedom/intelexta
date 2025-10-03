@@ -261,19 +261,45 @@ export default function ContextPanel({
   };
 
   const handleExportProject = React.useCallback(async () => {
-    setExportError(null);
-    setExportStatus(null);
-    setExportingProject(true);
+    console.log('Export Project button clicked');
+    // Import save dialog
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    console.log('Dialog plugin imported');
+
     try {
-      const path = await exportProject(projectId);
-      setExportStatus(`Export saved to ${path}`);
+      console.log('Opening save dialog...');
+      const savePath = await save({
+        defaultPath: `${projectId}.ixp`,
+        filters: [
+          { name: 'Intelexta Project', extensions: ['ixp'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      });
+      console.log('Save dialog result:', savePath);
+
+      if (!savePath) {
+        // User cancelled
+        console.log('User cancelled save dialog');
+        return;
+      }
+
+      setExportError(null);
+      setExportStatus(null);
+      setExportingProject(true);
+
+      try {
+        const path = await exportProject(projectId, savePath);
+        setExportStatus(`Export saved to ${path}`);
+      } catch (err) {
+        console.error("Failed to export project", err);
+        setExportError(
+          `Failed to export project: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setExportingProject(false);
+      }
     } catch (err) {
-      console.error("Failed to export project", err);
-      setExportError(
-        `Failed to export project: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    } finally {
-      setExportingProject(false);
+      console.error('Failed to show save dialog:', err);
     }
   }, [projectId]);
 
