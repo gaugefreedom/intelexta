@@ -78,3 +78,25 @@ Builds verify that the file exists, so keep it in place when updating tooling or
 ## Status
 
 Actively developing the MVP as per `Strategic Spec v0.1`. The current codebase is being refactored to align with this new mission.
+
+## Recent Features
+
+### Document Processing (v0.2+)
+- **Multi-format Support**: Process PDF, LaTeX, plain text (TXT), and DOCX files into verifiable workflow steps
+- **Canonical Schema**: Standardized document representation with full metadata extraction
+- **Workflow Integration**: Add document ingestion as workflow steps with complete provenance tracking
+- **Supported Formats**:
+  - PDF (via pdf-extract)
+  - LaTeX (.tex) with Markdown conversion
+  - Plain text (.txt)
+  - Microsoft Word (.docx) with Office Open XML parsing
+
+### Native File Dialogs
+- **Document Selection**: Browse for documents when creating workflow steps using native OS file pickers
+- **Export Locations**: Choose save locations for CAR exports and project archives
+- **User-Friendly**: Standard OS file picker integration via Tauri dialog plugin v2
+
+### Enhanced Portability
+- **Simplified Exports**: Project exports (.ixp) save directly to user-chosen folders without nested directory structures
+- **Backward Compatibility**: Import system handles both new and legacy project formats seamlessly
+- **Run Execution Tracking**: Proper foreign key relationships ensure reproducible execution history across imports

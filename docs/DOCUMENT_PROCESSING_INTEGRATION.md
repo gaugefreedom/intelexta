@@ -1,285 +1,332 @@
-# Document Processing Integration Guide
+# Document Processing Integration Guide (Updated)
 
-This guide explains the integration of scientific document processing capabilities into Intelexta, converted from the Python [sci-llm-data-prep](https://github.com/YOUR_USERNAME/sci-llm-data-prep) project.
+## Current Integration Status
 
-## What Was Added
+Document processing is **fully integrated** as a first-class workflow step type in Intelexta.
 
-A new Rust module `document_processing` has been added to `src-tauri/src/` that provides:
+### What Changed Since Initial Conversion
 
-1. **PDF Processing**: Extract and clean text from PDF documents
-2. **LaTeX Processing**: Parse LaTeX files and convert to Markdown
-3. **Canonical Schema**: Standardized JSON format for all documents
-4. **JSONL Output**: Generate corpus files for LLM training
-5. **Batch Processing**: Process directories of documents
+#### ✅ Completed Integration
 
-## Directory Structure
+1. **Database Schema** (Sprint 2B+):
+   - Added `step_type` field to distinguish LLM prompts from document ingestion
+   - Document ingestion steps store format, source path, and privacy status in `config_json`
+   - Run executions properly tracked with foreign key relationships
+
+2. **Orchestrator Integration** (src-tauri/src/orchestrator.rs):
+   - `execute_document_ingestion_checkpoint()` function handles document workflow steps
+   - Supports PDF, LaTeX, TXT, and DOCX formats
+   - Generates canonical JSON output stored in checkpoints
+   - Located at: `src-tauri/src/orchestrator.rs:1770-1840`
+
+3. **UI Integration** (app/src/components/):
+   - CheckpointEditor supports "Document Ingestion" step type
+   - Native file picker for document selection via `@tauri-apps/plugin-dialog`
+   - Format dropdown: PDF, LaTeX, TXT, DOCX
+   - Privacy status controls
+   - Browse button for easy file selection
+
+4. **Format Support**:
+   - **PDF**: Full extraction via pdf-extract crate
+   - **LaTeX**: Metadata + content parsing to Markdown
+   - **TXT**: Plain text with basic metadata (NEW)
+   - **DOCX**: Office Open XML parsing with metadata extraction (NEW)
+
+5. **Export/Import Enhancements**:
+   - Native save dialogs for CAR and project exports
+   - Direct-path exports (no nested directories)
+   - Backward compatibility with legacy project formats
+   - Proper run_execution_id tracking
+
+#### 📋 Workflow Example
+
+1. Create a new project in Intelexta
+2. Add a "Document Ingestion" step in the Workflow Builder
+3. Click "Browse" to select a PDF/DOCX/TXT/LaTeX file
+4. Choose format from dropdown
+5. Set privacy status (public/private)
+6. Execute the full workflow
+7. Inspect the canonical JSON output in the Inspector
+8. Export as CAR for third-party verification
+
+### Architecture
 
 ```
-intelexta/src-tauri/src/document_processing/
-├── mod.rs                    # Main module with high-level API
-├── schemas.rs                # Canonical document schema
-├── extractors/
-│   ├── mod.rs
-│   ├── pdf.rs               # PDF extraction
-│   └── latex.rs             # LaTeX extraction
-├── processors/
-│   ├── mod.rs
-│   └── canonical.rs         # JSONL processing
-├── utils/
-│   ├── mod.rs
-│   └── file_utils.rs        # File utilities
-└── README.md                # Module documentation
+User Uploads Document
+    ↓
+CheckpointEditor (React)
+    ↓ (invoke Tauri command)
+execute_run_checkpoint (API)
+    ↓
+Orchestrator::execute_document_ingestion_checkpoint
+    ↓
+[Format Detection] → PdfExtractor | LatexExtractor | TxtExtractor | DocxExtractor
+    ↓
+[Intermediate Format] (PdfIntermediate | LatexIntermediate)
+    ↓
+CanonicalProcessor::process_*_intermediate
+    ↓
+[Canonical Document] (JSON serialized)
+    ↓
+Store in checkpoints table with signed provenance
+    ↓
+Display in Inspector + Export to CAR
 ```
 
-## Key Components
+### Database Schema
 
-### 1. Canonical Schema (`schemas.rs`)
+Document ingestion checkpoints are stored with:
 
-The core data structure that represents a processed document:
-
-```rust
-CanonicalDocument {
-    document_id: String,              // Content-based hash ID
-    source_type: String,              // Document type
-    original_format: String,          // "pdf", "latex"
-    metadata: DocumentMetadata,       // Title, authors, abstract
-    cleaned_text_with_markdown_structure: String,
-    processing_log: ProcessingLog,    // Audit trail
-    privacy_status: String,
-    // ... more fields
+```sql
+-- In run_steps table
+step_type = "document_ingestion"
+config_json = {
+  "format": "pdf|latex|txt|docx",
+  "source_path": "/absolute/path/to/document.pdf",
+  "privacy_status": "public|private|consent_obtained_anonymized"
 }
+
+-- In checkpoints table
+-- checkpoint_type references the step
+-- outputs_sha256 contains hash of canonical JSON
+-- signature provides cryptographic proof
 ```
 
-### 2. Extractors
+### Code Locations
 
-- **PdfExtractor** (`extractors/pdf.rs`): Uses `pdf-extract` crate
-- **LatexExtractor** (`extractors/latex.rs`): Regex-based LaTeX parser
+**Backend**:
+- **Extractors**: `src-tauri/src/document_processing/extractors/`
+  - `pdf.rs` - PDF extraction using pdf-extract crate
+  - `latex.rs` - LaTeX parsing with Markdown conversion
+  - `txt.rs` - Plain text extraction (NEW)
+  - `docx.rs` - DOCX/Office Open XML parsing (NEW)
+- **Schemas**: `src-tauri/src/document_processing/schemas.rs`
+  - `CanonicalDocument` - Main document structure
+  - `DocumentMetadata` - Title, authors, dates, keywords, etc.
+  - `ProcessingLog` - Audit trail for extraction steps
+- **Processors**: `src-tauri/src/document_processing/processors/canonical.rs`
+  - Convert intermediate formats to canonical
+  - JSONL serialization/deserialization
+  - Deduplication and corpus preparation
+- **Orchestrator**: `src-tauri/src/orchestrator.rs:1770-1840`
+  - `execute_document_ingestion_checkpoint()` function
+- **API**: `src-tauri/src/api.rs`
+  - `execute_run_checkpoint()` command
 
-### 3. Processors
+**Frontend**:
+- **Step Editor**: `app/src/components/CheckpointEditor.tsx:320-370`
+  - Document ingestion UI controls
+  - File picker integration
+  - Format selection dropdown
+- **File Dialog Integration**: Uses `@tauri-apps/plugin-dialog`
+  - `handleBrowseDocument()` function for file selection
+  - Native OS file picker
 
-- **CanonicalProcessor** (`processors/canonical.rs`):
-  - Convert to canonical format
-  - Write/read JSONL files
-  - Deduplicate documents
-  - Prepare DAPT corpus
+### Recent Additions (Latest Session)
 
-## Usage in Intelexta
+#### 1. TXT Extractor (`extractors/txt.rs`)
+- Simple plain text file reading via `fs::read_to_string()`
+- Basic metadata derived from filename
+- Reuses `PdfIntermediate` format for consistency
+- No cleaning or transformation (preserves original text)
+- Best for: pre-cleaned text, notes, transcripts
 
-### As a Library
+#### 2. DOCX Extractor (`extractors/docx.rs`)
+- ZIP archive parsing of Office Open XML format
+- Text extraction from `word/document.xml` using custom XML parser
+- Dublin Core metadata extraction from `docProps/core.xml`
+- Supports: title, author, keywords
+- Custom state machine parser for `<w:t>` text tags
+- Handles common Word document structures
 
-```rust
-use intelexta::document_processing::{
-    process_pdf_to_canonical,
-    CanonicalProcessor,
-};
+#### 3. UI Updates
+- Removed "(not yet supported)" labels from TXT and DOCX options
+- Format dropdown shows all 4 formats as fully supported
+- File picker dialog accepts all extensions: `.pdf`, `.tex`, `.latex`, `.docx`, `.txt`
 
-// Process a PDF
-let doc = process_pdf_to_canonical("paper.pdf", Some("public".to_string()))?;
+#### 4. Native File Dialogs
+- Added `@tauri-apps/plugin-dialog` npm package v2.4.0
+- Added Rust crate `tauri-plugin-dialog` v2.0.0-rc.5
+- Implemented Tauri v2 capabilities system
+- Created `capabilities/default.json` with dialog permissions
+- Browse button for document path in CheckpointEditor
+- Save dialogs for CAR emit and project export
 
-// Write to JSONL
-CanonicalProcessor::write_to_jsonl(&[doc], "output.jsonl", true)?;
-```
+#### 5. Export/Import Improvements
+- Created `write_project_archive_to_path()` helper function
+- Modified `export_project()` to accept optional output path
+- Exports save directly to user-selected location (no nested folders)
+- Added backward compatibility for legacy exports:
+  - Handle missing `run_execution_id` field with `#[serde(default)]`
+  - Auto-generate run_execution entries during import
+  - Populate missing fields for old project formats
 
-### In a Verifiable Workflow
+### Testing Document Processing
 
-The module is designed to integrate with Intelexta's verifiable workflow system:
-
-```rust
-// 1. Extract and track provenance
-let doc = process_pdf_to_canonical(path, privacy_status)?;
-
-// 2. Store with provenance tracking
-// (Use Intelexta's existing provenance module)
-
-// 3. Output to CAR format for IPFS
-// (Use Intelexta's existing CAR module)
-
-// 4. Generate verification proof
-// (Use Intelexta's verification crate)
-```
-
-## Integration Points with Existing Intelexta Code
-
-### 1. Provenance Tracking
-
-The `ProcessingLog` in the canonical schema tracks:
-- Extraction tool used
-- Timestamps
-- Cleaning steps applied
-- Quality scores
-
-This can be integrated with Intelexta's provenance module.
-
-### 2. Content-Addressable Storage
-
-The `document_id` is a SHA-256 hash, compatible with:
-- IPFS CID generation
-- Content deduplication
-- Verification
-
-### 3. Verifiable Workflows
-
-Document processing can be a step in a larger workflow:
-
-```
-Input Documents
-    ↓
-[Extract & Clean] ← document_processing
-    ↓
-[Canonical Format] ← Provenance tracked
-    ↓
-[CAR Export] ← Existing Intelexta
-    ↓
-[IPFS/Filecoin] ← Verifiable storage
-```
-
-## Example Workflow
-
-See `examples/process_documents.rs` for complete examples:
-
-```bash
-cd intelexta
-cargo run --example process_documents
-```
-
-## Dependencies Added
-
-In `src-tauri/Cargo.toml`:
-
-```toml
-# Document processing dependencies
-regex = "1.10"
-walkdir = "2.4"
-
-[dev-dependencies]
-tempfile = "3.8"
-```
-
-Existing dependencies reused:
-- `pdf-extract` (already present)
-- `sha2` (for hashing)
-- `serde`, `serde_json` (serialization)
-- `chrono` (timestamps)
-
-## Testing
-
-Run the document processing tests:
-
+#### Backend Unit Tests
 ```bash
 cd src-tauri
 cargo test document_processing
 ```
 
-Run all tests:
+#### Integration Test (Manual)
+1. Start Intelexta application
+2. Create a new project
+3. Add a "Document Ingestion" step
+4. Browse for a test DOCX/TXT/PDF/LaTeX file
+5. Select appropriate format
+6. Execute Full Run
+7. Verify canonical JSON appears in Inspector
+8. Check that output contains expected metadata and content
+9. Export as CAR and verify signature
 
-```bash
-cargo test
-```
+#### Test Files Needed
+- Sample PDF with text
+- Sample LaTeX document (.tex)
+- Sample plain text file (.txt)
+- Sample DOCX file with metadata
 
-## Future Integration Ideas
+### Configuration Schema Example
 
-### 1. Tauri Commands
+When a document ingestion step is saved, the `config_json` looks like:
 
-Add Tauri commands for the frontend:
-
-```rust
-#[tauri::command]
-async fn process_document(path: String) -> Result<CanonicalDocument, String> {
-    process_pdf_to_canonical(&path, Some("public".to_string()))
-        .map_err(|e| e.to_string())
+```json
+{
+  "format": "docx",
+  "source_path": "/home/user/documents/research_paper.docx",
+  "privacy_status": "public"
 }
 ```
 
-### 2. Workflow Steps
+### Canonical Document Output Example
 
-Create workflow step types:
+The checkpoint's output is a serialized `CanonicalDocument`:
 
-```rust
-pub struct DocumentProcessingStep {
-    input_path: String,
-    output_path: String,
-    format: String,
-}
-
-impl WorkflowStep for DocumentProcessingStep {
-    fn execute(&self) -> Result<StepResult> {
-        // Process and track in workflow
-    }
-}
-```
-
-### 3. Database Integration
-
-Store canonical documents in Intelexta's database:
-
-```sql
-CREATE TABLE canonical_documents (
-    document_id TEXT PRIMARY KEY,
-    source_type TEXT,
-    original_format TEXT,
-    metadata_json TEXT,
-    content TEXT,
-    created_at TEXT
-);
-```
-
-### 4. LLM Refinement
-
-Add optional LLM-based refinement step:
-
-```rust
-pub async fn refine_with_llm(
-    doc: &CanonicalDocument,
-    api_key: &str
-) -> Result<CanonicalDocument> {
-    // Use Claude API to improve extraction quality
+```json
+{
+  "document_id": "sha256:abc123...",
+  "source_type": "paper",
+  "source_path_absolute": "/home/user/documents/research_paper.docx",
+  "source_file_relative_path": "research_paper.docx",
+  "original_format": "docx",
+  "processing_log": {
+    "extraction_tool": "DocxExtractor",
+    "extraction_timestamp_utc": "2025-10-04T12:34:56Z",
+    "processing_timestamp_utc": "2025-10-04T12:34:57Z",
+    "cleaning_steps_applied": [],
+    "quality_heuristic_score": null
+  },
+  "privacy_status": "public",
+  "metadata": {
+    "title": "Research Paper on AI Safety",
+    "authors": ["John Doe", "Jane Smith"],
+    "date_published": null,
+    "date_accessed_utc": "2025-10-04T12:34:56Z",
+    "abstract_text": null,
+    "keywords_from_source": ["AI", "safety", "verification"],
+    "doi": null,
+    "arxiv_id": null
+  },
+  "cleaned_text_with_markdown_structure": "# Introduction\n\nThis paper discusses...",
+  "language": "en",
+  "schema_version": "0.2.0",
+  "consent_details": null
 }
 ```
 
-## Comparison with Python Version
+### Integration with Intelexta's Verifiable Workflow
 
-| Feature | Python (sci-llm-data-prep) | Rust (Intelexta) | Status |
-|---------|---------------------------|------------------|--------|
-| PDF Extraction | ✓ (unstructured) | ✓ (pdf-extract) | ✓ Converted |
-| LaTeX Extraction | ✓ (pylatexenc) | ✓ (regex-based) | ✓ Converted |
-| Canonical Schema | ✓ (Pydantic) | ✓ (serde) | ✓ Converted |
-| JSONL Output | ✓ | ✓ | ✓ Converted |
-| Deduplication | ✓ | ✓ | ✓ Converted |
-| DAPT Corpus | ✓ | ✓ | ✓ Converted |
-| Email Processing | ✓ | ✗ | Future work |
-| OCR Support | ✓ | ✗ | Future work |
-| LLM Refinement | Manual | ✗ | Future work |
+Document processing integrates seamlessly with Intelexta's core verification model:
 
-## Performance Considerations
+1. **Extract**: Process documents through format-specific extractors
+2. **Hash**: Generate SHA-256 hash of canonical document (document_id)
+3. **Store**: Save canonical JSON in checkpoint with provenance tracking
+4. **Sign**: Create Ed25519 signature over checkpoint hash chain
+5. **Verify**: Replay workflow to regenerate identical canonical output
+6. **Export**: Package in CAR format for third-party verification
 
-Rust implementation advantages:
-- **Speed**: 10-100x faster for large batches
-- **Memory**: Lower memory footprint
-- **Concurrency**: Easy parallelization with rayon
-- **Type Safety**: Compile-time guarantees
+### Differences from Python Version
 
-## Privacy & Ethics
+This Rust implementation differs from the original Python `sci-llm-data-prep` in:
 
-Maintained from Python version:
-- `privacy_status` field tracking
-- `consent_details` for sensitive data
-- Audit trail in `processing_log`
+1. **LaTeX Processing**:
+   - Simplified regex-based approach instead of `pylatexenc`
+   - Covers common LaTeX patterns (sections, formatting, metadata)
+   - Handles most standard LaTeX documents
+   - May need enhancement for complex packages or custom macros
 
-## Next Steps
+2. **PDF Processing**:
+   - Uses `pdf-extract` instead of `unstructured` library
+   - Simpler text extraction focused on clean text
+   - Basic metadata guessing via heuristics
+   - Can be enhanced with more sophisticated extraction
 
-1. **Test with Real Data**: Process actual PDF/LaTeX files
-2. **Enhance LaTeX Parser**: Consider using a dedicated LaTeX crate
-3. **Add Parallel Processing**: Use rayon for batch operations
-4. **Integrate with Workflows**: Connect to Intelexta's orchestrator
-5. **Add Frontend UI**: Tauri commands for document upload/processing
+3. **Performance**:
+   - Rust provides 10-100x better performance for large-scale processing
+   - Lower memory footprint
+   - Easy parallelization potential with rayon
 
-## Questions?
+4. **Type Safety**:
+   - Compile-time guarantees via Rust's type system
+   - Runtime validation vs compile-time verification
+   - Serde for robust serialization/deserialization
 
-See detailed documentation in:
-- `src-tauri/src/document_processing/README.md`
-- `examples/process_documents.rs`
-- Individual module files (well-commented)
+### Future Enhancements
 
-## License
+Potential improvements on the roadmap:
+
+- [ ] **ODT Format**: OpenDocument Text support
+- [ ] **RTF Format**: Rich Text Format support
+- [ ] **Batch Processing**: Process multiple documents in one step
+- [ ] **OCR Support**: Extract text from scanned PDFs using Tesseract
+- [ ] **Table Extraction**: Preserve table structures from PDFs
+- [ ] **Enhanced LaTeX**: Use dedicated crate for complex documents
+- [ ] **Multi-document Workflows**: Compare and merge multiple documents
+- [ ] **Quality Scoring**: Heuristics for extraction quality assessment
+- [ ] **Parallel Processing**: Use rayon for concurrent batch processing
+- [ ] **LLM Refinement**: Optional AI-powered extraction improvement
+
+### Troubleshooting
+
+#### Issue: "Failed to open DOCX file"
+- **Cause**: File is not a valid ZIP archive or is corrupted
+- **Solution**: Verify file is a genuine .docx (not renamed .doc)
+
+#### Issue: "Invalid DOCX file: word/document.xml not found"
+- **Cause**: DOCX file has non-standard structure
+- **Solution**: Try opening in Word and re-saving, or use different format
+
+#### Issue: PDF extraction returns empty text
+- **Cause**: PDF is scanned image without text layer
+- **Solution**: OCR support needed (future enhancement)
+
+#### Issue: LaTeX parsing fails on complex documents
+- **Cause**: Regex-based parser doesn't handle all LaTeX constructs
+- **Solution**: Simplify LaTeX or wait for enhanced parser
+
+### Developer Notes
+
+#### Adding a New Format
+
+To add support for a new document format:
+
+1. Create extractor in `src-tauri/src/document_processing/extractors/`
+2. Implement `extract()` method returning `PdfIntermediate` or `LatexIntermediate`
+3. Export from `extractors/mod.rs`
+4. Add high-level API in `document_processing/mod.rs`
+5. Update orchestrator match statement in `orchestrator.rs`
+6. Add format option to UI dropdown in `CheckpointEditor.tsx`
+7. Update file picker filters to include new extension
+8. Add tests
+
+#### Schema Consistency
+
+All extractors must return either:
+- `PdfIntermediate` (for simpler formats: PDF, TXT, DOCX)
+- `LatexIntermediate` (for structured formats: LaTeX, potentially HTML)
+
+Both are converted to `CanonicalDocument` by `CanonicalProcessor`.
+
+### License
 
 Same as parent Intelexta project.

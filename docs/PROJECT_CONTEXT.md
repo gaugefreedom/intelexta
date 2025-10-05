@@ -347,6 +347,42 @@ Phase 3: EditorPanel Workflow Builder UX
     • GOV-READY-01: Checkpoint edits that violate active project policies or budgets are blocked with actionable errors and recorded in the checkpoint_edit_log for audit.
 
 
+**Sprint 2B+ Implementation Status (Completed)**
+
+✅ **Document Ingestion Integration**:
+- Database schema supports `step_type` differentiation ("llm_prompt" vs "document_ingestion")
+- Orchestrator handles document_ingestion checkpoints via `execute_document_ingestion_checkpoint()`
+- UI supports creating and editing document steps in CheckpointEditor
+- Native file picker integration via `@tauri-apps/plugin-dialog` v2
+- **Formats Fully Supported**: PDF, LaTeX, TXT (NEW), DOCX (NEW)
+- Code locations:
+  - Backend: `src-tauri/src/orchestrator.rs:1770-1840`
+  - Extractors: `src-tauri/src/document_processing/extractors/`
+  - Frontend: `app/src/components/CheckpointEditor.tsx:320-370`
+
+✅ **Native File Dialog Integration**:
+- Browse button for document path selection in CheckpointEditor
+- Save dialog for CAR export (choose location)
+- Save dialog for project export (choose location)
+- Tauri v2 capabilities system implemented (`capabilities/default.json`)
+- Dependencies added: `@tauri-apps/plugin-dialog` v2.4.0, `tauri-plugin-dialog` v2.0.0-rc.5
+
+✅ **Export/Import Enhancements**:
+- Direct-path exports (no nested directories)
+- Backward compatibility for legacy project formats
+- Auto-generation of `run_execution` entries during import
+- Handles missing `run_execution_id` field with `#[serde(default)]`
+- Code: `src-tauri/src/portability.rs` (`write_project_archive_to_path()`)
+
+✅ **Documentation Updates**:
+- Created comprehensive `CHANGELOG.md`
+- Rewrote `DOCUMENT_PROCESSING_INTEGRATION.md` (now reflects full integration)
+- Updated `README.md` with Recent Features section
+- Enhanced `CONTRIBUTING.md` with document format extension guide
+- Added format comparison table to `document_processing/README.md`
+
+---
+
 Sprint 2C: The Great Refactor & Core Features
 
 Sprint Goal: Fully refactor the application to adopt the "Reusable Template" model for workflows, and then build the key V1 features of Step Chaining and Interactive Chat Steps.

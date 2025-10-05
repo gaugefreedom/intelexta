@@ -147,6 +147,47 @@ CanonicalProcessor::write_to_jsonl(
 )?;
 ```
 
+## Supported Document Formats
+
+| Format | Extension | Extractor | Metadata | Status |
+|--------|-----------|-----------|----------|--------|
+| PDF | .pdf | PdfExtractor | Title, abstract (guessed) | ✅ Full |
+| LaTeX | .tex, .latex | LatexExtractor | Title, author, date, abstract | ✅ Full |
+| Plain Text | .txt | TxtExtractor | Filename as title | ✅ Full |
+| DOCX | .docx | DocxExtractor | Title, author, keywords | ✅ Full |
+| DOC | .doc | - | - | ⏳ Planned (via DOCX fallback) |
+| ODT | .odt | - | - | ⏳ Planned |
+
+### Format-Specific Notes
+
+#### TXT (Plain Text)
+- Reads entire file as-is via `fs::read_to_string()`
+- No cleaning or transformation
+- Title derived from filename
+- Best for: pre-cleaned text, notes, transcripts
+- **Added**: Latest session
+
+#### DOCX (Microsoft Word)
+- Parses Office Open XML structure (ZIP archive)
+- Extracts text from `<w:t>` tags in `word/document.xml`
+- Metadata from Dublin Core properties in `docProps/core.xml`
+- Custom state machine parser for XML text extraction
+- **Note**: Binary .doc format not yet supported (requires external converter)
+- **Added**: Latest session
+
+#### PDF
+- Uses `pdf-extract` crate for text extraction
+- Auto-cleans page numbers, headers, footers
+- Metadata extraction via heuristics
+- **Limitation**: No OCR for scanned documents (planned enhancement)
+
+#### LaTeX
+- Regex-based parser converts to Markdown
+- Preserves math notation (inline and display)
+- Handles common LaTeX commands
+- Extracts sectioning, formatting, citations
+- **Limitation**: Complex packages may not parse correctly
+
 ## Features
 
 ### PDF Processing
@@ -161,6 +202,18 @@ CanonicalProcessor::write_to_jsonl(
 - Math preservation (inline and display)
 - Citation and reference preservation
 - Text formatting conversion (bold, italic, etc.)
+
+### Plain Text Processing (NEW)
+- Direct file reading with no transformation
+- Preserves original text exactly
+- Minimal metadata (filename-based)
+- Fast and simple extraction
+
+### DOCX Processing (NEW)
+- Office Open XML parsing
+- Text extraction from document body
+- Dublin Core metadata extraction
+- Handles common Word document structures
 
 ### Canonical Processing
 - JSONL serialization/deserialization
