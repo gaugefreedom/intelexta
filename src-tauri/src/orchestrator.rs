@@ -36,6 +36,72 @@ pub struct DocumentIngestionConfig {
     pub output_storage: String, // "database" or "file", defaults to "database"
 }
 
+/// Typed step configuration enum
+/// Each step type has its own configuration structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "stepType", rename_all = "camelCase")]
+pub enum StepConfig {
+    /// Ingest document from filesystem
+    #[serde(rename = "ingest")]
+    Ingest {
+        source_path: String,
+        format: String,  // "pdf", "latex", "txt", "docx"
+        privacy_status: String,
+    },
+
+    /// Summarize output from a previous step
+    #[serde(rename = "summarize")]
+    Summarize {
+        /// Optional: index of source step to summarize (None = error)
+        source_step: Option<usize>,
+
+        model: String,
+        summary_type: String,  // "brief", "detailed", "academic", "custom"
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        custom_instructions: Option<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token_budget: Option<i32>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        proof_mode: Option<String>,  // "exact" or "concordant"
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        epsilon: Option<f64>,
+    },
+
+    /// Custom LLM prompt (optionally using previous step output)
+    #[serde(rename = "prompt")]
+    Prompt {
+        model: String,
+        prompt: String,
+
+        /// Optional: index of step to use as context
+        #[serde(skip_serializing_if = "Option::is_none")]
+        use_output_from: Option<usize>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token_budget: Option<i32>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        proof_mode: Option<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        epsilon: Option<f64>,
+    },
+}
+
+/// Output from a step execution (for chaining)
+#[derive(Debug, Clone)]
+pub struct StepOutput {
+    pub order_index: usize,
+    pub step_type: String,
+    pub output_text: String,
+    pub output_json: Option<serde_json::Value>,
+    pub outputs_sha256: String,
+}
+
 #[derive(Serialize)]
 struct CheckpointBody<'a> {
     run_id: &'a str,
@@ -1534,6 +1600,9 @@ pub(crate) fn start_run_with_client(
     let mut prev_chain = String::new();
     let mut cumulative_usage_tokens: u64 = 0;
 
+    // Track step outputs for chaining
+    let mut prior_outputs: std::collections::HashMap<usize, StepOutput> = std::collections::HashMap::new();
+
     for (index, config) in stored_run.steps.iter().enumerate() {
         if config.is_interactive_chat() {
             continue;
@@ -1667,7 +1736,86 @@ pub(crate) fn start_run_with_client(
             }
         }
 
-        let execution = execute_checkpoint(config, stored_run.seed, llm_client)?;
+        // Execute the checkpoint - handle typed steps with chaining
+        let execution = if let Some(ref config_json_str) = config.config_json {
+            // Try to parse as typed StepConfig
+            if let Ok(step_config) = serde_json::from_str::<StepConfig>(config_json_str) {
+                // Execute based on step type
+                match step_config {
+                    StepConfig::Ingest { .. } => {
+                        // Use existing document ingestion logic
+                        execute_document_ingestion_checkpoint(config_json_str)?
+                    }
+                    StepConfig::Summarize {
+                        source_step,
+                        model,
+                        summary_type,
+                        custom_instructions,
+                        token_budget: _,
+                        proof_mode: _,
+                        epsilon: _,
+                    } => {
+                        // Resolve source step if specified
+                        if let Some(source_idx) = source_step {
+                            let source = prior_outputs.get(&source_idx).ok_or_else(|| {
+                                anyhow!(
+                                    "Step {} references non-existent source step {}",
+                                    config.order_index,
+                                    source_idx
+                                )
+                            })?;
+
+                            // Build summary prompt
+                            let prompt = build_summary_prompt(
+                                source,
+                                &summary_type,
+                                custom_instructions.as_deref(),
+                            )?;
+
+                            // Execute as LLM checkpoint
+                            execute_llm_checkpoint(&model, &prompt, llm_client)?
+                        } else {
+                            return Err(anyhow!(
+                                "Summarize step {} requires a source_step",
+                                config.order_index
+                            ));
+                        }
+                    }
+                    StepConfig::Prompt {
+                        model,
+                        prompt,
+                        use_output_from,
+                        token_budget: _,
+                        proof_mode: _,
+                        epsilon: _,
+                    } => {
+                        // Optionally use output from previous step
+                        let final_prompt = if let Some(source_idx) = use_output_from {
+                            let source = prior_outputs.get(&source_idx).ok_or_else(|| {
+                                anyhow!(
+                                    "Step {} references non-existent source step {}",
+                                    config.order_index,
+                                    source_idx
+                                )
+                            })?;
+                            build_prompt_with_context(&prompt, source)
+                        } else {
+                            prompt.clone()
+                        };
+
+                        // Execute as LLM checkpoint
+                        execute_llm_checkpoint(&model, &final_prompt, llm_client)?
+                    }
+                }
+            } else {
+                // Not a typed config, use legacy execution
+                execute_checkpoint(config, stored_run.seed, llm_client)?
+            }
+        } else {
+            // No config_json, use legacy execution
+            execute_checkpoint(config, stored_run.seed, llm_client)?
+        };
+
         let total_usage = execution.usage.total();
         cumulative_usage_tokens = cumulative_usage_tokens.saturating_add(total_usage);
         let prompt_tokens = execution.usage.prompt_tokens;
@@ -1724,6 +1872,18 @@ pub(crate) fn start_run_with_client(
 
         if kind == "Incident" {
             break;
+        }
+
+        // Store step output for chaining (only if execution was successful)
+        if kind == "Step" {
+            let step_output = StepOutput {
+                order_index: config.order_index as usize,
+                step_type: config.step_type.clone(),
+                output_text: execution.output_payload.clone().unwrap_or_default(),
+                output_json: execution.output_payload.as_ref().and_then(|s| serde_json::from_str(s).ok()),
+                outputs_sha256: execution.outputs_sha256.clone().unwrap_or_default(),
+            };
+            prior_outputs.insert(config.order_index as usize, step_output);
         }
     }
 
@@ -1860,6 +2020,51 @@ pub(crate) fn execute_document_ingestion_checkpoint(
         prompt_payload: Some(prompt_payload),
         output_payload: Some(preview),
     })
+}
+
+/// Extract text content from a step output
+/// For ingest steps: extracts cleaned_text from CanonicalDocument
+/// For LLM steps: uses the output_text directly
+fn extract_text_from_output(output: &StepOutput) -> anyhow::Result<String> {
+    // If output is CanonicalDocument JSON, extract cleaned text
+    if let Some(json) = &output.output_json {
+        if let Some(cleaned_text) = json.get("cleaned_text_with_markdown_structure") {
+            if let Some(text) = cleaned_text.as_str() {
+                return Ok(text.to_string());
+            }
+        }
+    }
+
+    // Otherwise just use the text output
+    Ok(output.output_text.clone())
+}
+
+/// Build prompt for summarization based on summary type
+fn build_summary_prompt(
+    source: &StepOutput,
+    summary_type: &str,
+    custom_instructions: Option<&str>,
+) -> anyhow::Result<String> {
+    let base_prompt = match summary_type {
+        "brief" => "Provide a brief 2-3 sentence summary of the following:\n\n",
+        "detailed" => "Provide a comprehensive summary covering all main points of:\n\n",
+        "academic" => "Provide an academic summary including methodology, findings, and conclusions of:\n\n",
+        "custom" => custom_instructions.unwrap_or("Summarize the following:\n\n"),
+        _ => "Summarize the following:\n\n",
+    };
+
+    let source_text = extract_text_from_output(source)?;
+
+    Ok(format!("{}{}", base_prompt, source_text))
+}
+
+/// Build prompt with context from previous step
+fn build_prompt_with_context(prompt: &str, source: &StepOutput) -> String {
+    format!(
+        "{}\n\n--- Context from previous step ---\n{}",
+        prompt,
+        source.output_text
+    )
 }
 
 fn execute_checkpoint(
@@ -2080,6 +2285,29 @@ pub fn create_run_step(
     } = config;
 
     let step_type = step_type.unwrap_or_else(|| "llm".to_string());
+
+    // Validate config_json if provided (for typed step system)
+    if let Some(ref json_str) = config_json {
+        // Try to parse as StepConfig to validate structure
+        let parsed_config: Result<StepConfig, _> = serde_json::from_str(json_str);
+        if let Ok(step_config) = parsed_config {
+            // Verify that the step_type tag matches the parsed variant
+            let expected_type = match step_config {
+                StepConfig::Ingest { .. } => "ingest",
+                StepConfig::Summarize { .. } => "summarize",
+                StepConfig::Prompt { .. } => "prompt",
+            };
+
+            if step_type != expected_type {
+                return Err(anyhow!(
+                    "step_type '{}' doesn't match config variant '{}'",
+                    step_type,
+                    expected_type
+                ));
+            }
+        }
+        // If parsing fails, it's okay - might be legacy config or other format
+    }
 
     // Validate epsilon for concordant mode (only for LLM steps).
     let validated_epsilon = if proof_mode.is_concordant() {

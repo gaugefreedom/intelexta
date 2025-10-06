@@ -1026,6 +1026,22 @@ pub fn update_run_step(
         config.epsilon = Some(epsilon);
     }
     if let Some(config_json) = updates.config_json {
+        // Validate StepConfig if provided
+        if let Ok(step_config) = serde_json::from_str::<orchestrator::StepConfig>(&config_json) {
+            // Verify step_type matches config variant
+            let expected_type = match step_config {
+                orchestrator::StepConfig::Ingest { .. } => "ingest",
+                orchestrator::StepConfig::Summarize { .. } => "summarize",
+                orchestrator::StepConfig::Prompt { .. } => "prompt",
+            };
+
+            if config.step_type != expected_type {
+                return Err(Error::Api(format!(
+                    "step_type '{}' doesn't match config variant '{}'",
+                    config.step_type, expected_type
+                )));
+            }
+        }
         config.config_json = Some(config_json);
     }
     if config.proof_mode.is_concordant() {
