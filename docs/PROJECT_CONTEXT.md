@@ -383,9 +383,223 @@ Phase 3: EditorPanel Workflow Builder UX
 
 ---
 
-Sprint 2C: The Great Refactor & Core Features
+**Sprint 2C: Typed Step System & Optional Chaining**
 
-Sprint Goal: Fully refactor the application to adopt the "Reusable Template" model for workflows, and then build the key V1 features of Step Chaining and Interactive Chat Steps.
+Sprint Goal: Introduce explicit step types (ingest, summarize, prompt) with optional step chaining, while maintaining backward compatibility for standalone workflows.
+
+**Key Principle**: Steps can work independently OR chain together. Users can:
+- Run single-step workflows (current behavior) ✅
+- Run multi-step workflows without chaining (manual copy/paste between runs) ✅
+- Run multi-step workflows WITH chaining (automatic data flow) 🆕
+
+This allows incremental adoption and lets users show/demo the system before chaining is complete.
+
+**Phase 1: Step Type System (Week 1-2)**
+
+Goal: Introduce explicit step types while maintaining current functionality.
+
+Tasks:
+
+1. **Update Step Type Definitions**
+   - Location: `src-tauri/src/orchestrator.rs`
+   - Define three step types as Rust enums:
+     ```rust
+     #[derive(Debug, Serialize, Deserialize)]
+     #[serde(tag = "stepType")]
+     enum StepConfig {
+         #[serde(rename = "ingest")]
+         Ingest {
+             source_path: String,
+             format: String,
+             privacy_status: String,
+         },
+         #[serde(rename = "summarize")]
+         Summarize {
+             source_step: Option<usize>,  // Optional for now
+             model: String,
+             summary_type: String,
+             custom_instructions: Option<String>,
+             token_budget: Option<i32>,
+             proof_mode: Option<String>,
+             epsilon: Option<f64>,
+         },
+         #[serde(rename = "prompt")]
+         Prompt {
+             model: String,
+             prompt: String,
+             use_output_from: Option<usize>,  // Optional for now
+             token_budget: Option<i32>,
+             proof_mode: Option<String>,
+             epsilon: Option<f64>,
+         },
+     }
+     ```
+   - Note: `source_step` and `use_output_from` are OPTIONAL
+   - When None: step works independently (current behavior)
+   - When Some(n): step uses output from step n (new chaining behavior)
+
+2. **Update Database Schema**
+   - Since starting fresh, update `src-tauri/src/store/schema.sql` directly
+   - `step_type` column already exists, just ensure it supports: 'ingest', 'summarize', 'prompt'
+   - No migration needed (fresh database)
+
+3. **Update Orchestrator Execution**
+   - Location: `src-tauri/src/orchestrator.rs`
+   - Modify `start_run_with_client()` to:
+     a. Track prior step outputs in HashMap
+     b. For each step, check if it references a prior step
+     c. If yes: resolve reference and include in execution
+     d. If no: execute independently (current behavior)
+   - Example:
+     ```rust
+     let mut prior_outputs: HashMap<usize, StepOutput> = HashMap::new();
+
+     for step in steps {
+         let output = match step.config {
+             StepConfig::Ingest { .. } => {
+                 // Always independent
+                 execute_document_ingestion(step).await?
+             }
+
+             StepConfig::Summarize { source_step, .. } => {
+                 if let Some(source_idx) = source_step {
+                     // Chained mode: use prior output
+                     let source = prior_outputs.get(&source_idx)
+                         .ok_or(anyhow!("Source step not found"))?;
+                     execute_summary_with_source(step, source).await?
+                 } else {
+                     // Standalone mode: error or skip
+                     return Err(anyhow!("Summarize step requires source"));
+                 }
+             }
+
+             StepConfig::Prompt { use_output_from, .. } => {
+                 if let Some(source_idx) = use_output_from {
+                     // Chained mode: include prior output
+                     let source = prior_outputs.get(&source_idx)
+                         .ok_or(anyhow!("Source step not found"))?;
+                     execute_prompt_with_context(step, source).await?
+                 } else {
+                     // Standalone mode: just run the prompt
+                     execute_prompt_standalone(step).await?
+                 }
+             }
+         };
+
+         prior_outputs.insert(step.order_index, output);
+     }
+     ```
+
+4. **Add Helper Functions**
+   - `build_summary_prompt(source: &StepOutput, config: &SummarizeConfig) -> Result<String>`
+   - `extract_text_from_output(output: &StepOutput) -> Result<String>`
+   - `execute_summary_with_source(...)`
+   - `execute_prompt_with_context(...)`
+   - `execute_prompt_standalone(...)` (current LLM execution)
+
+**Phase 2: UI Updates (Week 3-4)**
+
+Goal: Add step type selector and type-specific forms.
+
+Tasks:
+
+1. **Update TypeScript Types**
+   - Location: `app/src/lib/api.ts`
+   - Mirror Rust step config types:
+     ```typescript
+     type StepConfig =
+       | { stepType: 'ingest'; sourcePath: string; format: string; privacyStatus: string }
+       | { stepType: 'summarize'; sourceStep?: number; model: string; summaryType: string; ... }
+       | { stepType: 'prompt'; prompt: string; model: string; useOutputFrom?: number; ... }
+     ```
+
+2. **Refactor CheckpointEditor**
+   - Location: `app/src/components/CheckpointEditor.tsx`
+   - Add step type selector at top
+   - Render type-specific form based on selection
+   - Keep existing forms for now, just reorganize:
+     ```tsx
+     <select value={stepType} onChange={handleStepTypeChange}>
+       <option value="ingest">📄 Ingest Document</option>
+       <option value="summarize">📝 Summarize</option>
+       <option value="prompt">💬 Custom Prompt</option>
+     </select>
+
+     {stepType === 'ingest' && <IngestForm ... />}
+     {stepType === 'summarize' && <SummarizeForm ... />}
+     {stepType === 'prompt' && <PromptForm ... />}
+     ```
+
+3. **Create SummarizeForm Component**
+   - New component: `app/src/components/SummarizeForm.tsx`
+   - Fields:
+     - Source Step dropdown (optional for now - can be empty)
+     - Model selector
+     - Summary Type: brief | detailed | academic | custom
+     - Custom instructions (if type=custom)
+     - Token budget, proof mode, epsilon
+
+4. **Update PromptForm**
+   - Add optional "Use Output From" dropdown
+   - Show list of prior steps (if any)
+   - Can be left empty (standalone mode)
+
+5. **Visual Indicators**
+   - In EditorPanel step list, show step type icons: 📄 📝 💬
+   - If step has source reference, show arrow: `📄 → 📝`
+   - If standalone, no arrow
+
+**Phase 3: Testing & Refinement (Week 5)**
+
+Goal: Ensure both standalone and chained modes work.
+
+Test Cases:
+
+1. **Standalone Workflows (Current Behavior)**
+   - ✅ Single ingest step → works
+   - ✅ Single prompt step → works
+   - ✅ Two separate prompt steps (no linking) → both work independently
+   - ✅ Export CAR → verify → works
+
+2. **Chained Workflows (New Behavior)**
+   - ✅ Ingest → Summarize (with source_step=0) → works
+   - ✅ Ingest → Prompt (with use_output_from=0) → works
+   - ✅ Ingest → Summarize → Prompt (referencing summary) → all work
+   - ✅ Export CAR → verify → replay matches
+
+3. **Error Cases**
+   - ✅ Summarize without source → clear error message
+   - ✅ Reference non-existent step → error
+   - ✅ Reference future step → error
+
+4. **UI/UX**
+   - ✅ Can create standalone steps (leave source dropdowns empty)
+   - ✅ Can create chained steps (select source from dropdown)
+   - ✅ Visual indicators show chain: `📄 → 📝 → 💬`
+   - ✅ Step reordering updates or breaks references (show warning)
+
+**Acceptance Criteria**
+
+- [ ] Three step types defined and working: ingest, summarize, prompt
+- [ ] Steps can work independently (no source references)
+- [ ] Steps can optionally chain (with source references)
+- [ ] UI shows step type and chaining visually
+- [ ] Existing workflows continue to work (backward compatible)
+- [ ] Can demo to others even without full chaining implementation
+- [ ] CAR export includes step type information
+- [ ] All tests pass for both modes
+
+**Future Enhancements (Post-V1)**
+
+- Cross-run references: Reference checkpoint from a different run
+- More step types: compare, classify, extract, translate, merge
+- Visual workflow builder: Drag-and-drop graph UI
+- Conditional execution: If/else based on outputs
+- Parallel execution: Run independent steps concurrently
+
+---
+
+Sprint 2C (Old): The Great Refactor & Core Features
 
 Phase 1: Foundational Refactoring (Get it Clean)
 
