@@ -1,4 +1,5 @@
 // src-tauri/src/governance.rs
+use crate::model_catalog;
 use crate::store::policies::Policy;
 use serde::{Deserialize, Serialize};
 
@@ -90,33 +91,54 @@ pub fn enforce_network_policy(policy: &Policy) -> Result<(), Incident> {
     }
 }
 
-/// Estimate USD cost based on token count
-/// Using rough industry averages: ~$0.01 per 1000 tokens (adjustable)
-pub fn estimate_usd_cost(tokens: u64) -> f64 {
-    const COST_PER_1K_TOKENS: f64 = 0.01;
-    (tokens as f64 / 1000.0) * COST_PER_1K_TOKENS
+/// Estimate USD cost based on token count and model
+/// Uses the model catalog for accurate per-model pricing
+pub fn estimate_usd_cost(tokens: u64, model_id: Option<&str>) -> f64 {
+    if let Some(catalog) = model_catalog::try_get_global_catalog() {
+        if let Some(model) = model_id {
+            return catalog.calculate_usd_cost(model, tokens);
+        }
+    }
+
+    // Fallback if catalog not available or model not specified
+    const FALLBACK_COST_PER_1K_TOKENS: f64 = 0.01;
+    (tokens as f64 / 1000.0) * FALLBACK_COST_PER_1K_TOKENS
 }
 
-/// Estimate Nature Cost based on token count
-/// PLACEHOLDER: In production, this will use user-configurable algorithms
-/// that may incorporate: carbon emissions, water usage, energy consumption,
-/// computational resource intensity, and other environmental factors.
-///
-/// Current implementation uses a simple baseline:
-/// - Base carbon: ~0.5g CO₂e per 1000 tokens
-/// - Additional factors can be layered in later
-pub fn estimate_nature_cost(tokens: u64) -> f64 {
-    // Placeholder algorithm - will be user-configurable
-    const BASE_NATURE_COST_PER_1K_TOKENS: f64 = 1.0;
+/// Legacy function for backwards compatibility
+#[deprecated(note = "Use estimate_usd_cost with model_id parameter")]
+pub fn estimate_usd_cost_legacy(tokens: u64) -> f64 {
+    estimate_usd_cost(tokens, None)
+}
 
-    // TODO: In future versions, this will call into a configurable
-    // algorithm system where users can define their own Nature Cost
-    // calculation methods based on:
-    // - Model type (local vs cloud, size, architecture)
-    // - Energy source (renewable percentage, grid carbon intensity)
-    // - Hardware efficiency (GPU type, utilization)
-    // - Data center location (cooling requirements, PUE)
-    // - Time of day (grid carbon intensity varies)
+/// Estimate Nature Cost based on token count and model
+/// Uses the model catalog for accurate per-model environmental impact
+pub fn estimate_nature_cost(tokens: u64, model_id: Option<&str>) -> f64 {
+    if let Some(catalog) = model_catalog::try_get_global_catalog() {
+        if let Some(model) = model_id {
+            return catalog.calculate_nature_cost(model, tokens);
+        }
+    }
 
-    (tokens as f64 / 1000.0) * BASE_NATURE_COST_PER_1K_TOKENS
+    // Fallback if catalog not available or model not specified
+    const FALLBACK_NATURE_COST_PER_1K_TOKENS: f64 = 1.0;
+    (tokens as f64 / 1000.0) * FALLBACK_NATURE_COST_PER_1K_TOKENS
+}
+
+/// Legacy function for backwards compatibility
+#[deprecated(note = "Use estimate_nature_cost with model_id parameter")]
+pub fn estimate_nature_cost_legacy(tokens: u64) -> f64 {
+    estimate_nature_cost(tokens, None)
+}
+
+/// Estimate energy consumption in kWh for a given model and token count
+pub fn estimate_energy_kwh(tokens: u64, model_id: Option<&str>) -> f64 {
+    if let Some(catalog) = model_catalog::try_get_global_catalog() {
+        if let Some(model) = model_id {
+            return catalog.calculate_energy_kwh(model, tokens);
+        }
+    }
+
+    // Fallback: assume minimal energy for unknown models
+    0.0
 }

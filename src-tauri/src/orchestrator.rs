@@ -369,8 +369,9 @@ fn estimate_costs_with_policy(
     let estimated_tokens = projected_tokens;
 
     // Use governance module functions for cost estimation
-    let estimated_usd = governance::estimate_usd_cost(estimated_tokens);
-    let estimated_nature_cost = governance::estimate_nature_cost(estimated_tokens);
+    // Note: Using None for model_id since we don't have per-step model info at estimate time
+    let estimated_usd = governance::estimate_usd_cost(estimated_tokens, None);
+    let estimated_nature_cost = governance::estimate_nature_cost(estimated_tokens, None);
 
     RunCostEstimates {
         estimated_tokens,

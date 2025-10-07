@@ -39,6 +39,7 @@ pub mod chunk;
 pub mod governance;
 pub mod ingest;
 pub mod keychain;
+pub mod model_catalog;
 pub mod orchestrator;
 pub mod portability;
 pub mod provenance;

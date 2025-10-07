@@ -90,6 +90,18 @@ pub struct PolicyRef {
     pub hash: String,      // A hash of the policy state at the time of the run
     pub egress: bool,      // Was network access allowed?
     pub estimator: String, // e.g., "nature_cost = tokens * grid_intensity(model, region)"
+    #[serde(default = "default_catalog_hash")]
+    pub model_catalog_hash: String, // SHA256 hash of the model catalog for pricing verification
+    #[serde(default = "default_catalog_version")]
+    pub model_catalog_version: String, // Version of the model catalog used
+}
+
+fn default_catalog_hash() -> String {
+    "sha256:unknown".to_string()
+}
+
+fn default_catalog_version() -> String {
+    "unknown".to_string()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -397,6 +409,8 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
             hash: format!("sha256:{policy_hash}"),
             egress: policy.allow_network,
             estimator: format!("usage_tokens * {:.6} nature_cost/token", nature_cost_per_token),
+            model_catalog_hash: format!("sha256:{}", crate::model_catalog::get_global_catalog().hash()),
+            model_catalog_version: crate::model_catalog::get_global_catalog().version().to_string(),
         },
         budgets: Budgets {
             usd: estimated_usd,

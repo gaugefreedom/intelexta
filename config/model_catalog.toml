@@ -1,0 +1,297 @@
+# Intelexta Model Catalog
+# Version: 1.0.0
+#
+# This file defines the authoritative pricing and environmental impact data
+# for all models available in Intelexta. The catalog is cryptographically
+# signed to ensure integrity and prevent tampering.
+#
+# Hash Algorithm: SHA256
+# Signature Algorithm: Ed25519
+
+[metadata]
+version = "1.0.0"
+created_at = "2025-10-07T00:00:00Z"
+description = "Official Intelexta model catalog with pricing and environmental metrics"
+
+# Default algorithms for cost calculation
+[defaults]
+nature_cost_algorithm = "energy_based"
+fallback_cost_per_million_tokens = 10.0
+fallback_nature_cost_per_million_tokens = 5.0
+
+# Nature cost calculation algorithms
+[nature_cost_algorithms.simple]
+formula = "tokens * model.nature_cost_per_million_tokens / 1000000"
+description = "Basic calculation: tokens × model nature cost factor"
+
+[nature_cost_algorithms.energy_based]
+formula = "(tokens * model.energy_kwh_per_million_tokens / 1000000) * grid_carbon_intensity_g_co2_per_kwh"
+description = "Energy consumption × carbon intensity of power grid"
+default_grid_carbon_intensity_g_co2_per_kwh = 400.0  # Global average
+
+[nature_cost_algorithms.detailed]
+formula = "(energy_kwh * grid_carbon + water_liters * water_impact + compute_hours * datacenter_pue)"
+description = "Comprehensive environmental accounting"
+parameters = { water_impact_g_co2_per_liter = 0.3, datacenter_pue = 1.2 }
+
+# ============================================================================
+# MODEL DEFINITIONS
+# ============================================================================
+
+# Internal/Testing Models
+# ----------------------
+
+[[models]]
+id = "stub-model"
+provider = "internal"
+display_name = "Stub Model (Testing)"
+description = "Deterministic testing model that generates predictable outputs"
+cost_per_million_tokens = 0.0
+nature_cost_per_million_tokens = 0.0
+energy_kwh_per_million_tokens = 0.0
+enabled = true
+tags = ["testing", "internal", "deterministic"]
+
+# Local Ollama Models
+# ------------------
+
+[[models]]
+id = "llama3.2:1b"
+provider = "ollama"
+display_name = "Llama 3.2 1B (Local)"
+description = "Meta's Llama 3.2 1B parameter model running locally via Ollama"
+cost_per_million_tokens = 0.0  # Local inference is free
+nature_cost_per_million_tokens = 2.5
+energy_kwh_per_million_tokens = 0.05
+enabled = true
+tags = ["local", "small", "efficient"]
+context_window = 128000
+max_output_tokens = 4096
+
+[[models]]
+id = "llama3.2:3b"
+provider = "ollama"
+display_name = "Llama 3.2 3B (Local)"
+description = "Meta's Llama 3.2 3B parameter model running locally via Ollama"
+cost_per_million_tokens = 0.0
+nature_cost_per_million_tokens = 7.5
+energy_kwh_per_million_tokens = 0.15
+enabled = true
+tags = ["local", "medium", "balanced"]
+context_window = 128000
+max_output_tokens = 4096
+
+[[models]]
+id = "llama3.1:8b"
+provider = "ollama"
+display_name = "Llama 3.1 8B (Local)"
+description = "Meta's Llama 3.1 8B parameter model running locally via Ollama"
+cost_per_million_tokens = 0.0
+nature_cost_per_million_tokens = 20.0
+energy_kwh_per_million_tokens = 0.4
+enabled = true
+tags = ["local", "large", "capable"]
+context_window = 128000
+max_output_tokens = 8192
+
+[[models]]
+id = "llama3.1:70b"
+provider = "ollama"
+display_name = "Llama 3.1 70B (Local)"
+description = "Meta's Llama 3.1 70B parameter model - requires significant GPU"
+cost_per_million_tokens = 0.0
+nature_cost_per_million_tokens = 175.0
+energy_kwh_per_million_tokens = 3.5
+enabled = true
+tags = ["local", "very-large", "powerful", "gpu-intensive"]
+context_window = 128000
+max_output_tokens = 8192
+
+[[models]]
+id = "mistral:7b"
+provider = "ollama"
+display_name = "Mistral 7B (Local)"
+description = "Mistral AI's 7B parameter model running locally"
+cost_per_million_tokens = 0.0
+nature_cost_per_million_tokens = 18.0
+energy_kwh_per_million_tokens = 0.36
+enabled = true
+tags = ["local", "efficient", "multilingual"]
+context_window = 32000
+max_output_tokens = 4096
+
+[[models]]
+id = "mixtral:8x7b"
+provider = "ollama"
+display_name = "Mixtral 8x7B (Local)"
+description = "Mistral AI's Mixture of Experts model with 8 experts"
+cost_per_million_tokens = 0.0
+nature_cost_per_million_tokens = 56.0
+energy_kwh_per_million_tokens = 1.12
+enabled = true
+tags = ["local", "moe", "powerful"]
+context_window = 32000
+max_output_tokens = 4096
+
+# OpenAI Models
+# ------------
+
+[[models]]
+id = "gpt-4-turbo"
+provider = "openai"
+display_name = "GPT-4 Turbo"
+description = "OpenAI's GPT-4 Turbo with 128K context window"
+cost_per_million_tokens = 30000.0  # $30 per million tokens (blended input/output)
+nature_cost_per_million_tokens = 15.0
+energy_kwh_per_million_tokens = 0.3
+enabled = false  # Disabled by default (requires network)
+tags = ["cloud", "openai", "powerful", "expensive"]
+context_window = 128000
+max_output_tokens = 4096
+requires_network = true
+requires_api_key = true
+
+[[models]]
+id = "gpt-4"
+provider = "openai"
+display_name = "GPT-4"
+description = "OpenAI's GPT-4 base model"
+cost_per_million_tokens = 60000.0  # $60 per million tokens
+nature_cost_per_million_tokens = 20.0
+energy_kwh_per_million_tokens = 0.4
+enabled = false
+tags = ["cloud", "openai", "powerful", "very-expensive"]
+context_window = 8192
+max_output_tokens = 4096
+requires_network = true
+requires_api_key = true
+
+[[models]]
+id = "gpt-3.5-turbo"
+provider = "openai"
+display_name = "GPT-3.5 Turbo"
+description = "OpenAI's GPT-3.5 Turbo model - fast and cost-effective"
+cost_per_million_tokens = 1500.0  # $1.50 per million tokens
+nature_cost_per_million_tokens = 5.0
+energy_kwh_per_million_tokens = 0.1
+enabled = false
+tags = ["cloud", "openai", "fast", "affordable"]
+context_window = 16384
+max_output_tokens = 4096
+requires_network = true
+requires_api_key = true
+
+# Anthropic Models
+# ---------------
+
+[[models]]
+id = "claude-3-opus"
+provider = "anthropic"
+display_name = "Claude 3 Opus"
+description = "Anthropic's most capable model"
+cost_per_million_tokens = 75000.0  # $75 per million tokens
+nature_cost_per_million_tokens = 25.0
+energy_kwh_per_million_tokens = 0.5
+enabled = false
+tags = ["cloud", "anthropic", "powerful", "expensive"]
+context_window = 200000
+max_output_tokens = 4096
+requires_network = true
+requires_api_key = true
+
+[[models]]
+id = "claude-3-sonnet"
+provider = "anthropic"
+display_name = "Claude 3 Sonnet"
+description = "Anthropic's balanced model"
+cost_per_million_tokens = 15000.0  # $15 per million tokens
+nature_cost_per_million_tokens = 10.0
+energy_kwh_per_million_tokens = 0.2
+enabled = false
+tags = ["cloud", "anthropic", "balanced"]
+context_window = 200000
+max_output_tokens = 4096
+requires_network = true
+requires_api_key = true
+
+[[models]]
+id = "claude-3-haiku"
+provider = "anthropic"
+display_name = "Claude 3 Haiku"
+description = "Anthropic's fastest and most affordable model"
+cost_per_million_tokens = 1250.0  # $1.25 per million tokens
+nature_cost_per_million_tokens = 3.0
+energy_kwh_per_million_tokens = 0.06
+enabled = false
+tags = ["cloud", "anthropic", "fast", "affordable"]
+context_window = 200000
+max_output_tokens = 4096
+requires_network = true
+requires_api_key = true
+
+# Mock Models (for testing with specific providers)
+# ------------------------------------------------
+
+[[models]]
+id = "claude-mock-3-opus"
+provider = "mock"
+display_name = "Claude 3 Opus (Mock)"
+description = "Mock Claude API responses for testing without network access"
+cost_per_million_tokens = 0.0
+nature_cost_per_million_tokens = 0.0
+energy_kwh_per_million_tokens = 0.0
+enabled = true
+tags = ["testing", "mock", "claude"]
+
+# ============================================================================
+# PROVIDER METADATA
+# ============================================================================
+
+[providers.internal]
+name = "Internal"
+description = "Built-in testing and utility models"
+requires_network = false
+
+[providers.ollama]
+name = "Ollama"
+description = "Local model inference via Ollama"
+requires_network = false
+default_endpoint = "http://127.0.0.1:11434"
+
+[providers.openai]
+name = "OpenAI"
+description = "OpenAI's cloud API"
+requires_network = true
+api_base_url = "https://api.openai.com/v1"
+requires_api_key = true
+
+[providers.anthropic]
+name = "Anthropic"
+description = "Anthropic's cloud API"
+requires_network = true
+api_base_url = "https://api.anthropic.com/v1"
+requires_api_key = true
+
+[providers.mock]
+name = "Mock Provider"
+description = "Mock responses for testing"
+requires_network = false
+
+# ============================================================================
+# SIGNATURE (Generated by signing the canonical form of this file)
+# ============================================================================
+# This signature is generated by hashing the canonical representation of
+# the catalog (minus this signature block) and signing with the project's
+# signing key. It ensures the catalog hasn't been tampered with.
+#
+# To verify:
+# 1. Remove this [signature] section
+# 2. Compute SHA256 of the canonical TOML
+# 3. Verify Ed25519 signature with project public key
+#
+# NOTE: Signature will be added after catalog is finalized
+
+# [signature]
+# public_key = "..."
+# signature = "..."
+# signed_at = "2025-10-07T00:00:00Z"

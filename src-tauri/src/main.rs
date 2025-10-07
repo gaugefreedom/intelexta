@@ -16,6 +16,13 @@ fn main() {
 
         runtime::initialize().expect("failed to initialize runtime");
 
+        // Initialize model catalog
+        intelexta::model_catalog::init_global_catalog()
+            .unwrap_or_else(|err| {
+                eprintln!("⚠️  Warning: Failed to initialize model catalog: {}", err);
+                eprintln!("   Cost estimation will use fallback values");
+            });
+
         let app_data_dir = app
             .path()
             .app_local_data_dir()
