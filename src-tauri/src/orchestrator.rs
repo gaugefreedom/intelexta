@@ -17,6 +17,9 @@ use std::time::Duration;
 use uuid::Uuid;
 
 const STUB_MODEL_ID: &str = "stub-model";
+
+// Debug logging flag - set to false for production
+const DEBUG_STEP_EXECUTION: bool = true;
 const OLLAMA_HOST: &str = "127.0.0.1:11434";
 const MAX_RUN_NAME_LENGTH: usize = 120;
 const MAX_PAYLOAD_PREVIEW_SIZE: usize = 65_536; // 64KB preview limit
@@ -1739,10 +1742,14 @@ pub(crate) fn start_run_with_client(
         // Execute the checkpoint - handle typed steps with chaining
         let execution = if let Some(ref config_json_str) = config.config_json {
             // Try to parse as typed StepConfig
-            eprintln!("🔍 Attempting to parse config_json: {}", config_json_str);
+            if DEBUG_STEP_EXECUTION {
+                eprintln!("🔍 Attempting to parse config_json: {}", config_json_str);
+            }
             match serde_json::from_str::<StepConfig>(config_json_str) {
                 Ok(step_config) => {
-                    eprintln!("✅ Successfully parsed typed step: {:?}", step_config);
+                    if DEBUG_STEP_EXECUTION {
+                        eprintln!("✅ Successfully parsed typed step: {:?}", step_config);
+                    }
                     // Execute based on step type
                     match step_config {
                     StepConfig::Ingest { source_path, format, privacy_status } => {
@@ -1814,19 +1821,25 @@ pub(crate) fn start_run_with_client(
                                     source_idx
                                 )
                             })?;
-                            eprintln!("🔗 Prompt step {} using output from step {}", config.order_index, source_idx);
-                            eprintln!("   Source output length: {} chars", source.output_text.len());
-                            eprintln!("   Source output preview: {}",
-                                if source.output_text.len() > 200 {
-                                    format!("{}...", &source.output_text[..200])
-                                } else {
-                                    source.output_text.clone()
-                                });
+                            if DEBUG_STEP_EXECUTION {
+                                eprintln!("🔗 Prompt step {} using output from step {}", config.order_index, source_idx);
+                                eprintln!("   Source output length: {} chars", source.output_text.len());
+                                eprintln!("   Source output preview: {}",
+                                    if source.output_text.len() > 200 {
+                                        format!("{}...", &source.output_text[..200])
+                                    } else {
+                                        source.output_text.clone()
+                                    });
+                            }
                             let context_prompt = build_prompt_with_context(&prompt, source);
-                            eprintln!("   Final prompt length: {} chars", context_prompt.len());
+                            if DEBUG_STEP_EXECUTION {
+                                eprintln!("   Final prompt length: {} chars", context_prompt.len());
+                            }
                             context_prompt
                         } else {
-                            eprintln!("🔗 Prompt step {} running standalone (no context)", config.order_index);
+                            if DEBUG_STEP_EXECUTION {
+                                eprintln!("🔗 Prompt step {} running standalone (no context)", config.order_index);
+                            }
                             prompt.clone()
                         };
 
@@ -1842,8 +1855,10 @@ pub(crate) fn start_run_with_client(
                     }
                 }
                 Err(parse_err) => {
-                    eprintln!("❌ Failed to parse as typed step: {}", parse_err);
-                    eprintln!("   Falling back to legacy execution");
+                    if DEBUG_STEP_EXECUTION {
+                        eprintln!("❌ Failed to parse as typed step: {}", parse_err);
+                        eprintln!("   Falling back to legacy execution");
+                    }
                     // Not a typed config, use legacy execution
                     execute_checkpoint(config, stored_run.seed, llm_client)?
                 }
