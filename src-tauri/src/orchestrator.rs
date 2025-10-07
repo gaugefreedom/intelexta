@@ -1814,8 +1814,19 @@ pub(crate) fn start_run_with_client(
                                     source_idx
                                 )
                             })?;
-                            build_prompt_with_context(&prompt, source)
+                            eprintln!("🔗 Prompt step {} using output from step {}", config.order_index, source_idx);
+                            eprintln!("   Source output length: {} chars", source.output_text.len());
+                            eprintln!("   Source output preview: {}",
+                                if source.output_text.len() > 200 {
+                                    format!("{}...", &source.output_text[..200])
+                                } else {
+                                    source.output_text.clone()
+                                });
+                            let context_prompt = build_prompt_with_context(&prompt, source);
+                            eprintln!("   Final prompt length: {} chars", context_prompt.len());
+                            context_prompt
                         } else {
+                            eprintln!("🔗 Prompt step {} running standalone (no context)", config.order_index);
                             prompt.clone()
                         };
 
