@@ -346,6 +346,91 @@ Includes:
 - Database inspection queries
 - Success criteria checklist
 
+### ✅ 7. Frontend UI Implementation
+**File**: `app/src/components/CheckpointEditor.tsx` (~200 lines added/modified)
+
+**Added State Variables**:
+- `sourceStep`: for Summarize step chaining
+- `useOutputFrom`: for Prompt step chaining
+- `summaryType`: brief, detailed, academic, custom
+- `customInstructions`: for custom summaries
+
+**Updated Step Type Selector** (lines 291-295):
+- Ingest Document (new typed)
+- Summarize (new typed)
+- Prompt with optional context (new typed)
+- Document Ingestion (legacy)
+- LLM Prompt (legacy)
+
+**Ingest Step UI** (lines 316-358):
+- Document path with Browse button
+- Format selector (PDF, LaTeX, TXT, DOCX)
+- Privacy status selector
+- Builds config_json on save
+
+**Summarize Step UI** (lines 360-424):
+- Source Step dropdown (select previous step)
+- Model selector
+- Summary Type dropdown (brief, detailed, academic, custom)
+- Custom instructions textarea (conditional)
+- Token budget
+- Proof mode configuration
+
+**Prompt Step UI** (lines 426-463):
+- Use Output From dropdown (optional chaining)
+- Model selector
+- Prompt textarea
+- Token budget
+- Proof mode configuration
+
+**Updated Submit Handler** (lines 211-380):
+- Builds `config_json` for each typed step
+- Validates required fields per step type
+- Maintains backward compatibility with legacy steps
+
+**config_json Format Examples**:
+
+Ingest:
+```json
+{
+  "stepType": "ingest",
+  "source_path": "/path/to/doc.pdf",
+  "format": "pdf",
+  "privacy_status": "public"
+}
+```
+
+Summarize:
+```json
+{
+  "stepType": "summarize",
+  "source_step": 0,
+  "model": "stub",
+  "summary_type": "brief",
+  "token_budget": 2000
+}
+```
+
+Prompt:
+```json
+{
+  "stepType": "prompt",
+  "model": "stub",
+  "prompt": "Analyze this",
+  "use_output_from": 0,
+  "token_budget": 1500
+}
+```
+
+### ✅ 8. UI Documentation
+**File**: `docs/TYPED_STEPS_UI_COMPLETE.md` (new)
+
+Complete UI guide including:
+- How to create each step type
+- Chaining workflow examples
+- Test cases for UI
+- Current limitations and future enhancements
+
 ## Progress Metrics
 
 **Phase 1 (Backend Foundation)**: 100% Complete ✅
@@ -357,9 +442,9 @@ Includes:
 - ✅ Chained executor (35%)
 - ✅ Testing guide (5%)
 
-**Overall Sprint 2C**: 33% Complete
+**Overall Sprint 2C**: 75% Complete
 - ✅ Phase 1: 100% (Backend) - **COMPLETE**
-- ⏳ Phase 2: 0% (Frontend)
+- ✅ Phase 2: 100% (Frontend) - **COMPLETE**
 - ⏳ Phase 3: 0% (Testing)
 
 ## Next Session Plan

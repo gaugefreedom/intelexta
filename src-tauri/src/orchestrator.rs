@@ -39,10 +39,10 @@ pub struct DocumentIngestionConfig {
 /// Typed step configuration enum
 /// Each step type has its own configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "stepType", rename_all = "camelCase")]
+#[serde(tag = "stepType")]
 pub enum StepConfig {
     /// Ingest document from filesystem
-    #[serde(rename = "ingest")]
+    #[serde(rename = "ingest", rename_all = "camelCase")]
     Ingest {
         source_path: String,
         format: String,  // "pdf", "latex", "txt", "docx"
@@ -50,7 +50,7 @@ pub enum StepConfig {
     },
 
     /// Summarize output from a previous step
-    #[serde(rename = "summarize")]
+    #[serde(rename = "summarize", rename_all = "camelCase")]
     Summarize {
         /// Optional: index of source step to summarize (None = error)
         source_step: Option<usize>,
@@ -72,7 +72,7 @@ pub enum StepConfig {
     },
 
     /// Custom LLM prompt (optionally using previous step output)
-    #[serde(rename = "prompt")]
+    #[serde(rename = "prompt", rename_all = "camelCase")]
     Prompt {
         model: String,
         prompt: String,
@@ -1739,12 +1739,22 @@ pub(crate) fn start_run_with_client(
         // Execute the checkpoint - handle typed steps with chaining
         let execution = if let Some(ref config_json_str) = config.config_json {
             // Try to parse as typed StepConfig
-            if let Ok(step_config) = serde_json::from_str::<StepConfig>(config_json_str) {
-                // Execute based on step type
-                match step_config {
-                    StepConfig::Ingest { .. } => {
-                        // Use existing document ingestion logic
-                        execute_document_ingestion_checkpoint(config_json_str)?
+            eprintln!("🔍 Attempting to parse config_json: {}", config_json_str);
+            match serde_json::from_str::<StepConfig>(config_json_str) {
+                Ok(step_config) => {
+                    eprintln!("✅ Successfully parsed typed step: {:?}", step_config);
+                    // Execute based on step type
+                    match step_config {
+                    StepConfig::Ingest { source_path, format, privacy_status } => {
+                        // Build DocumentIngestionConfig JSON for the ingestion function
+                        let ingestion_config = DocumentIngestionConfig {
+                            source_path,
+                            format,
+                            privacy_status,
+                            output_storage: "database".to_string(),
+                        };
+                        let ingestion_json = serde_json::to_string(&ingestion_config)?;
+                        execute_document_ingestion_checkpoint(&ingestion_json)?
                     }
                     StepConfig::Summarize {
                         source_step,
@@ -1772,8 +1782,14 @@ pub(crate) fn start_run_with_client(
                                 custom_instructions.as_deref(),
                             )?;
 
-                            // Execute as LLM checkpoint
-                            execute_llm_checkpoint(&model, &prompt, llm_client)?
+                            // Execute based on model type (stub, mock, or real LLM)
+                            if model == STUB_MODEL_ID {
+                                execute_stub_checkpoint(stored_run.seed, config.order_index, &prompt)
+                            } else if model.starts_with(CLAUDE_MODEL_PREFIX) {
+                                execute_claude_mock_checkpoint(&model, &prompt)?
+                            } else {
+                                execute_llm_checkpoint(&model, &prompt, llm_client)?
+                            }
                         } else {
                             return Err(anyhow!(
                                 "Summarize step {} requires a source_step",
@@ -1803,13 +1819,23 @@ pub(crate) fn start_run_with_client(
                             prompt.clone()
                         };
 
-                        // Execute as LLM checkpoint
-                        execute_llm_checkpoint(&model, &final_prompt, llm_client)?
+                        // Execute based on model type (stub, mock, or real LLM)
+                        if model == STUB_MODEL_ID {
+                            execute_stub_checkpoint(stored_run.seed, config.order_index, &final_prompt)
+                        } else if model.starts_with(CLAUDE_MODEL_PREFIX) {
+                            execute_claude_mock_checkpoint(&model, &final_prompt)?
+                        } else {
+                            execute_llm_checkpoint(&model, &final_prompt, llm_client)?
+                        }
+                    }
                     }
                 }
-            } else {
-                // Not a typed config, use legacy execution
-                execute_checkpoint(config, stored_run.seed, llm_client)?
+                Err(parse_err) => {
+                    eprintln!("❌ Failed to parse as typed step: {}", parse_err);
+                    eprintln!("   Falling back to legacy execution");
+                    // Not a typed config, use legacy execution
+                    execute_checkpoint(config, stored_run.seed, llm_client)?
+                }
             }
         } else {
             // No config_json, use legacy execution

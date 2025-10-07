@@ -1093,6 +1093,13 @@ pub fn delete_run_step(checkpoint_id: String, pool: State<'_, DbPool>) -> Result
     let (run_id, order_index) =
         row.ok_or_else(|| Error::Api(format!("checkpoint config {checkpoint_id} not found")))?;
 
+    // Delete associated checkpoints first to avoid foreign key constraint violation
+    tx.execute(
+        "DELETE FROM checkpoints WHERE checkpoint_config_id = ?1",
+        params![&checkpoint_id],
+    )?;
+
+    // Now delete the run step configuration
     tx.execute(
         "DELETE FROM run_steps WHERE id = ?1",
         params![&checkpoint_id],

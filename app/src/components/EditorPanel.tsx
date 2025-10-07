@@ -502,8 +502,33 @@ function sanitizeCheckpointFormValue(
 ): RunStepRequest {
   const checkpointType = sanitizeLabelForRequest(value.checkpointType, "Step");
 
+  // Handle typed steps (new system)
+  if (value.stepType === "ingest" || value.stepType === "summarize" || value.stepType === "prompt") {
+    // For typed steps, only include fields that are actually present
+    const result: RunStepRequest = {
+      stepType: value.stepType,
+      checkpointType,
+      configJson: value.configJson,
+      tokenBudget: value.tokenBudget || 0,
+      proofMode: value.proofMode || "exact",
+    };
+
+    // Only add model and prompt if they exist (needed for some step types)
+    if (value.model) {
+      result.model = value.model;
+    }
+    if (value.prompt) {
+      result.prompt = value.prompt;
+    }
+    if (value.epsilon !== undefined && value.epsilon !== null) {
+      result.epsilon = value.epsilon;
+    }
+
+    return result;
+  }
+
   if (value.stepType === "document_ingestion") {
-    // Document ingestion step
+    // Document ingestion step (legacy)
     const config: DocumentIngestionConfig = {
       sourcePath: value.sourcePath || "",
       format: value.format || "pdf",
@@ -518,7 +543,7 @@ function sanitizeCheckpointFormValue(
     };
   }
 
-  // LLM step (default)
+  // LLM step (legacy, default)
   const fallbackModel = modelOptions[0] ?? "stub-model";
   const model = normalizeModelSelection(value.model || "", modelOptions, fallbackModel);
   const prompt = sanitizePromptForRequest(value.prompt || "");
@@ -1065,21 +1090,26 @@ export default function EditorPanel({
       if (!selectedRunId) {
         return;
       }
+      console.log("Delete button clicked for:", config.checkpointType);
       const confirmed = window.confirm(
         `Delete checkpoint "${config.checkpointType}" from this run?`,
       );
+      console.log("User confirmed:", confirmed);
       if (!confirmed) {
+        console.log("User cancelled deletion");
         return;
       }
       setStatusMessage(null);
       setErrorMessage(null);
-      const previous = checkpointConfigs.map((item) => ({ ...item }));
-      const optimistic = checkpointConfigs
-        .filter((item) => item.id !== config.id)
-        .map((item, index) => ({ ...item, orderIndex: index }));
-      setCheckpointConfigs(optimistic);
       try {
+        console.log("Calling deleteRunStep API...");
         await deleteRunStep(config.id);
+        console.log("Delete successful, updating UI...");
+        // Update UI only after successful deletion
+        const updated = checkpointConfigs
+          .filter((item) => item.id !== config.id)
+          .map((item, index) => ({ ...item, orderIndex: index }));
+        setCheckpointConfigs(updated);
         setStatusMessage("Checkpoint deleted.");
         setActiveEditor(null);
         setEditorDetails(null);
@@ -1092,7 +1122,6 @@ export default function EditorPanel({
         const message =
           err instanceof Error ? err.message : "Unable to delete checkpoint configuration.";
         setErrorMessage(message);
-        setCheckpointConfigs(previous);
       }
     },
     [checkpointConfigs, selectedRunId],
@@ -1652,6 +1681,11 @@ export default function EditorPanel({
         {activeEditor && (
           <CheckpointEditor
             availableModels={combinedModelOptions}
+            existingSteps={checkpointConfigs.map(step => ({
+              orderIndex: step.orderIndex,
+              checkpointType: step.checkpointType,
+              stepType: step.stepType,
+            }))}
             initialValue={
               activeEditor.mode === "edit"
                 ? {

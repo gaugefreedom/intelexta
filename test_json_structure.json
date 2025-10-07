@@ -1,0 +1,57 @@
+{
+  "test_cases": [
+    {
+      "name": "Ingest Step",
+      "json": {
+        "stepType": "ingest",
+        "sourcePath": "/path/to/document.pdf",
+        "format": "pdf",
+        "privacyStatus": "public"
+      }
+    },
+    {
+      "name": "Summarize Step",
+      "json": {
+        "stepType": "summarize",
+        "sourceStep": 0,
+        "model": "stub",
+        "summaryType": "brief",
+        "tokenBudget": 2000,
+        "proofMode": "exact"
+      }
+    },
+    {
+      "name": "Summarize with custom instructions",
+      "json": {
+        "stepType": "summarize",
+        "sourceStep": 0,
+        "model": "stub",
+        "summaryType": "custom",
+        "customInstructions": "Focus on methodology",
+        "tokenBudget": 2000,
+        "proofMode": "exact"
+      }
+    },
+    {
+      "name": "Prompt Step (standalone)",
+      "json": {
+        "stepType": "prompt",
+        "model": "stub",
+        "prompt": "What are the key findings?",
+        "tokenBudget": 1500,
+        "proofMode": "exact"
+      }
+    },
+    {
+      "name": "Prompt Step (with context)",
+      "json": {
+        "stepType": "prompt",
+        "model": "stub",
+        "prompt": "What are the key findings?",
+        "useOutputFrom": 0,
+        "tokenBudget": 1500,
+        "proofMode": "exact"
+      }
+    }
+  ]
+}

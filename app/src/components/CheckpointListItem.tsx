@@ -39,7 +39,7 @@ export default function CheckpointListItem({
   onOpenInteractive,
 }: CheckpointListItemProps) {
   const orderLabel = config.orderIndex + 1;
-  const isDocumentIngestion = config.stepType === 'document_ingestion';
+  const isDocumentIngestion = config.stepType === 'document_ingestion' || config.stepType === 'ingest';
   const isInteractive = config.checkpointType.trim().toLowerCase() === 'interactivechat'.toLowerCase();
 
   // Generate preview based on step type
@@ -47,9 +47,27 @@ export default function CheckpointListItem({
   if (isDocumentIngestion && config.configJson) {
     try {
       const docConfig = JSON.parse(config.configJson);
-      promptPreview = `Document: ${docConfig.sourcePath} (${docConfig.format})`;
+      promptPreview = `Document: ${docConfig.sourcePath || docConfig.source_path} (${docConfig.format})`;
     } catch {
       promptPreview = 'Document ingestion';
+    }
+  } else if (config.stepType === 'summarize' && config.configJson) {
+    try {
+      const summaryConfig = JSON.parse(config.configJson);
+      const sourceStepLabel = summaryConfig.sourceStep !== undefined ? `Step ${summaryConfig.sourceStep + 1}` : 'unknown';
+      promptPreview = `Summarize ${sourceStepLabel} (${summaryConfig.summaryType || 'brief'})`;
+    } catch {
+      promptPreview = 'Summarize previous step';
+    }
+  } else if (config.stepType === 'prompt' && config.configJson) {
+    try {
+      const promptConfig = JSON.parse(config.configJson);
+      const contextLabel = promptConfig.useOutputFrom !== undefined && promptConfig.useOutputFrom !== null
+        ? ` (with context from Step ${promptConfig.useOutputFrom + 1})`
+        : '';
+      promptPreview = truncatePrompt(promptConfig.prompt) + contextLabel;
+    } catch {
+      promptPreview = config.prompt ? truncatePrompt(config.prompt) : '(no prompt)';
     }
   } else if (config.prompt) {
     promptPreview = truncatePrompt(config.prompt);
@@ -117,8 +135,56 @@ export default function CheckpointListItem({
                       <strong>Format:</strong> {docConfig.format?.toUpperCase() || 'Unknown'}
                     </span>
                     <span>
-                      <strong>Privacy:</strong> {docConfig.privacyStatus || 'Unknown'}
+                      <strong>Privacy:</strong> {docConfig.privacyStatus || docConfig.privacy_status || 'Unknown'}
                     </span>
+                  </>
+                );
+              } catch {
+                return null;
+              }
+            })()}
+          </>
+        ) : config.stepType === 'summarize' ? (
+          <>
+            {config.configJson && (() => {
+              try {
+                const summaryConfig = JSON.parse(config.configJson);
+                return (
+                  <>
+                    <span>
+                      <strong>Model:</strong> {summaryConfig.model || config.model || 'Unknown'}
+                    </span>
+                    <span>
+                      <strong>Type:</strong> {summaryConfig.summaryType || 'brief'}
+                    </span>
+                    <span>
+                      <strong>Token Budget:</strong> {config.tokenBudget.toLocaleString()}
+                    </span>
+                  </>
+                );
+              } catch {
+                return null;
+              }
+            })()}
+          </>
+        ) : config.stepType === 'prompt' ? (
+          <>
+            {config.configJson && (() => {
+              try {
+                const promptConfig = JSON.parse(config.configJson);
+                return (
+                  <>
+                    <span>
+                      <strong>Model:</strong> {promptConfig.model || config.model || 'Unknown'}
+                    </span>
+                    <span>
+                      <strong>Token Budget:</strong> {config.tokenBudget.toLocaleString()}
+                    </span>
+                    {promptConfig.useOutputFrom !== undefined && promptConfig.useOutputFrom !== null && (
+                      <span>
+                        <strong>Uses:</strong> Step {promptConfig.useOutputFrom + 1}
+                      </span>
+                    )}
                   </>
                 );
               } catch {
@@ -152,7 +218,10 @@ export default function CheckpointListItem({
         </button>
         <button
           type="button"
-          onClick={() => onDelete(config)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(config);
+          }}
           style={buttonDanger}
         >
           Delete

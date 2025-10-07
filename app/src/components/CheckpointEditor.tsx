@@ -26,6 +26,7 @@ export interface CheckpointFormValue {
 
 interface CheckpointEditorProps {
   availableModels: string[];
+  existingSteps?: Array<{ orderIndex: number; checkpointType: string; stepType: string }>;
   initialValue?: CheckpointFormValue;
   mode: "create" | "edit";
   onSubmit: (value: CheckpointFormValue) => Promise<void> | void;
@@ -78,6 +79,7 @@ function clampNormalizedEpsilon(value: number): number {
 
 export default function CheckpointEditor({
   availableModels,
+  existingSteps = [],
   initialValue,
   mode,
   onSubmit,
@@ -91,6 +93,29 @@ export default function CheckpointEditor({
     }
     return Array.from(set);
   }, [availableModels, initialValue?.model]);
+
+  // Filter steps to only show previous steps (for chaining)
+  // When creating a new step, show all existing steps
+  // When editing, show only steps before the current one
+  const availablePreviousSteps = React.useMemo(() => {
+    // For create mode, all existing steps can be referenced
+    if (mode === "create") {
+      return existingSteps;
+    }
+
+    // For edit mode, find current step's order index and filter
+    // This prevents circular references and forward references
+    const currentOrderIndex = existingSteps.findIndex(
+      step => step.checkpointType === initialValue?.checkpointType
+    );
+
+    if (currentOrderIndex === -1) {
+      return existingSteps; // Fallback: show all if we can't find current step
+    }
+
+    // Only show steps that come before the current step
+    return existingSteps.filter(step => step.orderIndex < currentOrderIndex);
+  }, [existingSteps, mode, initialValue?.checkpointType]);
 
   const defaultModel = mergedModels[0] ?? "stub-model";
 
@@ -124,6 +149,12 @@ export default function CheckpointEditor({
   const [privacyStatus, setPrivacyStatus] = React.useState(
     initialValue?.privacyStatus ?? "public",
   );
+
+  // Typed step fields (new system)
+  const [sourceStep, setSourceStep] = React.useState<number | null>(null);
+  const [useOutputFrom, setUseOutputFrom] = React.useState<number | null>(null);
+  const [summaryType, setSummaryType] = React.useState("brief");
+  const [customInstructions, setCustomInstructions] = React.useState("");
 
   const [error, setError] = React.useState<string | null>(null);
   const proofModeFieldName = React.useId();
@@ -202,8 +233,120 @@ export default function CheckpointEditor({
 
     setError(null);
 
+    // Handle typed steps (new system)
+    if (stepType === "ingest") {
+      const cleanedPath = sourcePath.trim();
+      if (!cleanedPath) {
+        setError("Document path is required.");
+        return;
+      }
+
+      const configJson = JSON.stringify({
+        stepType: "ingest",
+        sourcePath: cleanedPath,
+        format,
+        privacyStatus,
+      });
+
+      await onSubmit({
+        stepType: "ingest",
+        checkpointType: cleanedType,
+        sourcePath: cleanedPath,
+        format,
+        privacyStatus,
+        configJson,
+        tokenBudget: 1000, // Default budget for ingest steps
+        proofMode: "exact",
+      });
+      return;
+    }
+
+    if (stepType === "summarize") {
+      if (sourceStep === null) {
+        setError("Source step is required for summarize.");
+        return;
+      }
+
+      const cleanedModel = sanitizeLabel(model || defaultModel);
+      if (!cleanedModel) {
+        setError("Model is required.");
+        return;
+      }
+
+      const parsedBudget = Number.parseInt(tokenBudget, 10);
+      if (!Number.isFinite(parsedBudget) || parsedBudget < 0) {
+        setError("Token budget must be a non-negative integer.");
+        return;
+      }
+
+      const configJson = JSON.stringify({
+        stepType: "summarize",
+        sourceStep: sourceStep,
+        model: cleanedModel,
+        summaryType: summaryType,
+        customInstructions: summaryType === "custom" ? customInstructions : undefined,
+        tokenBudget: parsedBudget,
+        proofMode: proofMode,
+        epsilon: proofMode === "concordant" ? epsilon : undefined,
+      });
+
+      await onSubmit({
+        stepType: "summarize",
+        checkpointType: cleanedType,
+        model: cleanedModel,
+        prompt: `Summarize the output from step ${sourceStep + 1}`, // Fallback for legacy execution
+        tokenBudget: parsedBudget,
+        proofMode,
+        epsilon: proofMode === "concordant" ? epsilon : null,
+        configJson,
+      });
+      return;
+    }
+
+    if (stepType === "prompt") {
+      const cleanedModel = sanitizeLabel(model || defaultModel);
+      if (!cleanedModel) {
+        setError("Model is required.");
+        return;
+      }
+
+      const parsedBudget = Number.parseInt(tokenBudget, 10);
+      if (!Number.isFinite(parsedBudget) || parsedBudget < 0) {
+        setError("Token budget must be a non-negative integer.");
+        return;
+      }
+
+      const cleanedPrompt = sanitizePrompt(prompt);
+      if (!cleanedPrompt) {
+        setError("Prompt text is required.");
+        return;
+      }
+
+      const configJson = JSON.stringify({
+        stepType: "prompt",
+        model: cleanedModel,
+        prompt: cleanedPrompt,
+        useOutputFrom: useOutputFrom === null ? undefined : useOutputFrom,
+        tokenBudget: parsedBudget,
+        proofMode: proofMode,
+        epsilon: proofMode === "concordant" ? epsilon : undefined,
+      });
+
+      await onSubmit({
+        stepType: "prompt",
+        checkpointType: cleanedType,
+        model: cleanedModel,
+        tokenBudget: parsedBudget,
+        prompt: cleanedPrompt,
+        proofMode,
+        epsilon: proofMode === "concordant" ? epsilon : null,
+        configJson,
+      });
+      return;
+    }
+
+    // Legacy step types
     if (stepType === "document_ingestion") {
-      // Validate document ingestion fields
       const cleanedPath = sourcePath.trim();
       if (!cleanedPath) {
         setError("Document path is required.");
@@ -220,48 +363,49 @@ export default function CheckpointEditor({
       return;
     }
 
-    // LLM step validation
-    const cleanedModel = sanitizeLabel(model || defaultModel);
-    if (!cleanedModel) {
-      setError("Model is required.");
-      return;
-    }
-
-    const parsedBudget = Number.parseInt(tokenBudget, 10);
-    if (!Number.isFinite(parsedBudget) || parsedBudget < 0) {
-      setError("Token budget must be a non-negative integer.");
-      return;
-    }
-
-    const cleanedPrompt = sanitizePrompt(prompt);
-    if (!cleanedPrompt) {
-      setError("Prompt text is required.");
-      return;
-    }
-
-    if (!proofMode || (proofMode !== "exact" && proofMode !== "concordant")) {
-      setError("Proof mode selection is required.");
-      return;
-    }
-
-    let epsilonValue: number | null = null;
-    if (proofMode === "concordant") {
-      if (!isValidNormalizedEpsilon(epsilon)) {
-        setError("Concordant checkpoints require an epsilon between 0 and 1.");
+    if (stepType === "llm") {
+      const cleanedModel = sanitizeLabel(model || defaultModel);
+      if (!cleanedModel) {
+        setError("Model is required.");
         return;
       }
-      epsilonValue = clampNormalizedEpsilon(epsilon as number);
-    }
 
-    await onSubmit({
-      stepType: "llm",
-      checkpointType: cleanedType,
-      model: cleanedModel,
-      tokenBudget: parsedBudget,
-      prompt: cleanedPrompt,
-      proofMode,
-      epsilon: epsilonValue,
-    });
+      const parsedBudget = Number.parseInt(tokenBudget, 10);
+      if (!Number.isFinite(parsedBudget) || parsedBudget < 0) {
+        setError("Token budget must be a non-negative integer.");
+        return;
+      }
+
+      const cleanedPrompt = sanitizePrompt(prompt);
+      if (!cleanedPrompt) {
+        setError("Prompt text is required.");
+        return;
+      }
+
+      if (!proofMode || (proofMode !== "exact" && proofMode !== "concordant")) {
+        setError("Proof mode selection is required.");
+        return;
+      }
+
+      let epsilonValue: number | null = null;
+      if (proofMode === "concordant") {
+        if (!isValidNormalizedEpsilon(epsilon)) {
+          setError("Concordant checkpoints require an epsilon between 0 and 1.");
+          return;
+        }
+        epsilonValue = clampNormalizedEpsilon(epsilon as number);
+      }
+
+      await onSubmit({
+        stepType: "llm",
+        checkpointType: cleanedType,
+        model: cleanedModel,
+        tokenBudget: parsedBudget,
+        prompt: cleanedPrompt,
+        proofMode,
+        epsilon: epsilonValue,
+      });
+    }
   };
 
   const headerLabel = mode === "create" ? "Add Checkpoint" : "Edit Checkpoint";
@@ -286,10 +430,13 @@ export default function CheckpointEditor({
         Step Type
         <select
           value={stepType}
-          onChange={(event) => setStepType(event.target.value as "llm" | "document_ingestion")}
+          onChange={(event) => setStepType(event.target.value as "llm" | "document_ingestion" | "ingest" | "summarize" | "prompt")}
         >
-          <option value="llm">LLM Prompt</option>
-          <option value="document_ingestion">Document Ingestion</option>
+          <option key="ingest" value="ingest">Ingest Document</option>
+          <option key="summarize" value="summarize">Summarize</option>
+          <option key="prompt" value="prompt">Prompt (with optional context)</option>
+          <option key="document_ingestion" value="document_ingestion">Document Ingestion (legacy)</option>
+          <option key="llm" value="llm">LLM Prompt (legacy)</option>
         </select>
       </label>
 
@@ -303,30 +450,8 @@ export default function CheckpointEditor({
         />
       </label>
 
-      {stepType === "llm" ? (
-        <>
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            Model
-            <select value={model} onChange={(event) => setModel(event.target.value)}>
-              {mergedModels.map((modelId) => (
-                <option key={modelId} value={modelId}>
-                  {modelId}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            Token Budget
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={tokenBudget}
-              onChange={(event) => setTokenBudget(event.target.value)}
-            />
-          </label>
-        </>
-      ) : (
+      {/* Render fields based on step type */}
+      {(stepType === "ingest" || stepType === "document_ingestion") && (
         <>
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             Document Path
@@ -350,10 +475,10 @@ export default function CheckpointEditor({
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             Format
             <select value={format} onChange={(event) => setFormat(event.target.value)}>
-              <option value="pdf">PDF</option>
-              <option value="latex">LaTeX</option>
-              <option value="txt">TXT</option>
-              <option value="docx">DOCX</option>
+              <option key="pdf" value="pdf">PDF</option>
+              <option key="latex" value="latex">LaTeX</option>
+              <option key="txt" value="txt">TXT</option>
+              <option key="docx" value="docx">DOCX</option>
             </select>
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -362,10 +487,137 @@ export default function CheckpointEditor({
               value={privacyStatus}
               onChange={(event) => setPrivacyStatus(event.target.value)}
             >
-              <option value="public">Public</option>
-              <option value="consent_obtained_anonymized">Consent Obtained (Anonymized)</option>
-              <option value="internal">Internal</option>
+              <option key="public" value="public">Public</option>
+              <option key="consent_obtained_anonymized" value="consent_obtained_anonymized">Consent Obtained (Anonymized)</option>
+              <option key="internal" value="internal">Internal</option>
             </select>
+          </label>
+        </>
+      )}
+
+      {stepType === "summarize" && (
+        <>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Source Step
+            <select
+              value={sourceStep ?? ""}
+              onChange={(event) => setSourceStep(event.target.value ? parseInt(event.target.value) : null)}
+            >
+              <option value="">Select a previous step...</option>
+              {availablePreviousSteps.map((step) => (
+                <option key={step.orderIndex} value={step.orderIndex}>
+                  Step {step.orderIndex + 1}: {step.checkpointType}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Model
+            <select value={model} onChange={(event) => setModel(event.target.value)}>
+              {mergedModels.map((modelId) => (
+                <option key={modelId} value={modelId}>
+                  {modelId}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Summary Type
+            <select value={summaryType} onChange={(event) => setSummaryType(event.target.value)}>
+              <option key="brief" value="brief">Brief (2-3 sentences)</option>
+              <option key="detailed" value="detailed">Detailed (comprehensive)</option>
+              <option key="academic" value="academic">Academic (methodology + findings)</option>
+              <option key="custom" value="custom">Custom instructions</option>
+            </select>
+          </label>
+          {summaryType === "custom" && (
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              Custom Instructions
+              <textarea
+                value={customInstructions}
+                onChange={(event) => setCustomInstructions(event.target.value)}
+                placeholder="Enter your custom summary instructions..."
+                rows={3}
+                style={{
+                  fontFamily: "inherit",
+                  fontSize: "inherit",
+                  padding: "6px 8px",
+                  backgroundColor: "#1e1e1e",
+                  color: "#d4d4d4",
+                  border: "1px solid #3c3c3c",
+                  borderRadius: "4px",
+                }}
+              />
+            </label>
+          )}
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Token Budget
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={tokenBudget}
+              onChange={(event) => setTokenBudget(event.target.value)}
+            />
+          </label>
+        </>
+      )}
+
+      {(stepType === "prompt" || stepType === "llm") && (
+        <>
+          {stepType === "prompt" && (
+            <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              Use Output From (optional)
+              <select
+                value={useOutputFrom ?? ""}
+                onChange={(event) => setUseOutputFrom(event.target.value ? parseInt(event.target.value) : null)}
+              >
+                <option value="">None (standalone prompt)</option>
+                {availablePreviousSteps.map((step) => (
+                  <option key={step.orderIndex} value={step.orderIndex}>
+                    Step {step.orderIndex + 1}: {step.checkpointType}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Model
+            <select value={model} onChange={(event) => setModel(event.target.value)}>
+              {mergedModels.map((modelId) => (
+                <option key={modelId} value={modelId}>
+                  {modelId}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Prompt
+            <textarea
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="Enter your prompt..."
+              rows={4}
+              style={{
+                fontFamily: "inherit",
+                fontSize: "inherit",
+                padding: "6px 8px",
+                backgroundColor: "#1e1e1e",
+                color: "#d4d4d4",
+                border: "1px solid #3c3c3c",
+                borderRadius: "4px",
+              }}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            Token Budget
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={tokenBudget}
+              onChange={(event) => setTokenBudget(event.target.value)}
+            />
           </label>
         </>
       )}
