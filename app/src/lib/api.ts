@@ -105,6 +105,8 @@ export interface SubmitTurnResult {
 
 export type CheckpointReplayMode = 'exact' | 'concordant' | 'interactive';
 
+export type ReplayGrade = 'A_PLUS' | 'A' | 'B' | 'C' | 'D' | 'F';
+
 export interface CheckpointReplayReport {
   checkpointConfigId?: string | null;
   checkpointType?: string | null;
@@ -120,6 +122,8 @@ export interface CheckpointReplayReport {
   semanticDistance?: number | null;
   epsilon?: number | null;
   configuredEpsilon?: number | null;
+  similarityScore?: number | null;
+  grade?: ReplayGrade | null;
 }
 
 export interface ReplayReport {
@@ -133,6 +137,8 @@ export interface ReplayReport {
   semanticDistance?: number | null;
   epsilon?: number | null;
   checkpointReports: CheckpointReplayReport[];
+  similarityScore?: number | null;
+  grade?: ReplayGrade | null;
 }
 
 export interface CarSampler {
@@ -252,6 +258,16 @@ export interface Policy {
   budgetTokens: number;
   budgetUsd: number;
   budgetNatureCost: number;
+}
+
+export interface PolicyVersion {
+  id: number;
+  projectId: string;
+  version: number;
+  policy: Policy;
+  createdAt: string;
+  createdBy?: string | null;
+  changeNotes?: string | null;
 }
 
 export interface RunCostEstimates {
@@ -504,6 +520,30 @@ export async function getPolicy(projectId: string): Promise<Policy> {
 
 export async function updatePolicy(projectId: string, policy: Policy): Promise<void> {
   await invoke('update_policy', { projectId, policy });
+}
+
+export async function updatePolicyWithNotes(
+  projectId: string,
+  policy: Policy,
+  changeNotes?: string
+): Promise<void> {
+  await invoke('update_policy_with_notes', {
+    projectId,
+    policy,
+    changeNotes: changeNotes ?? null
+  });
+}
+
+export async function getPolicyVersions(projectId: string): Promise<PolicyVersion[]> {
+  return await invoke<PolicyVersion[]>('get_policy_versions', { projectId });
+}
+
+export async function getPolicyVersion(projectId: string, version: number): Promise<PolicyVersion | null> {
+  return await invoke<PolicyVersion | null>('get_policy_version', { projectId, version });
+}
+
+export async function getCurrentPolicyVersionNumber(projectId: string): Promise<number> {
+  return await invoke<number>('get_current_policy_version_number', { projectId });
 }
 
 

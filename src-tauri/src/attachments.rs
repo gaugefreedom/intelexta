@@ -78,6 +78,38 @@ impl AttachmentStore {
             .with_context(|| format!("Failed to read attachment from {:?}", file_path))
     }
 
+    /// Store content with a known hash (useful for importing)
+    /// Verifies the hash matches the content for integrity
+    pub fn store_with_hash(&self, hash: &str, content: &str) -> Result<()> {
+        // Verify the hash matches the content
+        let computed_hash = self.compute_hash(content);
+        if computed_hash != hash {
+            return Err(anyhow!(
+                "Hash mismatch: expected {}, computed {}",
+                hash,
+                computed_hash
+            ));
+        }
+
+        // Get the file path
+        let file_path = self.hash_to_path(hash);
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {:?}", parent))?;
+        }
+
+        // Only write if file doesn't already exist (deduplication)
+        if !file_path.exists() {
+            fs::write(&file_path, content).with_context(|| {
+                format!("Failed to write attachment to {:?}", file_path)
+            })?;
+        }
+
+        Ok(())
+    }
+
     /// Check if an attachment exists for the given hash
     pub fn exists(&self, hash: &str) -> bool {
         self.hash_to_path(hash).exists()

@@ -2,7 +2,11 @@ import React from "react";
 import {
   getPolicy,
   updatePolicy,
+  updatePolicyWithNotes,
+  getPolicyVersions,
+  getCurrentPolicyVersionNumber,
   Policy,
+  PolicyVersion,
   estimateRunCost,
   type RunCostEstimates,
   exportProject,
@@ -22,6 +26,7 @@ import {
   combineButtonStyles,
 } from "../styles/common.js";
 import CheckpointDetailsPanel from "./CheckpointDetailsPanel.js";
+import PolicyHistoryModal from "./PolicyHistoryModal.js";
 
 export interface CarCheckpointRow {
   id: string;
@@ -90,6 +95,11 @@ export default function ContextPanel({
   const [saving, setSaving] = React.useState<boolean>(false);
   const [status, setStatus] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [changeNotes, setChangeNotes] = React.useState<string>("");
+  const [currentVersion, setCurrentVersion] = React.useState<number>(0);
+  const [showHistory, setShowHistory] = React.useState<boolean>(false);
+  const [policyVersions, setPolicyVersions] = React.useState<PolicyVersion[]>([]);
+  const [historyLoading, setHistoryLoading] = React.useState<boolean>(false);
 
   const [costEstimates, setCostEstimates] = React.useState<RunCostEstimates | null>(null);
   const [costLoading, setCostLoading] = React.useState<boolean>(false);
@@ -145,10 +155,15 @@ export default function ContextPanel({
     setLoading(true);
     setStatus(null);
     setError(null);
-    getPolicy(projectId)
-      .then((policyData) => {
+
+    Promise.all([
+      getPolicy(projectId),
+      getCurrentPolicyVersionNumber(projectId).catch(() => 0)
+    ])
+      .then(([policyData, versionNumber]) => {
         if (!cancelled) {
           setPolicy(policyData);
+          setCurrentVersion(versionNumber);
         }
       })
       .catch((err) => {
@@ -166,6 +181,20 @@ export default function ContextPanel({
     return () => {
       cancelled = true;
     };
+  }, [projectId]);
+
+  const handleViewHistory = React.useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const versions = await getPolicyVersions(projectId);
+      setPolicyVersions(versions);
+      setShowHistory(true);
+    } catch (err) {
+      console.error("Failed to load policy history", err);
+      setError("Could not load policy history.");
+    } finally {
+      setHistoryLoading(false);
+    }
   }, [projectId]);
 
   React.useEffect(() => {
@@ -246,10 +275,15 @@ export default function ContextPanel({
     setError(null);
 
     try {
-      await updatePolicy(projectId, policy);
-      const refreshed = await getPolicy(projectId);
+      await updatePolicyWithNotes(projectId, policy, changeNotes || undefined);
+      const [refreshed, newVersion] = await Promise.all([
+        getPolicy(projectId),
+        getCurrentPolicyVersionNumber(projectId).catch(() => currentVersion + 1)
+      ]);
       setPolicy(refreshed);
-      setStatus("Policy saved successfully.");
+      setCurrentVersion(newVersion);
+      setChangeNotes("");
+      setStatus(`Policy saved successfully (v${newVersion}).`);
       setCostRefreshToken((token) => token + 1);
       onPolicyUpdated?.();
     } catch (err) {
@@ -675,6 +709,20 @@ export default function ContextPanel({
         <p>Loading policy…</p>
       ) : policy ? (
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+            <div style={{ fontSize: "0.85rem", color: "#999" }}>
+              Current Version: <span style={{ color: "#fff", fontWeight: "bold" }}>{currentVersion || 1}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleViewHistory}
+              disabled={historyLoading}
+              style={combineButtonStyles(buttonSecondary)}
+            >
+              {historyLoading ? "Loading..." : "View History"}
+            </button>
+          </div>
+
           <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <input type="checkbox" checked={policy.allowNetwork} onChange={handleToggle} />
             Allow network access
@@ -710,6 +758,16 @@ export default function ContextPanel({
             </label>
           </div>
 
+          <label style={{ display: "flex", flexDirection: 'column', gap: '4px', fontSize: '0.8rem' }}>
+            Change Notes (optional)
+            <input
+              type="text"
+              placeholder="Describe what you changed..."
+              value={changeNotes}
+              onChange={(e) => setChangeNotes(e.target.value)}
+            />
+          </label>
+
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
             <button
               type="submit"
@@ -724,6 +782,14 @@ export default function ContextPanel({
         </form>
       ) : (
         <p>No policy found for this project.</p>
+      )}
+
+      {showHistory && (
+        <PolicyHistoryModal
+          versions={policyVersions}
+          currentVersion={currentVersion}
+          onClose={() => setShowHistory(false)}
+        />
       )}
 
       {/* --- Portability (buttons stacked vertically) --- */}

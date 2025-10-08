@@ -747,9 +747,12 @@ pub fn create_run(
     };
 
     {
+        // Get current policy version
+        let policy_version = crate::store::policies::get_current_version(&conn, project_id).ok();
+
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            "INSERT INTO runs (id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode, policy_version) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 &run_id,
                 project_id,
@@ -761,6 +764,7 @@ pub fn create_run(
                 (token_budget as i64),
                 default_model,
                 proof_mode.as_str(),
+                policy_version,
             ],
         )?;
 

@@ -29,6 +29,48 @@ pub enum CheckpointReplayMode {
     Interactive,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReplayGrade {
+    APlus,  // 95-100% similarity (0.00-0.05 distance)
+    A,      // 90-95%  (0.05-0.10)
+    B,      // 80-90%  (0.10-0.20)
+    C,      // 70-80%  (0.20-0.30)
+    D,      // 60-70%  (0.30-0.40)
+    F,      // < 60%   (> 0.40)
+}
+
+impl ReplayGrade {
+    /// Calculate grade from normalized distance (0.0 = identical, 1.0 = completely different)
+    pub fn from_distance(normalized_distance: f64) -> Self {
+        if normalized_distance <= 0.05 {
+            ReplayGrade::APlus
+        } else if normalized_distance <= 0.10 {
+            ReplayGrade::A
+        } else if normalized_distance <= 0.20 {
+            ReplayGrade::B
+        } else if normalized_distance <= 0.30 {
+            ReplayGrade::C
+        } else if normalized_distance <= 0.40 {
+            ReplayGrade::D
+        } else {
+            ReplayGrade::F
+        }
+    }
+
+    /// Get human-readable description
+    pub fn description(&self) -> &'static str {
+        match self {
+            ReplayGrade::APlus => "Excellent (95-100% similar)",
+            ReplayGrade::A => "Very Good (90-95% similar)",
+            ReplayGrade::B => "Good (80-90% similar)",
+            ReplayGrade::C => "Fair (70-80% similar)",
+            ReplayGrade::D => "Poor (60-70% similar)",
+            ReplayGrade::F => "Failed (< 60% similar)",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointReplayReport {
@@ -56,6 +98,14 @@ pub struct CheckpointReplayReport {
     pub epsilon: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub configured_epsilon: Option<f64>,
+    /// Similarity score (0.0 = completely different, 1.0 = identical)
+    /// For concordant mode only
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity_score: Option<f64>,
+    /// Replay grade based on similarity
+    /// For concordant mode only
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade: Option<ReplayGrade>,
 }
 
 impl CheckpointReplayReport {
@@ -75,6 +125,8 @@ impl CheckpointReplayReport {
             semantic_distance: None,
             epsilon: None,
             configured_epsilon: config.epsilon,
+            similarity_score: None,
+            grade: None,
         }
     }
 
@@ -94,6 +146,8 @@ impl CheckpointReplayReport {
             semantic_distance: None,
             epsilon: None,
             configured_epsilon: config.epsilon,
+            similarity_score: None,
+            grade: None,
         }
     }
 }
@@ -116,6 +170,12 @@ pub struct ReplayReport {
     pub epsilon: Option<f64>,
     #[serde(default)]
     pub checkpoint_reports: Vec<CheckpointReplayReport>,
+    /// Overall similarity score (average of concordant checkpoints)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity_score: Option<f64>,
+    /// Overall grade (worst grade from all checkpoints)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade: Option<ReplayGrade>,
 }
 
 fn checkpoint_mode_for_step(step: &orchestrator::RunStep) -> CheckpointReplayMode {
@@ -150,6 +210,8 @@ pub fn replay_car(car: &car::Car) -> anyhow::Result<ReplayReport> {
             semantic_distance: None,
             epsilon: None,
             configured_epsilon: step.epsilon,
+            similarity_score: None,
+            grade: None,
         };
 
         if let Some(process) = car.proof.process.as_ref() {
@@ -185,6 +247,8 @@ pub fn replay_car(car: &car::Car) -> anyhow::Result<ReplayReport> {
             semantic_distance: None,
             epsilon: None,
             checkpoint_reports,
+            similarity_score: None,
+            grade: None,
         });
     }
 
@@ -206,6 +270,8 @@ pub fn replay_car(car: &car::Car) -> anyhow::Result<ReplayReport> {
         semantic_distance: None,
         epsilon: None,
         checkpoint_reports,
+        similarity_score: None,
+        grade: None,
     })
 }
 
@@ -228,6 +294,8 @@ impl ReplayReport {
                 semantic_distance: None,
                 epsilon: None,
                 checkpoint_reports,
+                similarity_score: None,
+                grade: None,
             };
         }
 
@@ -267,6 +335,30 @@ impl ReplayReport {
             .rev()
             .find_map(|entry| entry.epsilon);
 
+        // Calculate overall similarity score (average of all concordant checkpoints with scores)
+        let similarity_scores: Vec<f64> = checkpoint_reports
+            .iter()
+            .filter_map(|entry| entry.similarity_score)
+            .collect();
+        let similarity_score = if !similarity_scores.is_empty() {
+            Some(similarity_scores.iter().sum::<f64>() / similarity_scores.len() as f64)
+        } else {
+            None
+        };
+
+        // Calculate overall grade (worst grade from all checkpoints)
+        let grade = checkpoint_reports
+            .iter()
+            .filter_map(|entry| entry.grade)
+            .min_by_key(|g| match g {
+                ReplayGrade::APlus => 0,
+                ReplayGrade::A => 1,
+                ReplayGrade::B => 2,
+                ReplayGrade::C => 3,
+                ReplayGrade::D => 4,
+                ReplayGrade::F => 5,
+            });
+
         ReplayReport {
             run_id,
             match_status,
@@ -278,6 +370,8 @@ impl ReplayReport {
             semantic_distance,
             epsilon,
             checkpoint_reports,
+            similarity_score,
+            grade,
         }
     }
 }
@@ -430,6 +524,15 @@ pub(crate) fn replay_concordant_checkpoint(
     report.semantic_distance = Some(distance);
 
     let normalized_distance = distance as f64 / 64.0;
+
+    // Calculate similarity score (inverse of distance: 1.0 = identical, 0.0 = completely different)
+    let similarity_score = 1.0 - normalized_distance;
+    report.similarity_score = Some(similarity_score);
+
+    // Calculate grade based on normalized distance
+    let grade = ReplayGrade::from_distance(normalized_distance);
+    report.grade = Some(grade);
+
     if normalized_distance <= epsilon {
         report.match_status = true;
     } else {
@@ -458,6 +561,8 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
                 semantic_distance: None,
                 epsilon: None,
                 checkpoint_reports: Vec::new(),
+                similarity_score: None,
+                grade: None,
             });
         }
     };
@@ -480,6 +585,8 @@ pub fn replay_exact_run(run_id: String, pool: &DbPool) -> Result<ReplayReport> {
             semantic_distance: None,
             epsilon: None,
             checkpoint_reports: Vec::new(),
+            similarity_score: None,
+            grade: None,
         });
     }
 
@@ -680,6 +787,8 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
                 semantic_distance: None,
                 epsilon: None,
                 checkpoint_reports: Vec::new(),
+                similarity_score: None,
+                grade: None,
             });
         }
     };
@@ -702,6 +811,8 @@ pub fn replay_concordant_run(run_id: String, pool: &DbPool) -> Result<ReplayRepo
             semantic_distance: None,
             epsilon: None,
             checkpoint_reports: Vec::new(),
+            similarity_score: None,
+            grade: None,
         });
     }
 
@@ -794,6 +905,8 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 semantic_distance: None,
                 epsilon: None,
                 checkpoint_reports: Vec::new(),
+                similarity_score: None,
+                grade: None,
             });
         }
     };
@@ -812,6 +925,8 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 semantic_distance: None,
                 epsilon: None,
                 checkpoint_reports: Vec::new(),
+                similarity_score: None,
+                grade: None,
             });
         }
     };
@@ -1049,6 +1164,8 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                     semantic_distance: None,
                     epsilon: None,
                     configured_epsilon: None,
+                    similarity_score: None,
+                    grade: None,
                 }
             }
         } else {
@@ -1067,6 +1184,8 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 semantic_distance: None,
                 epsilon: None,
                 configured_epsilon: None,
+                similarity_score: None,
+                grade: None,
             }
         };
 

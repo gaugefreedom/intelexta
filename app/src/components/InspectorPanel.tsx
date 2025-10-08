@@ -14,6 +14,7 @@ import {
   ExecutionStepProofSummary,
   RunProofMode,
   ProofBadgeKind,
+  ReplayGrade,
 } from "../lib/api";
 import CheckpointDetailsPanel, {
   formatIncidentMessage,
@@ -25,6 +26,28 @@ import {
   buttonDisabled,
   combineButtonStyles,
 } from "../styles/common.js";
+
+function gradeToDisplay(grade: ReplayGrade): string {
+  switch (grade) {
+    case 'A_PLUS': return 'A+';
+    case 'A': return 'A';
+    case 'B': return 'B';
+    case 'C': return 'C';
+    case 'D': return 'D';
+    case 'F': return 'F';
+  }
+}
+
+function gradeToColor(grade: ReplayGrade): string {
+  switch (grade) {
+    case 'A_PLUS': return '#4ade80'; // green-400
+    case 'A': return '#86efac'; // green-300
+    case 'B': return '#fbbf24'; // yellow-400
+    case 'C': return '#fb923c'; // orange-400
+    case 'D': return '#f87171'; // red-400
+    case 'F': return '#ef4444'; // red-500
+  }
+}
 
 function proofBadgeFor(mode: ProofBadgeKind): {
   label: string;
@@ -466,7 +489,14 @@ export default function InspectorPanel({
         const configuredEpsilon = entry.configuredEpsilon ?? entry.epsilon;
         const epsilonText =
           typeof configuredEpsilon === "number" ? configuredEpsilon.toFixed(2) : "∅";
-        message = `Concordant ${label}: ${entry.matchStatus ? "PASS" : "FAIL"} (distance ${normalized.toFixed(
+
+        // Build message with grade and similarity
+        const gradeText = entry.grade ? ` [Grade: ${gradeToDisplay(entry.grade)}]` : '';
+        const similarityText = typeof entry.similarityScore === "number"
+          ? ` ${(entry.similarityScore * 100).toFixed(1)}% similar`
+          : '';
+
+        message = `Concordant ${label}: ${entry.matchStatus ? "PASS" : "FAIL"}${gradeText}${similarityText} (distance ${normalized.toFixed(
           2,
         )} ${comparison} ε=${epsilonText})`;
         if (!entry.matchStatus && entry.errorMessage) {
@@ -493,6 +523,7 @@ export default function InspectorPanel({
         key: entry.checkpointConfigId ?? `checkpoint-${index}`,
         tone,
         message,
+        grade: entry.grade,
       };
     };
 
@@ -502,7 +533,9 @@ export default function InspectorPanel({
       return {
         overallTone: replayReport.matchStatus ? "success" : "error",
         overallMessage,
-        checkpoints: [] as { key: string; tone: "success" | "error"; message: string }[],
+        checkpoints: [] as { key: string; tone: "success" | "error"; message: string; grade?: ReplayGrade | null }[],
+        overallGrade: null,
+        overallSimilarity: null,
       };
     }
 
@@ -511,8 +544,13 @@ export default function InspectorPanel({
     );
 
     const summaryBase = replayReport.matchStatus ? "Replay PASS" : "Replay FAIL";
+    const gradeText = replayReport.grade ? ` [Overall Grade: ${gradeToDisplay(replayReport.grade)}]` : '';
+    const similarityText = typeof replayReport.similarityScore === "number"
+      ? ` ${(replayReport.similarityScore * 100).toFixed(1)}% similar`
+      : '';
+
     const overallMessage = replayReport.matchStatus
-      ? summaryBase
+      ? `${summaryBase}${gradeText}${similarityText}`
       : replayReport.errorMessage
       ? `${summaryBase} — ${replayReport.errorMessage}`
       : summaryBase;
@@ -521,6 +559,8 @@ export default function InspectorPanel({
       overallTone: replayReport.matchStatus ? "success" : "error",
       overallMessage,
       checkpoints: checkpointMessages,
+      overallGrade: replayReport.grade,
+      overallSimilarity: replayReport.similarityScore,
     };
   }, [replayReport]);
 
@@ -684,13 +724,30 @@ export default function InspectorPanel({
         {emitError && <span style={{ fontSize: "0.8rem", color: "#f48771" }}>{emitError}</span>}
         {replayFeedback && (
           <div style={{ fontSize: "0.8rem", display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span
-              style={{
-                color: replayFeedback.overallTone === "success" ? "#a5d6a7" : "#f48771",
-              }}
-            >
-              {replayFeedback.overallMessage}
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              {replayFeedback.overallGrade && (
+                <span
+                  style={{
+                    display: "inline-block",
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    fontWeight: "bold",
+                    fontSize: "0.75rem",
+                    backgroundColor: gradeToColor(replayFeedback.overallGrade),
+                    color: "#000",
+                  }}
+                >
+                  {gradeToDisplay(replayFeedback.overallGrade)}
+                </span>
+              )}
+              <span
+                style={{
+                  color: replayFeedback.overallTone === "success" ? "#a5d6a7" : "#f48771",
+                }}
+              >
+                {replayFeedback.overallMessage}
+              </span>
+            </div>
             {replayFeedback.checkpoints.length > 0 && (
               <ul style={{ margin: 0, paddingLeft: "1.2rem", listStyleType: "disc" }}>
                 {replayFeedback.checkpoints.map((entry) => (
@@ -698,9 +755,28 @@ export default function InspectorPanel({
                     key={entry.key}
                     style={{
                       color: entry.tone === "success" ? "#a5d6a7" : "#f48771",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
                     }}
                   >
-                    {entry.message}
+                    {entry.grade && (
+                      <span
+                        style={{
+                          display: "inline-block",
+                          padding: "1px 6px",
+                          borderRadius: "3px",
+                          fontWeight: "bold",
+                          fontSize: "0.7rem",
+                          backgroundColor: gradeToColor(entry.grade),
+                          color: "#000",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {gradeToDisplay(entry.grade)}
+                      </span>
+                    )}
+                    <span>{entry.message}</span>
                   </li>
                 ))}
               </ul>

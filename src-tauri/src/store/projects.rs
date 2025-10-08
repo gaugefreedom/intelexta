@@ -56,6 +56,10 @@ pub fn rename(conn: &Connection, id: &str, name: &str) -> Result<Project, Error>
 pub fn delete(conn: &mut Connection, id: &str) -> Result<(), Error> {
     let tx = conn.transaction()?;
 
+    // Delete policy version history first (foreign key to projects)
+    tx.execute("DELETE FROM policy_versions WHERE project_id = ?1", params![id])?;
+
+    // Delete policies
     tx.execute("DELETE FROM policies WHERE project_id = ?1", params![id])?;
 
     tx.execute(
@@ -75,6 +79,12 @@ pub fn delete(conn: &mut Connection, id: &str) -> Result<(), Error> {
 
     tx.execute(
         "DELETE FROM checkpoints WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?1)",
+        params![id],
+    )?;
+
+    // Delete run steps (foreign key to runs)
+    tx.execute(
+        "DELETE FROM run_steps WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?1)",
         params![id],
     )?;
 

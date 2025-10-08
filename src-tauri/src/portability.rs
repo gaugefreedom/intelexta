@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -45,6 +44,8 @@ struct RunRecord {
     token_budget: i64,
     default_model: String,
     proof_mode: crate::orchestrator::RunProofMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_version: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -100,10 +101,29 @@ struct ReceiptExport {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct PolicyVersionExport {
+    id: i64,
+    project_id: String,
+    version: i64,
+    policy_json: String,
+    created_at: String,
+    created_by: Option<String>,
+    change_notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RunExecutionExport {
+    id: String,
+    run_id: String,
+    created_at: String,
+    checkpoints: Vec<CheckpointExport>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct RunExport {
     run: RunRecord,
     checkpoint_configs: Vec<crate::orchestrator::RunStep>,
-    checkpoints: Vec<CheckpointExport>,
+    executions: Vec<RunExecutionExport>,
     receipts: Vec<ReceiptExport>,
 }
 
@@ -229,12 +249,41 @@ pub(crate) fn load_project(conn: &Connection, project_id: &str) -> Result<Projec
     })
 }
 
+pub(crate) fn load_policy_versions_for_export(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<PolicyVersionExport>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, version, policy_json, created_at, created_by, change_notes
+         FROM policy_versions WHERE project_id = ?1 ORDER BY version ASC",
+    )?;
+
+    let rows = stmt.query_map(params![project_id], |row| {
+        Ok(PolicyVersionExport {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            version: row.get(2)?,
+            policy_json: row.get(3)?,
+            created_at: row.get(4)?,
+            created_by: row.get(5)?,
+            change_notes: row.get(6)?,
+        })
+    })?;
+
+    let mut versions = Vec::new();
+    for row in rows {
+        versions.push(row?);
+    }
+
+    Ok(versions)
+}
+
 pub(crate) fn load_runs_for_export(
     conn: &Connection,
     project_id: &str,
 ) -> Result<(Vec<RunExport>, Vec<CarAttachment>), Error> {
     let mut runs_stmt = conn.prepare(
-        "SELECT id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode
+        "SELECT id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode, policy_version
          FROM runs WHERE project_id = ?1 ORDER BY created_at ASC",
     )?;
 
@@ -261,6 +310,7 @@ pub(crate) fn load_runs_for_export(
             token_budget: row.get(7)?,
             default_model: row.get(8)?,
             proof_mode,
+            policy_version: row.get(10)?,
         })
     })?;
 
@@ -270,12 +320,37 @@ pub(crate) fn load_runs_for_export(
     while let Some(run) = runs_iter.next() {
         let mut run = run?;
 
-        let checkpoint_configs = {
+        // CHECKPOINT-FIRST APPROACH: First get all checkpoints to know which steps are needed
+        let checkpoints_preview = {
             let mut stmt = conn.prepare(
-                "SELECT id, run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json
-                 FROM run_steps WHERE run_id = ?1 ORDER BY order_index ASC",
+                "SELECT checkpoint_config_id FROM checkpoints WHERE run_id = ?1 AND checkpoint_config_id IS NOT NULL",
             )?;
             let rows = stmt.query_map(params![&run.id], |row| {
+                row.get::<_, String>(0)
+            })?;
+            let mut config_ids = std::collections::HashSet::new();
+            for row in rows {
+                config_ids.insert(row?);
+            }
+            config_ids
+        };
+
+        // Now fetch ONLY the run_steps that are actually referenced by checkpoints
+        let checkpoint_configs = if checkpoints_preview.is_empty() {
+            Vec::new()
+        } else {
+            let placeholders = checkpoints_preview.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let query = format!(
+                "SELECT id, run_id, order_index, checkpoint_type, step_type, model, prompt, token_budget, proof_mode, epsilon, config_json
+                 FROM run_steps WHERE run_id = ?1 AND id IN ({}) ORDER BY order_index ASC",
+                placeholders
+            );
+            let mut stmt = conn.prepare(&query)?;
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&run.id];
+            for config_id in &checkpoints_preview {
+                params.push(config_id);
+            }
+            let rows = stmt.query_map(params.as_slice(), |row| {
                 let token_budget: i64 = row.get(7)?;
                 let proof_mode_raw: String = row.get(8)?;
                 let proof_mode = crate::orchestrator::RunProofMode::try_from(
@@ -318,7 +393,29 @@ pub(crate) fn load_runs_for_export(
             "exact".to_string()
         };
 
-        let checkpoints = {
+        // Get all run_executions for this run
+        let executions = {
+            let mut stmt = conn.prepare(
+                "SELECT id, run_id, created_at FROM run_executions WHERE run_id = ?1 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt.query_map(params![&run.id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            let mut execs = Vec::new();
+            for row in rows {
+                execs.push(row?);
+            }
+            execs
+        };
+
+        // For each execution, get its checkpoints
+        let mut execution_exports = Vec::new();
+        for (exec_id, exec_run_id, exec_created_at) in executions {
+            let checkpoints = {
             let mut stmt = conn.prepare(
                 "SELECT c.id, c.run_id, c.run_execution_id, c.checkpoint_config_id, c.parent_checkpoint_id, c.turn_index, c.kind,
                         c.incident_json, c.timestamp, c.inputs_sha256, c.outputs_sha256, c.prev_chain, c.curr_chain,
@@ -328,11 +425,11 @@ pub(crate) fn load_runs_for_export(
                  FROM checkpoints c
                  LEFT JOIN checkpoint_messages m ON m.checkpoint_id = c.id
                  LEFT JOIN checkpoint_payloads p ON p.checkpoint_id = c.id
-                 WHERE c.run_id = ?1
+                 WHERE c.run_execution_id = ?1
                  ORDER BY c.timestamp ASC",
             )?;
 
-            let rows = stmt.query_map(params![&run.id], |row| {
+            let rows = stmt.query_map(params![&exec_id], |row| {
                 let incident_json: Option<String> = row.get(7)?;
                 let incident = incident_json
                     .map(|payload| serde_json::from_str(&payload))
@@ -402,7 +499,15 @@ pub(crate) fn load_runs_for_export(
                 checkpoints.push(entry?);
             }
             checkpoints
-        };
+            };
+
+            execution_exports.push(RunExecutionExport {
+                id: exec_id,
+                run_id: exec_run_id,
+                created_at: exec_created_at,
+                checkpoints,
+            });
+        }
 
         let (receipts, car_files) = {
             let mut stmt = conn.prepare(
@@ -454,7 +559,7 @@ pub(crate) fn load_runs_for_export(
         exports.push(RunExport {
             run,
             checkpoint_configs,
-            checkpoints,
+            executions: execution_exports,
             receipts,
         });
     }
@@ -467,6 +572,7 @@ pub fn write_project_archive_to_path(
     export_path: &Path,
     project: &Project,
     policy: &Policy,
+    policy_versions: &[PolicyVersionExport],
     runs: &[RunExport],
     attachments: &[CarAttachment],
 ) -> Result<(), Error> {
@@ -492,6 +598,19 @@ pub fn write_project_archive_to_path(
         "policy",
         policy_json,
     );
+
+    // Export policy version history
+    if !policy_versions.is_empty() {
+        let policy_versions_json = serde_json::to_vec_pretty(&policy_versions)
+            .map_err(|err| Error::Api(format!("failed to serialize policy versions: {err}")))?;
+        append_entry(
+            &mut pending_entries,
+            &mut manifest_entries,
+            "policy_versions.json".to_string(),
+            "policy_versions",
+            policy_versions_json,
+        );
+    }
 
     for run in runs {
         let run_path = format!("runs/{}.json", run.run.id);
@@ -555,6 +674,7 @@ pub fn export_project_archive(
     let conn = pool.get()?;
     let project = load_project(&conn, project_id)?;
     let policy = store::policies::get(&conn, project_id)?;
+    let policy_versions = load_policy_versions_for_export(&conn, project_id)?;
     let (runs, attachments) = load_runs_for_export(&conn, project_id)?;
 
     let exports_dir = base_dir.join(project_id).join("exports");
@@ -596,6 +716,19 @@ pub fn export_project_archive(
         "policy",
         policy_json,
     );
+
+    // Export policy version history
+    if !policy_versions.is_empty() {
+        let policy_versions_json = serde_json::to_vec_pretty(&policy_versions)
+            .map_err(|err| Error::Api(format!("failed to serialize policy versions: {err}")))?;
+        append_entry(
+            &mut pending_entries,
+            &mut manifest_entries,
+            "policy_versions.json".to_string(),
+            "policy_versions",
+            policy_versions_json,
+        );
+    }
 
     for run in &runs {
         let run_path = format!("runs/{}.json", run.run.id);
@@ -694,6 +827,62 @@ fn ensure_incident(checkpoint: &mut CheckpointExport, incident: serde_json::Valu
     }
 }
 
+/// Extract CAR JSON and attachments from either .car.json or .car.zip format
+fn extract_car_data(
+    car_bytes: &[u8],
+    file_name: &str,
+) -> Result<(car::Car, HashMap<String, Vec<u8>>), Error> {
+    let mut attachments = HashMap::new();
+
+    // Check if it's a zip file (starts with PK magic bytes)
+    if car_bytes.len() >= 4 && &car_bytes[0..2] == b"PK" {
+        // It's a zip file - extract car.json and attachments
+        let cursor = std::io::Cursor::new(car_bytes);
+        let mut archive = zip::ZipArchive::new(cursor)
+            .map_err(|err| Error::Api(format!("failed to read CAR zip {}: {err}", file_name)))?;
+
+        // Read car.json
+        let mut car_json_bytes = Vec::new();
+        archive
+            .by_name("car.json")
+            .map_err(|err| Error::Api(format!("car.json not found in CAR zip {}: {err}", file_name)))?
+            .read_to_end(&mut car_json_bytes)
+            .map_err(|err| Error::Api(format!("failed to read car.json from {}: {err}", file_name)))?;
+
+        let car: car::Car = serde_json::from_slice(&car_json_bytes)
+            .map_err(|err| Error::Api(format!("failed to parse car.json from {}: {err}", file_name)))?;
+
+        // Extract all attachments from attachments/ directory
+        for i in 0..archive.len() {
+            let mut file = archive
+                .by_index(i)
+                .map_err(|err| Error::Api(format!("failed to read zip entry {}: {err}", i)))?;
+
+            if file.name().starts_with("attachments/") && !file.is_dir() {
+                let attachment_name = file.name().to_string();
+                let mut attachment_bytes = Vec::new();
+                file.read_to_end(&mut attachment_bytes)
+                    .map_err(|err| Error::Api(format!("failed to read attachment {}: {err}", attachment_name)))?;
+
+                // Extract hash from filename (attachments/{hash}.txt)
+                if let Some(hash) = attachment_name
+                    .strip_prefix("attachments/")
+                    .and_then(|name| name.strip_suffix(".txt"))
+                {
+                    attachments.insert(hash.to_string(), attachment_bytes);
+                }
+            }
+        }
+
+        Ok((car, attachments))
+    } else {
+        // It's a plain JSON file
+        let car: car::Car = serde_json::from_slice(car_bytes)
+            .map_err(|err| Error::Api(format!("failed to parse CAR JSON {}: {err}", file_name)))?;
+        Ok((car, attachments))
+    }
+}
+
 pub fn import_project_archive(
     pool: &DbPool,
     archive_path: &Path,
@@ -747,6 +936,16 @@ pub fn import_project_archive(
     let policy: Policy = serde_json::from_slice(&policy_bytes)
         .map_err(|err| Error::Api(format!("failed to parse policy: {err}")))?;
 
+    // Load policy versions if available (optional for backwards compatibility)
+    let policy_versions: Vec<PolicyVersionExport> = contents
+        .remove("policy_versions.json")
+        .map(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|err| Error::Api(format!("failed to parse policy versions: {err}")))
+        })
+        .transpose()?
+        .unwrap_or_default();
+
     let verifying_key = decode_verifying_key(&project.pubkey)?;
 
     let mut run_exports = Vec::new();
@@ -789,7 +988,48 @@ pub fn import_project_archive(
         ],
     )?;
 
-    store::policies::upsert(tx.deref(), &project.id, &policy)?;
+    // Insert policy directly into policies table without creating version history
+    // (we'll restore the version history from the archive)
+    let policy_json = serde_json::to_string(&policy)
+        .map_err(|err| Error::Api(format!("failed to serialize policy: {err}")))?;
+
+    let current_version = if !policy_versions.is_empty() {
+        policy_versions.iter().map(|v| v.version).max().unwrap_or(1)
+    } else {
+        1
+    };
+
+    tx.execute(
+        "INSERT INTO policies (project_id, policy_json, current_version) VALUES (?1, ?2, ?3)",
+        params![&project.id, &policy_json, current_version],
+    )?;
+
+    // Import policy version history
+    if !policy_versions.is_empty() {
+        // We have version history - import it
+        for policy_version in &policy_versions {
+            tx.execute(
+                "INSERT INTO policy_versions (id, project_id, version, policy_json, created_at, created_by, change_notes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    &policy_version.id,
+                    &policy_version.project_id,
+                    &policy_version.version,
+                    &policy_version.policy_json,
+                    &policy_version.created_at,
+                    &policy_version.created_by,
+                    &policy_version.change_notes,
+                ],
+            )?;
+        }
+    } else {
+        // No version history in archive (old format) - create version 1 from current policy
+        tx.execute(
+            "INSERT INTO policy_versions (project_id, version, policy_json, created_by, change_notes)
+             VALUES (?1, 1, ?2, 'import', 'Imported from IXP archive without version history')",
+            params![&project.id, &policy_json],
+        )?;
+    }
 
     let mut checkpoints_imported = 0usize;
     let mut receipts_imported = 0usize;
@@ -807,8 +1047,8 @@ pub fn import_project_archive(
         }
 
         tx.execute(
-            "INSERT INTO runs (id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO runs (id, project_id, name, created_at, sampler_json, seed, epsilon, token_budget, default_model, proof_mode, policy_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 &run.run.id,
                 &run.run.project_id,
@@ -820,38 +1060,33 @@ pub fn import_project_archive(
                 &run.run.token_budget,
                 &run.run.default_model,
                 run.run.proof_mode.as_str(),
+                &run.run.policy_version,
             ],
         )?;
 
-        // Create a run_execution entry for this run (imported runs have a single execution)
-        // We need to determine the run_execution_id from checkpoints, or create a new one
-        let run_execution_id = if let Some(first_checkpoint) = run.checkpoints.first() {
-            first_checkpoint.run_execution_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
-        } else {
-            // No checkpoints, create a new execution id
-            uuid::Uuid::new_v4().to_string()
-        };
-
-        tx.execute(
-            "INSERT INTO run_executions (id, run_id, created_at) VALUES (?1, ?2, ?3)",
-            params![
-                &run_execution_id,
-                &run.run.id,
-                &run.run.created_at,
-            ],
-        )?;
-
-        // For old exports that don't have run_execution_id, set it on all checkpoints
-        for checkpoint in &mut run.checkpoints {
-            if checkpoint.run_execution_id.is_none() {
-                checkpoint.run_execution_id = Some(run_execution_id.clone());
-            }
+        // Import all run_executions for this run
+        for execution in &run.executions {
+            tx.execute(
+                "INSERT INTO run_executions (id, run_id, created_at) VALUES (?1, ?2, ?3)",
+                params![
+                    &execution.id,
+                    &execution.run_id,
+                    &execution.created_at,
+                ],
+            )?;
         }
 
         let config_budgets: HashMap<_, _> = run
             .checkpoint_configs
             .iter()
             .map(|cfg| (cfg.id.clone(), cfg.token_budget))
+            .collect();
+
+        // Track which step IDs we're inserting for validation
+        let inserted_step_ids: std::collections::HashSet<String> = run
+            .checkpoint_configs
+            .iter()
+            .map(|cfg| cfg.id.clone())
             .collect();
 
         for config in &run.checkpoint_configs {
@@ -871,13 +1106,15 @@ pub fn import_project_archive(
                     config.epsilon,
                     &config.config_json,
                 ],
-            )?;
+            ).map_err(|err| Error::Api(format!(
+                "failed to insert run_step {}: {}", config.id, err
+            )))?;
         }
 
-        let mut checkpoints = run.checkpoints;
+        // Process checkpoints for each execution
         let mut total_usage = 0u64;
-
-        for checkpoint in &mut checkpoints {
+        for execution in &mut run.executions {
+            for checkpoint in &mut execution.checkpoints {
             total_usage = total_usage.saturating_add(checkpoint.usage_tokens);
 
             if !signature_valid(
@@ -920,10 +1157,13 @@ pub fn import_project_archive(
                     }
                 }
             }
+            }
         }
 
+        // Budget enforcement on the last checkpoint of the last execution
         if let Err(incident) = governance::enforce_budget(policy.budget_tokens, total_usage) {
-            if let Some(last) = checkpoints.last_mut() {
+            if let Some(last_execution) = run.executions.last_mut() {
+                if let Some(last) = last_execution.checkpoints.last_mut() {
                 let generated = ensure_incident(
                     last,
                     serde_json::json!({
@@ -936,11 +1176,13 @@ pub fn import_project_archive(
                 if generated {
                     incidents_generated += 1;
                 }
+                }
             }
         }
 
         if total_usage > run.run.token_budget.max(0) as u64 {
-            if let Some(last) = checkpoints.last_mut() {
+            if let Some(last_execution) = run.executions.last_mut() {
+                if let Some(last) = last_execution.checkpoints.last_mut() {
                 let generated = ensure_incident(
                     last,
                     serde_json::json!({
@@ -957,10 +1199,39 @@ pub fn import_project_archive(
                 if generated {
                     incidents_generated += 1;
                 }
+                }
             }
         }
 
-        for checkpoint in checkpoints {
+        // Debug: Count total checkpoints across all executions
+        let total_checkpoints: usize = run.executions.iter().map(|e| e.checkpoints.len()).sum();
+        eprintln!("DEBUG: Inserted {} steps for run {}: {:?}", inserted_step_ids.len(), run.run.id, inserted_step_ids);
+        eprintln!("DEBUG: Processing {} executions with {} total checkpoints for run {}",
+            run.executions.len(), total_checkpoints, run.run.id);
+
+        // Fix orphaned checkpoint_config_id references BEFORE inserting
+        let mut fixed_count = 0;
+        for execution in &mut run.executions {
+            for checkpoint in &mut execution.checkpoints {
+            if let Some(ref config_id) = checkpoint.checkpoint_config_id {
+                eprintln!("DEBUG: Checking checkpoint {} with config_id {}", checkpoint.id, config_id);
+                if !inserted_step_ids.contains(config_id) {
+                    eprintln!(
+                        "WARNING: checkpoint {} references non-existent step {}, setting to NULL (available steps: {:?})",
+                        checkpoint.id, config_id, inserted_step_ids
+                    );
+                    checkpoint.checkpoint_config_id = None;
+                    fixed_count += 1;
+                }
+            }
+            }
+        }
+        eprintln!("DEBUG: Fixed {} orphaned checkpoint references", fixed_count);
+
+        // Now insert the checkpoints from all executions
+        for execution in &run.executions {
+            for checkpoint in &execution.checkpoints {
+
             tx.execute(
                 "INSERT INTO checkpoints (id, run_id, run_execution_id, checkpoint_config_id, parent_checkpoint_id, turn_index, kind, incident_json, timestamp,
                                           inputs_sha256, outputs_sha256, prev_chain, curr_chain, signature, usage_tokens, prompt_tokens,
@@ -989,9 +1260,12 @@ pub fn import_project_archive(
                     checkpoint.completion_tokens as i64,
                     &checkpoint.semantic_digest,
                 ],
-            )?;
+            ).map_err(|err| Error::Api(format!(
+                "failed to insert checkpoint {}: config_id={:?}, parent_id={:?}, error={}",
+                checkpoint.id, checkpoint.checkpoint_config_id, checkpoint.parent_checkpoint_id, err
+            )))?;
 
-            if let Some(message) = checkpoint.message {
+            if let Some(ref message) = checkpoint.message {
                 tx.execute(
                     "INSERT INTO checkpoint_messages (checkpoint_id, role, body, created_at, updated_at)
                      VALUES (?1, ?2, ?3, ?4, COALESCE(?5, ?4))",
@@ -1005,7 +1279,7 @@ pub fn import_project_archive(
                 )?;
             }
 
-            if let Some(payload) = checkpoint.payload {
+            if let Some(ref payload) = checkpoint.payload {
                 tx.execute(
                     "INSERT INTO checkpoint_payloads (checkpoint_id, prompt_payload, output_payload, created_at, updated_at)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1020,6 +1294,7 @@ pub fn import_project_archive(
             }
 
             checkpoints_imported += 1;
+            }
         }
 
         for receipt in run.receipts {
@@ -1038,8 +1313,10 @@ pub fn import_project_archive(
                 }
             };
 
-            let car: car::Car = serde_json::from_slice(&car_bytes)
-                .map_err(|err| Error::Api(format!("failed to parse CAR {}: {err}", receipt.id)))?;
+            // Extract CAR JSON and attachments (handles both .car.json and .car.zip)
+            let car_filename = receipt.car_path.as_deref().unwrap_or("unknown");
+            let (car, attachments) = extract_car_data(&car_bytes, car_filename)?;
+
             if car.id != receipt.id {
                 return Err(Error::Api(format!(
                     "CAR {} has mismatched id {}",
@@ -1065,7 +1342,21 @@ pub fn import_project_archive(
                 }
             }
 
-            let dest_path = dest_dir.join(format!("{}.car.json", receipt.id));
+            // Store attachments in the global attachment store
+            let attachment_store = crate::attachments::get_global_attachment_store();
+            for (hash, content_bytes) in attachments {
+                let content = String::from_utf8(content_bytes)
+                    .map_err(|err| Error::Api(format!("attachment {hash} is not valid UTF-8: {err}")))?;
+                attachment_store.store_with_hash(&hash, &content)
+                    .map_err(|err| Error::Api(format!("failed to store attachment {hash}: {err}")))?;
+            }
+
+            // Save the CAR file (preserve original format or convert to zip if it was json)
+            let dest_path = if car_filename.ends_with(".car.zip") {
+                dest_dir.join(format!("{}.car.zip", receipt.id.replace(':', "_")))
+            } else {
+                dest_dir.join(format!("{}.car.json", receipt.id))
+            };
             file_writes.push((dest_path.clone(), car_bytes));
 
             tx.execute(
@@ -1125,10 +1416,17 @@ pub fn import_car_file(
     car_path: &Path,
     base_dir: &Path,
 ) -> Result<CarImportResult, Error> {
-    let data = fs::read_to_string(car_path)
+    // Read the CAR file (could be .car.json or .car.zip)
+    let car_bytes = fs::read(car_path)
         .map_err(|err| Error::Api(format!("failed to read CAR {}: {err}", car_path.display())))?;
-    let car: car::Car = serde_json::from_str(&data)
-        .map_err(|err| Error::Api(format!("failed to parse CAR: {err}")))?;
+
+    let car_filename = car_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    // Extract CAR JSON and attachments
+    let (car, attachments) = extract_car_data(&car_bytes, car_filename)?;
 
     let verifying_key = decode_verifying_key(&car.signer_public_key)?;
 
@@ -1158,6 +1456,15 @@ pub fn import_car_file(
         }
     }
 
+    // Store attachments in the global attachment store
+    let attachment_store = crate::attachments::get_global_attachment_store();
+    for (hash, content_bytes) in attachments {
+        let content = String::from_utf8(content_bytes)
+            .map_err(|err| Error::Api(format!("attachment {hash} is not valid UTF-8: {err}")))?;
+        attachment_store.store_with_hash(&hash, &content)
+            .map_err(|err| Error::Api(format!("failed to store attachment {hash}: {err}")))?;
+    }
+
     let cars_dir = base_dir.join("cars");
     fs::create_dir_all(&cars_dir).map_err(|err| {
         Error::Api(format!(
@@ -1167,8 +1474,12 @@ pub fn import_car_file(
     })?;
 
     let sanitized_id = sanitize_for_file(&car.id);
-    let dest_path = cars_dir.join(format!("{}.car.json", sanitized_id));
-    fs::write(&dest_path, data)
+    let dest_path = if car_filename.ends_with(".car.zip") {
+        cars_dir.join(format!("{}.car.zip", sanitized_id))
+    } else {
+        cars_dir.join(format!("{}.car.json", sanitized_id))
+    };
+    fs::write(&dest_path, &car_bytes)
         .map_err(|err| Error::Api(format!("failed to copy CAR to workspace: {err}")))?;
 
     let replay_report = replay::replay_car(&car)

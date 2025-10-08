@@ -933,6 +933,8 @@ pub(crate) fn replay_run_with_pool(
                         semantic_distance: None,
                         epsilon: None,
                         configured_epsilon: config.epsilon,
+                        similarity_score: None,
+                        grade: None,
                     });
                 checkpoint_reports.push(report);
             }
@@ -1269,6 +1271,51 @@ pub fn update_policy(
     store::policies::upsert(&conn, &project_id, &policy)
 }
 
+#[tauri::command]
+pub fn update_policy_with_notes(
+    project_id: String,
+    policy: Policy,
+    change_notes: Option<String>,
+    pool: State<'_, DbPool>,
+) -> Result<(), Error> {
+    let conn = pool.get()?;
+    store::policies::upsert_with_notes(
+        &conn,
+        &project_id,
+        &policy,
+        Some("user"), // TODO: Get actual user if authentication is added
+        change_notes.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn get_policy_versions(
+    project_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<Vec<store::policies::PolicyVersion>, Error> {
+    let conn = pool.get()?;
+    store::policies::get_versions(&conn, &project_id)
+}
+
+#[tauri::command]
+pub fn get_policy_version(
+    project_id: String,
+    version: i64,
+    pool: State<'_, DbPool>,
+) -> Result<Option<store::policies::PolicyVersion>, Error> {
+    let conn = pool.get()?;
+    store::policies::get_version(&conn, &project_id, version)
+}
+
+#[tauri::command]
+pub fn get_current_policy_version_number(
+    project_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<i64, Error> {
+    let conn = pool.get()?;
+    store::policies::get_current_version(&conn, &project_id)
+}
+
 // --- MERGED AND FIXED emit_car FUNCTIONALITY ---
 pub(crate) fn emit_car_to_base_dir(
     run_id: &str,
@@ -1377,12 +1424,14 @@ pub fn export_project(
         let conn = pool.get()?;
         let project = portability::load_project(&conn, &project_id)?;
         let policy = store::policies::get(&conn, &project_id)?;
+        let policy_versions = crate::portability::load_policy_versions_for_export(&conn, &project_id)?;
         let (runs, attachments) = portability::load_runs_for_export(&conn, &project_id)?;
 
         portability::write_project_archive_to_path(
             &custom_path_buf,
             &project,
             &policy,
+            &policy_versions,
             &runs,
             &attachments,
         )?;
