@@ -497,6 +497,37 @@ pub fn download_checkpoint_artifact(
     Ok(payload)
 }
 
+/// Download the full, untruncated output from the attachment store
+#[tauri::command]
+pub fn download_checkpoint_full_output(
+    checkpoint_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<String, Error> {
+    let conn = pool.get()?;
+
+    // Get the full_output_hash from checkpoint_payloads
+    let full_output_hash: Option<String> = conn
+        .query_row(
+            "SELECT full_output_hash FROM checkpoint_payloads WHERE checkpoint_id = ?1",
+            params![&checkpoint_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let hash = full_output_hash.ok_or_else(|| {
+        Error::Api(format!(
+            "No full output attachment found for checkpoint {}",
+            checkpoint_id
+        ))
+    })?;
+
+    // Load from attachment store
+    let attachment_store = crate::attachments::get_global_attachment_store();
+    attachment_store
+        .load_full_output(&hash)
+        .map_err(|err| Error::Api(format!("Failed to load attachment: {}", err)))
+}
+
 #[cfg(feature = "interactive")]
 #[tauri::command]
 pub fn open_interactive_checkpoint_session(
@@ -1257,6 +1288,7 @@ pub(crate) fn emit_car_to_base_dir(
             other => Error::from(other),
         })?;
 
+    // First build the CAR to get its ID and metadata
     let car = car::build_car(&conn, run_id, run_execution_id)
         .map_err(|err| Error::Api(err.to_string()))?;
 
@@ -1264,11 +1296,10 @@ pub(crate) fn emit_car_to_base_dir(
     std::fs::create_dir_all(&receipts_dir)
         .map_err(|err| Error::Api(format!("failed to create receipts dir: {err}")))?;
 
-    let file_path = receipts_dir.join(format!("{}.car.json", car.id.replace(':', "_")));
-    let json = serde_json::to_string_pretty(&car)
-        .map_err(|err| Error::Api(format!("failed to serialize CAR: {err}")))?;
-    std::fs::write(&file_path, json)
-        .map_err(|err| Error::Api(format!("failed to write CAR file: {err}")))?;
+    // Create zip bundle instead of just JSON
+    let file_path = receipts_dir.join(format!("{}.car.zip", car.id.replace(':', "_")));
+    car::build_car_bundle(&conn, run_id, run_execution_id, &file_path)
+        .map_err(|err| Error::Api(format!("failed to build CAR bundle: {err}")))?;
 
     let created_at = car.created_at.to_rfc3339();
     let file_path_str = file_path.to_string_lossy().to_string();
@@ -1297,15 +1328,14 @@ pub fn emit_car(
     app_handle: AppHandle,
 ) -> Result<String, Error> {
     if let Some(custom_path) = output_path {
-        // User specified a custom path - save directly there
+        // User specified a custom path - save bundle there
         let conn = pool.get()?;
         let car = car::build_car(&conn, &run_id, None)
             .map_err(|err| Error::Api(err.to_string()))?;
 
-        let json = serde_json::to_string_pretty(&car)
-            .map_err(|err| Error::Api(format!("failed to serialize CAR: {err}")))?;
-        std::fs::write(&custom_path, json)
-            .map_err(|err| Error::Api(format!("failed to write CAR file: {err}")))?;
+        let custom_path_buf = PathBuf::from(&custom_path);
+        car::build_car_bundle(&conn, &run_id, None, &custom_path_buf)
+            .map_err(|err| Error::Api(format!("failed to build CAR bundle: {err}")))?;
 
         // Still record in database
         let created_at = car.created_at.to_rfc3339();

@@ -440,3 +440,61 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
 
     Ok(car)
 }
+
+/// Build a complete CAR bundle with attachments as a zip file
+pub fn build_car_bundle(
+    conn: &Connection,
+    run_id: &str,
+    run_execution_id: Option<&str>,
+    output_path: &std::path::Path,
+) -> Result<()> {
+    use std::fs::File;
+    use std::io::Write;
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    // Build the CAR JSON
+    let car = build_car(conn, run_id, run_execution_id)?;
+    let car_json = serde_json::to_string_pretty(&car)?;
+
+    // Create zip file
+    let file = File::create(output_path)
+        .with_context(|| format!("Failed to create zip file at {:?}", output_path))?;
+    let mut zip = ZipWriter::new(file);
+
+    // Add car.json to zip
+    zip.start_file("car.json", FileOptions::default())?;
+    zip.write_all(car_json.as_bytes())?;
+
+    // Collect all attachment hashes from checkpoint payloads
+    let mut attachment_hashes = Vec::new();
+    for checkpoint_id in &car.checkpoints {
+        let hash: Option<String> = conn
+            .query_row(
+                "SELECT full_output_hash FROM checkpoint_payloads WHERE checkpoint_id = ?1",
+                params![checkpoint_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(h) = hash {
+            attachment_hashes.push(h);
+        }
+    }
+
+    // Add all attachments to zip
+    let attachment_store = crate::attachments::get_global_attachment_store();
+    for hash in attachment_hashes {
+        if attachment_store.exists(&hash) {
+            let content = attachment_store.load_full_output(&hash)?;
+
+            // Store as attachments/{hash}.txt
+            let filename = format!("attachments/{}.txt", hash);
+            zip.start_file(&filename, FileOptions::default())?;
+            zip.write_all(content.as_bytes())?;
+        }
+    }
+
+    zip.finish()?;
+    Ok(())
+}

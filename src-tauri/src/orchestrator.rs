@@ -907,12 +907,26 @@ fn persist_checkpoint(
     )?;
 
     if params.prompt_payload.is_some() || params.output_payload.is_some() {
+        // Save full output to attachment store and get hash
+        let full_output_hash = if let Some(output) = params.output_payload {
+            let attachment_store = crate::attachments::get_global_attachment_store();
+            Some(attachment_store.save_full_output(output)?)
+        } else {
+            None
+        };
+
+        // Save preview (first 1000 chars) to database for quick display
+        let output_preview = params.output_payload.map(|output| {
+            output.chars().take(1000).collect::<String>()
+        });
+
         conn.execute(
-            "INSERT INTO checkpoint_payloads (checkpoint_id, prompt_payload, output_payload) VALUES (?1, ?2, ?3) ON CONFLICT(checkpoint_id) DO UPDATE SET prompt_payload = excluded.prompt_payload, output_payload = excluded.output_payload, updated_at = CURRENT_TIMESTAMP",
+            "INSERT INTO checkpoint_payloads (checkpoint_id, prompt_payload, output_payload, full_output_hash) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(checkpoint_id) DO UPDATE SET prompt_payload = excluded.prompt_payload, output_payload = excluded.output_payload, full_output_hash = excluded.full_output_hash, updated_at = CURRENT_TIMESTAMP",
             params![
                 &checkpoint_id,
                 params.prompt_payload,
-                params.output_payload,
+                output_preview.as_deref(),
+                full_output_hash.as_deref(),
             ],
         )?;
     }

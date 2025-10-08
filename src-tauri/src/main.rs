@@ -30,6 +30,12 @@ fn main() {
 
         std::fs::create_dir_all(&app_data_dir)?;
 
+        // Initialize attachment store
+        intelexta::attachments::init_global_attachment_store(&app_data_dir)
+            .unwrap_or_else(|err| {
+                eprintln!("⚠️  Warning: Failed to initialize attachment store: {}", err);
+            });
+
         let db_path = app_data_dir.join("intelexta.sqlite");
 
         let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path);
@@ -61,6 +67,7 @@ fn main() {
         api::list_checkpoints,
         api::get_checkpoint_details,
         api::download_checkpoint_artifact,
+        api::download_checkpoint_full_output,
         api::open_interactive_checkpoint_session,
         api::list_run_steps,
         api::create_run_step,
@@ -95,6 +102,7 @@ fn main() {
         api::list_checkpoints,
         api::get_checkpoint_details,
         api::download_checkpoint_artifact,
+        api::download_checkpoint_full_output,
         api::list_run_steps,
         api::create_run_step,
         api::update_run_step,

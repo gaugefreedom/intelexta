@@ -1,4 +1,5 @@
 import React from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { CheckpointDetails, IncidentSummary } from "../lib/api";
 import {
   buttonGhost,
@@ -117,12 +118,15 @@ function PayloadViewer({
   };
 
   const handleCopy = React.useCallback(() => {
+    console.log(`Copy clicked - label: ${label}, viewMode: ${viewMode}, disabled: ${copyDisabled}`);
     if (copyDisabled) {
+      console.log("Copy is disabled, returning early");
       return;
     }
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         void navigator.clipboard.writeText(displayContent);
+        console.log("Copied to clipboard successfully");
       } else {
         throw new Error("Clipboard API not available");
       }
@@ -132,11 +136,14 @@ function PayloadViewer({
   }, [copyDisabled, displayContent, label, viewMode]);
 
   const handleDownload = React.useCallback(() => {
+    console.log(`Download clicked - label: ${label}, viewMode: ${viewMode}, disabled: ${copyDisabled}`);
     if (copyDisabled) {
+      console.log("Download is disabled, returning early");
       return;
     }
     try {
       const fileName = `${safeFileName(`${downloadBaseName}-${label.toLowerCase()}-${viewMode}`)}.txt`;
+      console.log("Downloading file:", fileName);
       const blob = new Blob([displayContent], {
         type: "text/plain;charset=utf-8",
       });
@@ -148,6 +155,7 @@ function PayloadViewer({
       anchor.click();
       document.body.removeChild(anchor);
       URL.revokeObjectURL(url);
+      console.log("Download triggered successfully");
     } catch (error) {
       console.error(`Failed to download ${label} ${viewMode}`, error);
     }
@@ -524,6 +532,43 @@ export default function CheckpointDetailsPanel({
               onChangeMode={setOutputViewMode}
               downloadBaseName={checkpointDetails.id}
             />
+            <div style={{ marginTop: "12px" }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  console.log("Download Full Output clicked, checkpoint ID:", checkpointDetails.id);
+                  try {
+                    console.log("Calling download_checkpoint_full_output...");
+                    const fullOutput = await invoke<string>("download_checkpoint_full_output", {
+                      checkpointId: checkpointDetails.id,
+                    });
+
+                    console.log("Received output, length:", fullOutput.length);
+
+                    // Trigger browser download
+                    const blob = new Blob([fullOutput], { type: "text/plain" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `checkpoint-${checkpointDetails.id}-full-output.txt`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    console.log("Download triggered successfully");
+                  } catch (err) {
+                    console.error("Download Full Output error:", err);
+                    alert(`Failed to download full output: ${err}`);
+                  }
+                }}
+                style={combineButtonStyles(buttonSecondary)}
+              >
+                Download Full Output
+              </button>
+              <div style={{ fontSize: "0.75rem", color: "#888", marginTop: "4px" }}>
+                The output above shows a preview (first 1000 chars). Click to download the complete, untruncated output.
+              </div>
+            </div>
           </div>
         )}
         {children && (

@@ -342,9 +342,9 @@ export default function InspectorPanel({
     try {
       console.log('Opening save dialog...');
       const savePath = await save({
-        defaultPath: `${selectedRunIdWithCheckpoint.replace(/:/g, '_')}.car.json`,
+        defaultPath: `${selectedRunIdWithCheckpoint.replace(/:/g, '_')}.car.zip`,
         filters: [
-          { name: 'CAR Files', extensions: ['car.json', 'json'] },
+          { name: 'CAR Bundle', extensions: ['car.zip', 'zip'] },
           { name: 'All Files', extensions: ['*'] },
         ],
       });
