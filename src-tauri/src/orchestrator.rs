@@ -279,7 +279,7 @@ impl RunStep {
     }
 
     pub fn is_document_ingestion(&self) -> bool {
-        self.step_type == "document_ingestion"
+        self.step_type == "ingest" || self.step_type == "document_ingestion"
     }
 }
 
@@ -400,6 +400,38 @@ pub trait LlmClient {
     fn stream_generate(&self, model: &str, prompt: &str) -> anyhow::Result<LlmGeneration>;
 }
 
+/// Modern LLM client using the model dispatcher (supports all providers)
+pub struct DispatchingLlmClient {
+    dispatcher: crate::model_adapters::ModelDispatcher,
+}
+
+impl DispatchingLlmClient {
+    pub fn new() -> Self {
+        Self {
+            dispatcher: crate::model_adapters::ModelDispatcher::new(),
+        }
+    }
+}
+
+impl LlmClient for DispatchingLlmClient {
+    fn stream_generate(&self, model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
+        // Check if API key is configured (if required)
+        self.dispatcher.check_api_key_configured(model)?;
+
+        // Dispatch to appropriate adapter
+        let generation = self.dispatcher.generate(model, prompt)?;
+
+        // Convert from model_adapters::LlmGeneration to orchestrator::LlmGeneration
+        Ok(LlmGeneration {
+            response: generation.response,
+            usage: TokenUsage {
+                prompt_tokens: generation.usage.prompt_tokens,
+                completion_tokens: generation.usage.completion_tokens,
+            },
+        })
+    }
+}
+
 fn sanitize_payload(payload: &str) -> String {
     const MAX_CHARS: usize = 65_536;
     let mut result = String::new();
@@ -443,7 +475,7 @@ impl LlmClient for DefaultOllamaClient {
 }
 
 pub fn replay_llm_generation(model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
-    let client = DefaultOllamaClient::new();
+    let client = DispatchingLlmClient::new();
     client.stream_generate(model, prompt)
 }
 
@@ -554,7 +586,7 @@ fn fetch_ollama_models() -> anyhow::Result<Vec<String>> {
     Ok(models)
 }
 
-fn perform_ollama_stream(model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
+pub(crate) fn perform_ollama_stream(model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {
     let body = serde_json::json!({
         "model": model,
         "prompt": prompt,
@@ -1295,7 +1327,7 @@ pub fn submit_interactive_checkpoint_turn(
     checkpoint_config_id: &str,
     prompt_text: &str,
 ) -> anyhow::Result<SubmitTurnOutcome> {
-    let client = DefaultOllamaClient::new();
+    let client = DispatchingLlmClient::new();
     submit_interactive_checkpoint_turn_with_client(
         pool,
         run_id,
@@ -1360,13 +1392,20 @@ pub(crate) fn submit_interactive_checkpoint_turn_with_client(
 
     let signing_key = ensure_project_signing_key(&conn, &stored_run.project_id)?;
 
-    // Enforce network policy for interactive checkpoints
+    // Enforce network policy for interactive checkpoints if model requires network
     let policy = store::policies::get(&conn, &stored_run.project_id)?;
-    if let Err(network_incident) = governance::enforce_network_policy(&policy) {
-        return Err(anyhow!(format!(
-            "Network access denied by project policy: {}",
-            network_incident.details
-        )));
+    let model_requires_network = crate::model_catalog::try_get_global_catalog()
+        .and_then(|catalog| catalog.get_model(config_model))
+        .map(|model_def| model_def.requires_network)
+        .unwrap_or(config_model != STUB_MODEL_ID); // Fallback: assume network needed unless stub
+
+    if model_requires_network {
+        if let Err(network_incident) = governance::enforce_network_policy(&policy) {
+            return Err(anyhow!(format!(
+                "Network access denied by project policy: {}",
+                network_incident.details
+            )));
+        }
     }
 
     let LlmGeneration { response, usage } =
@@ -1580,7 +1619,7 @@ pub(crate) fn start_hello_run_with_client(
 }
 
 pub fn start_run(pool: &DbPool, run_id: &str) -> anyhow::Result<RunExecutionRecord> {
-    let client = DefaultOllamaClient::new();
+    let client = DispatchingLlmClient::new();
     start_run_with_client(pool, run_id, &client)
 }
 
@@ -1729,8 +1768,17 @@ pub(crate) fn start_run_with_client(
             // Continue execution despite warning
         }
 
-        // Check network policy before executing non-stub checkpoints
-        if config.model.as_deref() != Some(STUB_MODEL_ID) {
+        // Check network policy before executing checkpoints that require network
+        let model_requires_network = if let Some(ref model_id) = config.model {
+            crate::model_catalog::try_get_global_catalog()
+                .and_then(|catalog| catalog.get_model(model_id))
+                .map(|model_def| model_def.requires_network)
+                .unwrap_or(model_id != STUB_MODEL_ID) // Fallback: assume network needed unless stub
+        } else {
+            false
+        };
+
+        if model_requires_network {
             if let Err(network_incident) = governance::enforce_network_policy(&policy) {
                 let incident_value = serde_json::to_value(&network_incident)?;
                 let checkpoint_insert = CheckpointInsert {
@@ -2067,10 +2115,19 @@ pub(crate) fn execute_document_ingestion_checkpoint(
 
     // Compute provenance hashes
     let inputs_sha256 = provenance::sha256_hex(ingestion_config.source_path.as_bytes());
-    let outputs_sha256 = provenance::sha256_hex(canonical_json.as_bytes());
 
-    // Use document_id as semantic digest
-    let semantic_digest = canonical_doc.document_id.clone();
+    // For deterministic hashing, create a normalized version without timestamps
+    let mut normalized_doc = canonical_doc.clone();
+    normalized_doc.processing_log.extraction_timestamp_utc = Some("NORMALIZED".to_string());
+    normalized_doc.processing_log.processing_timestamp_utc = "NORMALIZED".to_string();
+    normalized_doc.metadata.date_accessed_utc = Some("NORMALIZED".to_string());
+
+    let normalized_json = serde_json::to_string(&normalized_doc)
+        .context("Failed to serialize normalized document")?;
+    let outputs_sha256 = provenance::sha256_hex(normalized_json.as_bytes());
+
+    // Compute semantic digest from cleaned text content
+    let semantic_digest = provenance::semantic_digest(&normalized_doc.cleaned_text_with_markdown_structure);
 
     // Create input description
     let prompt_payload = format!(

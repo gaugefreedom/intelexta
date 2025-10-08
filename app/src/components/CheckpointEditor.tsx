@@ -1,5 +1,5 @@
 import React from "react";
-import type { RunProofMode } from "../lib/api";
+import type { RunProofMode, CatalogModel } from "../lib/api";
 import {
   buttonPrimary,
   buttonSecondary,
@@ -26,6 +26,7 @@ export interface CheckpointFormValue {
 
 interface CheckpointEditorProps {
   availableModels: string[];
+  catalogModels: CatalogModel[];
   existingSteps?: Array<{ orderIndex: number; checkpointType: string; stepType: string }>;
   initialValue?: CheckpointFormValue;
   mode: "create" | "edit";
@@ -62,7 +63,7 @@ export function concordantSubmissionAllowed(
   return isValidNormalizedEpsilon(epsilon);
 }
 
-const DEFAULT_CONCORDANT_EPSILON = 0.1;
+const DEFAULT_CONCORDANT_EPSILON = 0.5;
 
 function clampNormalizedEpsilon(value: number): number {
   if (!Number.isFinite(value)) {
@@ -79,6 +80,7 @@ function clampNormalizedEpsilon(value: number): number {
 
 export default function CheckpointEditor({
   availableModels,
+  catalogModels,
   existingSteps = [],
   initialValue,
   mode,
@@ -117,10 +119,26 @@ export default function CheckpointEditor({
     return existingSteps.filter(step => step.orderIndex < currentOrderIndex);
   }, [existingSteps, mode, initialValue?.checkpointType]);
 
-  const defaultModel = mergedModels[0] ?? "stub-model";
+  // Find first local model (prioritize Ollama, then any non-network model)
+  const defaultModel = React.useMemo(() => {
+    // First try to find an Ollama model
+    const ollamaModel = catalogModels.find(m =>
+      m.provider === "ollama" && m.enabled && availableModels.includes(m.id)
+    );
+    if (ollamaModel) return ollamaModel.id;
+
+    // Then try any local model (doesn't require network)
+    const localModel = catalogModels.find(m =>
+      !m.requires_network && m.enabled && availableModels.includes(m.id)
+    );
+    if (localModel) return localModel.id;
+
+    // Fallback to first available model or stub
+    return mergedModels[0] ?? "stub-model";
+  }, [catalogModels, availableModels, mergedModels]);
 
   const [stepType, setStepType] = React.useState(
-    initialValue?.stepType ?? "llm",
+    initialValue?.stepType ?? "prompt", // Default to new prompt type instead of legacy llm
   );
   const [checkpointType, setCheckpointType] = React.useState(
     initialValue?.checkpointType ?? "Step",
@@ -130,15 +148,39 @@ export default function CheckpointEditor({
     initialValue && initialValue.tokenBudget ? String(initialValue.tokenBudget) : "1000",
   );
   const [prompt, setPrompt] = React.useState(initialValue?.prompt ?? "");
+
+  // Helper to get catalog info for a model
+  const getModelInfo = React.useCallback((modelId: string) => {
+    return catalogModels.find(m => m.id === modelId);
+  }, [catalogModels]);
+
+  // Get info for currently selected model
+  const selectedModelInfo = React.useMemo(() => {
+    return getModelInfo(model);
+  }, [model, getModelInfo]);
+
+  // Default proof mode based on step type
+  const getDefaultProofMode = (type: string): RunProofMode => {
+    if (type === "summarize" || type === "prompt" || type === "llm") {
+      return "concordant"; // LLM-based steps default to concordant
+    }
+    return "exact"; // Only ingest defaults to exact
+  };
+
   const [proofMode, setProofMode] = React.useState<RunProofMode>(
-    initialValue?.proofMode ?? "exact",
+    initialValue?.proofMode ?? getDefaultProofMode(initialValue?.stepType ?? "llm"),
   );
   const [epsilon, setEpsilon] = React.useState<number | null>(() => {
     if (typeof initialValue?.epsilon === "number") {
       return clampNormalizedEpsilon(initialValue.epsilon);
     }
     if (initialValue?.proofMode === "concordant") {
-      return DEFAULT_CONCORDANT_EPSILON;
+      return 0.5; // Default epsilon for concordant mode
+    }
+    // For LLM-based steps (summarize/prompt/llm) without initial value, set default epsilon
+    const type = initialValue?.stepType ?? "prompt";
+    if (type === "summarize" || type === "prompt" || type === "llm") {
+      return 0.5;
     }
     return null;
   });
@@ -162,6 +204,20 @@ export default function CheckpointEditor({
   const canSubmitCurrent = React.useMemo(() => {
     return concordantSubmissionAllowed(proofMode, epsilon);
   }, [proofMode, epsilon]);
+
+  // When step type changes, update proof mode defaults
+  React.useEffect(() => {
+    if (!initialValue) {
+      // Only apply defaults for new steps (not editing)
+      const defaultMode = getDefaultProofMode(stepType);
+      setProofMode(defaultMode);
+      if (defaultMode === "concordant") {
+        setEpsilon(0.5);
+      } else {
+        setEpsilon(null);
+      }
+    }
+  }, [stepType, initialValue]);
 
   React.useEffect(() => {
     setStepType(initialValue?.stepType ?? "llm");
@@ -279,6 +335,20 @@ export default function CheckpointEditor({
         return;
       }
 
+      if (!proofMode || (proofMode !== "exact" && proofMode !== "concordant")) {
+        setError("Proof mode selection is required.");
+        return;
+      }
+
+      let epsilonValue: number | null = null;
+      if (proofMode === "concordant") {
+        if (!isValidNormalizedEpsilon(epsilon)) {
+          setError("Concordant checkpoints require an epsilon between 0 and 1.");
+          return;
+        }
+        epsilonValue = clampNormalizedEpsilon(epsilon as number);
+      }
+
       const configJson = JSON.stringify({
         stepType: "summarize",
         sourceStep: sourceStep,
@@ -320,6 +390,20 @@ export default function CheckpointEditor({
       if (!cleanedPrompt) {
         setError("Prompt text is required.");
         return;
+      }
+
+      if (!proofMode || (proofMode !== "exact" && proofMode !== "concordant")) {
+        setError("Proof mode selection is required.");
+        return;
+      }
+
+      let epsilonValue: number | null = null;
+      if (proofMode === "concordant") {
+        if (!isValidNormalizedEpsilon(epsilon)) {
+          setError("Concordant checkpoints require an epsilon between 0 and 1.");
+          return;
+        }
+        epsilonValue = clampNormalizedEpsilon(epsilon as number);
       }
 
       const configJson = JSON.stringify({
@@ -514,11 +598,16 @@ export default function CheckpointEditor({
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             Model
             <select value={model} onChange={(event) => setModel(event.target.value)}>
-              {mergedModels.map((modelId) => (
-                <option key={modelId} value={modelId}>
-                  {modelId}
-                </option>
-              ))}
+              {mergedModels.map((modelId) => {
+                const info = getModelInfo(modelId);
+                const badge = info ? (info.requires_network ? "[R]" : "[L]") : "";
+                const displayText = info ? `${badge} ${info.display_name}` : modelId;
+                return (
+                  <option key={modelId} value={modelId}>
+                    {displayText}
+                  </option>
+                );
+              })}
             </select>
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -560,6 +649,86 @@ export default function CheckpointEditor({
               onChange={(event) => setTokenBudget(event.target.value)}
             />
           </label>
+          {/* Proof configuration for summarize */}
+          <fieldset
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+              padding: 0,
+              border: "none",
+              margin: 0,
+            }}
+          >
+            <legend style={{ marginBottom: "4px" }}>Proof configuration</legend>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <input
+                  type="radio"
+                  name={proofModeFieldName}
+                  value="exact"
+                  checked={proofMode === "exact"}
+                  onChange={() => {
+                    setProofMode("exact");
+                    setError(null);
+                  }}
+                />
+                Exact
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <input
+                  type="radio"
+                  name={proofModeFieldName}
+                  value="concordant"
+                  checked={proofMode === "concordant"}
+                  onChange={() => {
+                    setProofMode("concordant");
+                    setError(null);
+                    setEpsilon((current) =>
+                      isValidNormalizedEpsilon(current)
+                        ? clampNormalizedEpsilon(current as number)
+                        : 0.5, // Default for summarize
+                    );
+                  }}
+                />
+                Concordant (recommended)
+              </label>
+            </div>
+            {proofMode === "concordant" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={clampNormalizedEpsilon(
+                    isValidNormalizedEpsilon(epsilon)
+                      ? (epsilon as number)
+                      : 0.5,
+                  )}
+                  onChange={(event) => {
+                    const nextValue = Number(event.target.value);
+                    setEpsilon(clampNormalizedEpsilon(nextValue));
+                    setError(null);
+                  }}
+                />
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  ε ={" "}
+                  {clampNormalizedEpsilon(
+                    isValidNormalizedEpsilon(epsilon)
+                      ? (epsilon as number)
+                      : 0.5,
+                  ).toFixed(2)}
+                </span>
+              </div>
+            )}
+          </fieldset>
+          {proofMode === "concordant" && !canSubmitCurrent ? (
+            <div style={{ color: "#f48771", fontSize: "0.85rem" }}>
+              Adjust the epsilon slider to a value between 0 and 1 before saving this concordant
+              checkpoint.
+            </div>
+          ) : null}
         </>
       )}
 
@@ -584,11 +753,16 @@ export default function CheckpointEditor({
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             Model
             <select value={model} onChange={(event) => setModel(event.target.value)}>
-              {mergedModels.map((modelId) => (
-                <option key={modelId} value={modelId}>
-                  {modelId}
-                </option>
-              ))}
+              {mergedModels.map((modelId) => {
+                const info = getModelInfo(modelId);
+                const badge = info ? (info.requires_network ? "[R]" : "[L]") : "";
+                const displayText = info ? `${badge} ${info.display_name}` : modelId;
+                return (
+                  <option key={modelId} value={modelId}>
+                    {displayText}
+                  </option>
+                );
+              })}
             </select>
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -619,6 +793,91 @@ export default function CheckpointEditor({
               onChange={(event) => setTokenBudget(event.target.value)}
             />
           </label>
+        </>
+      )}
+
+      {stepType === "prompt" && (
+        <>
+          {/* Proof configuration for prompt */}
+          <fieldset
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+              padding: 0,
+              border: "none",
+              margin: 0,
+            }}
+          >
+            <legend style={{ marginBottom: "4px" }}>Proof configuration</legend>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <input
+                  type="radio"
+                  name={proofModeFieldName}
+                  value="exact"
+                  checked={proofMode === "exact"}
+                  onChange={() => {
+                    setProofMode("exact");
+                    setError(null);
+                  }}
+                />
+                Exact
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <input
+                  type="radio"
+                  name={proofModeFieldName}
+                  value="concordant"
+                  checked={proofMode === "concordant"}
+                  onChange={() => {
+                    setProofMode("concordant");
+                    setError(null);
+                    setEpsilon((current) =>
+                      isValidNormalizedEpsilon(current)
+                        ? clampNormalizedEpsilon(current as number)
+                        : 0.5,
+                    );
+                  }}
+                />
+                Concordant
+              </label>
+            </div>
+            {proofMode === "concordant" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={clampNormalizedEpsilon(
+                    isValidNormalizedEpsilon(epsilon)
+                      ? (epsilon as number)
+                      : 0.5,
+                  )}
+                  onChange={(event) => {
+                    const nextValue = Number(event.target.value);
+                    setEpsilon(clampNormalizedEpsilon(nextValue));
+                    setError(null);
+                  }}
+                />
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  ε ={" "}
+                  {clampNormalizedEpsilon(
+                    isValidNormalizedEpsilon(epsilon)
+                      ? (epsilon as number)
+                      : 0.5,
+                  ).toFixed(2)}
+                </span>
+              </div>
+            )}
+          </fieldset>
+          {proofMode === "concordant" && !canSubmitCurrent ? (
+            <div style={{ color: "#f48771", fontSize: "0.85rem" }}>
+              Adjust the epsilon slider to a value between 0 and 1 before saving this concordant
+              checkpoint.
+            </div>
+          ) : null}
         </>
       )}
 

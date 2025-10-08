@@ -27,6 +27,7 @@ import {
 } from "../styles/common.js";
 import CheckpointDetailsPanel from "./CheckpointDetailsPanel.js";
 import PolicyHistoryModal from "./PolicyHistoryModal.js";
+import ApiKeySettingsModal from "./ApiKeySettingsModal.js";
 
 export interface CarCheckpointRow {
   id: string;
@@ -100,6 +101,7 @@ export default function ContextPanel({
   const [showHistory, setShowHistory] = React.useState<boolean>(false);
   const [policyVersions, setPolicyVersions] = React.useState<PolicyVersion[]>([]);
   const [historyLoading, setHistoryLoading] = React.useState<boolean>(false);
+  const [showApiKeySettings, setShowApiKeySettings] = React.useState<boolean>(false);
 
   const [costEstimates, setCostEstimates] = React.useState<RunCostEstimates | null>(null);
   const [costLoading, setCostLoading] = React.useState<boolean>(false);
@@ -791,6 +793,30 @@ export default function ContextPanel({
           onClose={() => setShowHistory(false)}
         />
       )}
+
+      {showApiKeySettings && (
+        <ApiKeySettingsModal onClose={() => setShowApiKeySettings(false)} />
+      )}
+
+      {/* --- Settings Section --- */}
+      <div
+        style={{
+          marginTop: "1.5rem",
+          paddingTop: "1rem",
+          borderTop: "1px solid #333",
+        }}
+      >
+        <h3 style={{ margin: 0, marginBottom: '12px' }}>Settings</h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: 'stretch' }}>
+          <button
+            type="button"
+            onClick={() => setShowApiKeySettings(true)}
+            style={combineButtonStyles(buttonSecondary)}
+          >
+            🔑 API Keys
+          </button>
+        </div>
+      </div>
 
       {/* --- Portability (buttons stacked vertically) --- */}
       <div

@@ -566,3 +566,63 @@ export async function importProject(payload: FileImportPayload): Promise<Project
 export async function importCar(payload: FileImportPayload): Promise<CarImportResult> {
   return await invoke<CarImportResult>('import_car', { args: payload });
 }
+
+// ============================================================================
+// API Key Management
+// ============================================================================
+
+export type ApiKeyProvider = 'anthropic' | 'openai' | 'google' | 'groq' | 'xai';
+
+export interface ApiKeyStatus {
+  provider: ApiKeyProvider;
+  display_name: string;
+  is_configured: boolean;
+  example_format: string;
+}
+
+export async function listApiKeysStatus(): Promise<ApiKeyStatus[]> {
+  return await invoke<ApiKeyStatus[]>('list_api_keys_status');
+}
+
+export async function setApiKey(provider: ApiKeyProvider, apiKey: string): Promise<void> {
+  return await invoke<void>('set_api_key', { provider, apiKey });
+}
+
+export async function deleteApiKey(provider: ApiKeyProvider): Promise<void> {
+  return await invoke<void>('delete_api_key', { provider });
+}
+
+// ============================================================================
+// Model Catalog
+// ============================================================================
+
+export interface CatalogModel {
+  id: string;
+  provider: string;
+  display_name: string;
+  description: string;
+  cost_per_million_tokens: number;
+  nature_cost_per_million_tokens: number;
+  energy_kwh_per_million_tokens: number;
+  enabled: boolean;
+  requires_network: boolean;
+  requires_api_key: boolean;
+  tags: string[];
+  context_window?: number;
+  max_output_tokens?: number;
+  is_api_key_configured: boolean;
+}
+
+export interface ModelCostEstimate {
+  usd_cost: number;
+  nature_cost: number;
+  energy_kwh: number;
+}
+
+export async function listCatalogModels(): Promise<CatalogModel[]> {
+  return await invoke<CatalogModel[]>('list_catalog_models');
+}
+
+export async function estimateModelCost(modelId: string, tokens: number): Promise<ModelCostEstimate> {
+  return await invoke<ModelCostEstimate>('estimate_model_cost', { modelId, tokens });
+}

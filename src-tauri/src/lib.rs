@@ -34,12 +34,14 @@ impl serde::Serialize for Error {
 
 // Re-export modules to be accessible from main.rs
 pub mod api;
+pub mod api_keys;
 pub mod attachments;
 pub mod car;
 pub mod chunk;
 pub mod governance;
 pub mod ingest;
 pub mod keychain;
+pub mod model_adapters;
 pub mod model_catalog;
 pub mod orchestrator;
 pub mod portability;

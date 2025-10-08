@@ -1,6 +1,6 @@
 // In src-tauri/src/api.rs
 use crate::{
-    car, orchestrator, portability, provenance, replay,
+    api_keys, car, orchestrator, portability, provenance, replay,
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
@@ -1599,4 +1599,119 @@ fn fallback_file_name(fallback_ext: &str) -> String {
     } else {
         format!("upload.{fallback_ext}")
     }
+}
+
+// ============================================================================
+// API Key Management Commands
+// ============================================================================
+
+#[tauri::command]
+pub fn list_api_keys_status() -> Result<Vec<api_keys::ApiKeyStatus>, Error> {
+    Ok(api_keys::get_all_api_key_status())
+}
+
+#[tauri::command]
+pub fn set_api_key(provider: String, api_key: String) -> Result<(), Error> {
+    let provider_enum = api_keys::ApiKeyProvider::from_str(&provider)
+        .ok_or_else(|| Error::Api(format!("Unknown provider: {}", provider)))?;
+
+    api_keys::store_api_key(provider_enum, &api_key)
+        .map_err(|e| Error::Api(e.to_string()))
+}
+
+#[tauri::command]
+pub fn delete_api_key(provider: String) -> Result<(), Error> {
+    let provider_enum = api_keys::ApiKeyProvider::from_str(&provider)
+        .ok_or_else(|| Error::Api(format!("Unknown provider: {}", provider)))?;
+
+    api_keys::delete_api_key(provider_enum).map_err(|e| Error::Api(e.to_string()))
+}
+
+// ============================================================================
+// Model Catalog Commands
+// ============================================================================
+
+use crate::model_catalog;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct CatalogModel {
+    pub id: String,
+    pub provider: String,
+    pub display_name: String,
+    pub description: String,
+    pub cost_per_million_tokens: f64,
+    pub nature_cost_per_million_tokens: f64,
+    pub energy_kwh_per_million_tokens: f64,
+    pub enabled: bool,
+    pub requires_network: bool,
+    pub requires_api_key: bool,
+    pub tags: Vec<String>,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub is_api_key_configured: bool,
+}
+
+#[tauri::command]
+pub fn list_catalog_models() -> Result<Vec<CatalogModel>, Error> {
+    let catalog = model_catalog::try_get_global_catalog()
+        .ok_or_else(|| Error::Api("Model catalog not initialized".to_string()))?;
+
+    let models = catalog
+        .get_enabled_models()
+        .into_iter()
+        .map(|model_def| {
+            // Check if API key is configured for this model
+            let is_api_key_configured = if model_def.requires_api_key {
+                let provider = match model_def.provider.as_str() {
+                    "anthropic" => Some(api_keys::ApiKeyProvider::Anthropic),
+                    "openai" => Some(api_keys::ApiKeyProvider::OpenAI),
+                    "google" => Some(api_keys::ApiKeyProvider::Google),
+                    "groq" => Some(api_keys::ApiKeyProvider::Groq),
+                    "xai" => Some(api_keys::ApiKeyProvider::XAI),
+                    _ => None,
+                };
+                provider.map(|p| api_keys::has_api_key(p)).unwrap_or(false)
+            } else {
+                true // Local models don't need API keys
+            };
+
+            CatalogModel {
+                id: model_def.id.clone(),
+                provider: model_def.provider.clone(),
+                display_name: model_def.display_name.clone(),
+                description: model_def.description.clone(),
+                cost_per_million_tokens: model_def.cost_per_million_tokens,
+                nature_cost_per_million_tokens: model_def.nature_cost_per_million_tokens,
+                energy_kwh_per_million_tokens: model_def.energy_kwh_per_million_tokens,
+                enabled: model_def.enabled,
+                requires_network: model_def.requires_network,
+                requires_api_key: model_def.requires_api_key,
+                tags: model_def.tags.clone(),
+                context_window: model_def.context_window,
+                max_output_tokens: model_def.max_output_tokens,
+                is_api_key_configured,
+            }
+        })
+        .collect();
+
+    Ok(models)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct ModelCostEstimate {
+    pub usd_cost: f64,
+    pub nature_cost: f64,
+    pub energy_kwh: f64,
+}
+
+#[tauri::command]
+pub fn estimate_model_cost(model_id: String, tokens: u64) -> Result<ModelCostEstimate, Error> {
+    let catalog = model_catalog::try_get_global_catalog()
+        .ok_or_else(|| Error::Api("Model catalog not initialized".to_string()))?;
+
+    Ok(ModelCostEstimate {
+        usd_cost: catalog.calculate_usd_cost(&model_id, tokens),
+        nature_cost: catalog.calculate_nature_cost(&model_id, tokens),
+        energy_kwh: catalog.calculate_energy_kwh(&model_id, tokens),
+    })
 }

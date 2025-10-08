@@ -2,7 +2,8 @@ import React from "react";
 import {
   CheckpointSummary,
   CheckpointDetails,
-  listLocalModels,
+  listCatalogModels,
+  type CatalogModel,
   RunSummary,
   RunExecutionSummary,
   listRuns,
@@ -611,6 +612,7 @@ export default function EditorPanel({
   const [costEstimateError, setCostEstimateError] = React.useState<string | null>(null);
   const [costsRefreshToken, setCostsRefreshToken] = React.useState(0);
 
+  const [catalogModels, setCatalogModels] = React.useState<CatalogModel[]>([]);
   const [availableModels, setAvailableModels] = React.useState<string[]>(["stub-model"]);
   const [modelsLoading, setModelsLoading] = React.useState(false);
   const [modelsError, setModelsError] = React.useState<string | null>(null);
@@ -720,20 +722,21 @@ export default function EditorPanel({
     let cancelled = false;
     setModelsLoading(true);
     setModelsError(null);
-    listLocalModels()
+    listCatalogModels()
       .then((models) => {
         if (cancelled) return;
-        const filtered = models.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-        if (filtered.length === 0) {
+        setCatalogModels(models);
+        const modelIds = models.map(m => m.id);
+        if (modelIds.length === 0) {
           setAvailableModels(["stub-model"]);
         } else {
-          setAvailableModels(filtered);
+          setAvailableModels(modelIds);
         }
       })
       .catch((err) => {
         if (cancelled) return;
-        console.error("Failed to load local models", err);
-        setModelsError("Unable to load local models. Falling back to defaults.");
+        console.error("Failed to load catalog models", err);
+        setModelsError("Unable to load model catalog. Falling back to defaults.");
         setAvailableModels(["stub-model"]);
       })
       .finally(() => {
@@ -1681,6 +1684,7 @@ export default function EditorPanel({
         {activeEditor && (
           <CheckpointEditor
             availableModels={combinedModelOptions}
+            catalogModels={catalogModels}
             existingSteps={checkpointConfigs.map(step => ({
               orderIndex: step.orderIndex,
               checkpointType: step.checkpointType,

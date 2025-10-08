@@ -89,7 +89,12 @@ fn main() {
         api::emit_car,
         api::export_project,
         api::import_project,
-        api::import_car
+        api::import_car,
+        api::list_api_keys_status,
+        api::set_api_key,
+        api::delete_api_key,
+        api::list_catalog_models,
+        api::estimate_model_cost
     ]);
 
     #[cfg(not(feature = "interactive"))]

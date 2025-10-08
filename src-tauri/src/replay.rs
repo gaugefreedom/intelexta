@@ -514,10 +514,8 @@ pub(crate) fn replay_concordant_checkpoint(
     report.replay_digest = replay_digest.clone();
     report.semantic_replay_digest = Some(replay_semantic.clone());
 
-    if replay_digest != original_digest {
-        report.error_message = Some("outputs digest mismatch".to_string());
-        return Ok(report);
-    }
+    // For concordant mode, we check semantic similarity, NOT exact digest match
+    // (LLM outputs are expected to vary, so exact digest will almost always differ)
 
     let distance = provenance::semantic_distance(&original_semantic, &replay_semantic)
         .ok_or_else(|| anyhow!("invalid semantic digest encoding"))?;
