@@ -83,6 +83,17 @@ pub struct ProcessCheckpointProof {
     pub prev_chain: String,
     pub curr_chain: String,
     pub signature: String,
+    // Checkpoint body fields needed for hash verification
+    pub run_id: String,
+    pub kind: String,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inputs_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputs_sha256: Option<String>,
+    pub usage_tokens: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -187,6 +198,8 @@ struct CheckpointRow {
     inputs_sha256: Option<String>,
     outputs_sha256: Option<String>,
     usage_tokens: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
     parent_checkpoint_id: Option<String>,
     turn_index: Option<u32>,
     prev_chain: String,
@@ -251,7 +264,7 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
     let run_steps = stored_run.steps.clone();
 
     let mut stmt = conn.prepare(
-        "SELECT id, kind, timestamp, inputs_sha256, outputs_sha256, usage_tokens, parent_checkpoint_id, turn_index, prev_chain, curr_chain, signature
+        "SELECT id, kind, timestamp, inputs_sha256, outputs_sha256, usage_tokens, prompt_tokens, completion_tokens, parent_checkpoint_id, turn_index, prev_chain, curr_chain, signature
          FROM checkpoints WHERE run_id = ?1 AND run_execution_id = ?2 ORDER BY timestamp ASC",
     )?;
     let rows = stmt.query_map(params![run_id, &execution_id], |row| {
@@ -266,6 +279,8 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
                 )
             })?;
         let usage: i64 = row.get(5)?;
+        let prompt: i64 = row.get(6)?;
+        let completion: i64 = row.get(7)?;
         Ok(CheckpointRow {
             id: row.get(0)?,
             kind: row.get(1)?,
@@ -273,13 +288,15 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
             inputs_sha256: row.get(3)?,
             outputs_sha256: row.get(4)?,
             usage_tokens: usage.max(0) as u64,
-            parent_checkpoint_id: row.get(6)?,
+            prompt_tokens: prompt.max(0) as u64,
+            completion_tokens: completion.max(0) as u64,
+            parent_checkpoint_id: row.get(8)?,
             turn_index: row
-                .get::<_, Option<i64>>(7)?
+                .get::<_, Option<i64>>(9)?
                 .map(|value| value.max(0) as u32),
-            prev_chain: row.get(8)?,
-            curr_chain: row.get(9)?,
-            signature: row.get(10)?,
+            prev_chain: row.get(10)?,
+            curr_chain: row.get(11)?,
+            signature: row.get(12)?,
         })
     })?;
 
@@ -344,7 +361,9 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
 
     let is_interactive = checkpoints.iter().any(|ck| ck.turn_index.is_some());
 
-    let process_proof = if is_interactive {
+    // Always include process proof with signatures for verification
+    // (Previously this was only included for interactive workflows)
+    let process_proof = if !checkpoints.is_empty() {
         let sequential = checkpoints
             .iter()
             .map(|ck| ProcessCheckpointProof {
@@ -354,6 +373,15 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
                 prev_chain: ck.prev_chain.clone(),
                 curr_chain: ck.curr_chain.clone(),
                 signature: ck.signature.clone(),
+                // Checkpoint body fields for hash verification
+                run_id: run_id.to_string(),
+                kind: ck.kind.clone(),
+                timestamp: ck.timestamp.to_rfc3339(),
+                inputs_sha256: ck.inputs_sha256.clone(),
+                outputs_sha256: ck.outputs_sha256.clone(),
+                usage_tokens: ck.usage_tokens,
+                prompt_tokens: ck.prompt_tokens,
+                completion_tokens: ck.completion_tokens,
             })
             .collect();
         Some(ProcessProof {

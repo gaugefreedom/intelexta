@@ -1352,7 +1352,7 @@ pub(crate) fn emit_car_to_base_dir(
     let file_path_str = file_path.to_string_lossy().to_string();
 
     conn.execute(
-        "INSERT INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT OR REPLACE INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             &car.id,
             run_id,
@@ -1387,7 +1387,7 @@ pub fn emit_car(
         // Still record in database
         let created_at = car.created_at.to_rfc3339();
         conn.execute(
-            "INSERT INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR REPLACE INTO receipts (id, run_id, created_at, file_path, match_kind, epsilon, s_grade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 &car.id,
                 &run_id,
