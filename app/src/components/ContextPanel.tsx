@@ -865,21 +865,39 @@ export default function ContextPanel({
           </button>
         </div>
 
-        {/* All the status messages below will now format nicely in the vertical layout */}
-        {exportStatus && (<span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{exportStatus}</span>)}
-        {exportError && (<span style={{ color: "#f48771", fontSize: "0.85rem" }}>{exportError}</span>)}
-        {projectImportStatus && (<span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{projectImportStatus}</span>)}
-        {projectImportError && (<span style={{ color: "#f48771", fontSize: "0.85rem" }}>{projectImportError}</span>)}
-        {lastImportSummary && (
-          <ul style={{ margin: 0, paddingLeft: "18px", fontSize: "0.8rem", color: "#cbd5f5" }}>
-            <li>Runs imported: {lastImportSummary.runsImported}</li>
-            <li>Checkpoints imported: {lastImportSummary.checkpointsImported}</li>
-            <li>Receipts imported: {lastImportSummary.receiptsImported}</li>
-            <li>Incidents generated: {lastImportSummary.incidentsGenerated}</li>
-          </ul>
+        {/* Scrollable container for portability status messages */}
+        {(exportStatus || exportError || projectImportStatus || projectImportError || lastImportSummary || carImportStatus || carImportError) && (
+          <div
+            style={{
+              marginTop: "12px",
+              maxHeight: "200px",
+              overflowY: "auto",
+              border: "1px solid #333",
+              borderRadius: "4px",
+              padding: "8px",
+              backgroundColor: "#1a1a1a",
+              fontSize: "0.85rem",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            }}
+          >
+            {exportStatus && (<span style={{ color: "#a5d6a7" }}>{exportStatus}</span>)}
+            {exportError && (<span style={{ color: "#f48771" }}>{exportError}</span>)}
+            {projectImportStatus && (<span style={{ color: "#a5d6a7" }}>{projectImportStatus}</span>)}
+            {projectImportError && (<span style={{ color: "#f48771" }}>{projectImportError}</span>)}
+            {lastImportSummary && (
+              <ul style={{ margin: 0, paddingLeft: "18px", fontSize: "0.8rem", color: "#cbd5f5" }}>
+                <li>Runs imported: {lastImportSummary.runsImported}</li>
+                <li>Checkpoints imported: {lastImportSummary.checkpointsImported}</li>
+                <li>Receipts imported: {lastImportSummary.receiptsImported}</li>
+                <li>Incidents generated: {lastImportSummary.incidentsGenerated}</li>
+              </ul>
+            )}
+            {carImportStatus && (<span style={{ color: "#a5d6a7" }}>{carImportStatus}</span>)}
+            {carImportError && (<span style={{ color: "#f48771" }}>{carImportError}</span>)}
+          </div>
         )}
-        {carImportStatus && (<span style={{ color: "#a5d6a7", fontSize: "0.85rem" }}>{carImportStatus}</span>)}
-        {carImportError && (<span style={{ color: "#f48771", fontSize: "0.85rem" }}>{carImportError}</span>)}
         {carReplayReport && carSnapshot && carSnapshotSummary && (
           <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "12px" }}>
             <div

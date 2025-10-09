@@ -966,9 +966,10 @@ export default function EditorPanel({
       }
 
       setNewRunName("");
-      onSelectRun(runId, undefined);
       setStatusMessage("Run created. Configure steps before execution.");
       onRunsMutated?.();
+      // Select the new run after triggering refresh
+      onSelectRun(runId, undefined);
     } catch (err) {
       console.error("Failed to create run", err);
       const message = err instanceof Error ? err.message : "Unable to create run.";

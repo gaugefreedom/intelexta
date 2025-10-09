@@ -23,9 +23,10 @@ export default function App() {
   }, []);
 
   const handleRunExecuted = React.useCallback((runId: string, execution: RunExecutionSummary) => {
-    requestRunsRefresh();
     setSelectedRunId(runId);
     setSelectedExecutionId(execution.id);
+    // Trigger refresh after selecting execution to avoid race condition
+    requestRunsRefresh();
   }, [requestRunsRefresh]);
 
   const handleRunSelection = React.useCallback((runId: string | null, executionId?: string | null) => {
