@@ -2,16 +2,39 @@
 
 Standalone command-line tool for verifying Intelexta CAR (Content-Addressed Receipt) files.
 
+**Status**: ✅ **Phase 1 MVP Complete** (v0.2) - Full cryptographic integrity verification
+
 ## What it does
 
-`intelexta-verify` provides **trustless verification** of AI workflow proofs without requiring the full Intelexta application or database. It verifies:
+`intelexta-verify` provides **trustless verification** of AI workflow proofs without requiring the full Intelexta application or database.
 
-- ✅ **File Integrity**: CAR file is properly formatted
-- ✅ **Hash Chain**: Tamper-evident chain linking all checkpoints
-- ✅ **Cryptographic Signatures**: Ed25519 signatures on every checkpoint
-- ✅ **Content Integrity**: Workflow config and attachment files match their hashes
-  - Config hash: Verifies prompts/models in `run.steps` haven't been tampered with
-  - Attachment hashes: Verifies all output files match their checkpoint hashes
+### ✅ Completed Features (Phase 1 MVP)
+
+1. **Full CAR File Support**
+   - ✅ Reads `.car.json` (plain JSON)
+   - ✅ Reads `.car.zip` (compressed archives with attachments)
+   - ✅ Auto-detects format
+
+2. **Cryptographic Verification**
+   - ✅ Hash chain integrity (SHA-256 with JCS canonical JSON)
+   - ✅ Ed25519 signature verification on every checkpoint
+   - ✅ Content integrity (workflow config + attachments)
+   - ✅ Tamper detection for:
+     - Modified prompts or models in workflow specification
+     - Changed attachment files (outputs)
+     - Altered checkpoint metadata (timestamps, tokens, hashes)
+     - Forged or invalid signatures
+
+3. **User-Friendly Output**
+   - ✅ Colored terminal output with clear indicators
+   - ✅ JSON format for automation/CI pipelines
+   - ✅ Detailed error messages showing what failed and why
+
+4. **Production Ready**
+   - ✅ Proper error handling with context
+   - ✅ Exit codes (0=verified, 1=failed)
+   - ✅ CLI argument parsing with help text
+   - ✅ Works offline (no network or database required)
 
 ## Installation
 
@@ -103,24 +126,51 @@ fi
 
 ## How it works
 
-### Phase 1: Integrity Verification (Current)
+### ✅ Phase 1: Integrity Verification (COMPLETED - v0.2)
 
-1. **Parse CAR file**: Reads JSON or extracts from ZIP
-2. **Verify hash chain**: Each checkpoint's `curr_chain` must equal `SHA256(prev_chain || canonical_json(checkpoint_body))`
-3. **Verify signatures**: Each checkpoint's Ed25519 signature must be valid for the `curr_chain` hash
-4. **Verify content integrity**:
-   - **Config hash**: Ensures workflow specification (prompts, models) matches the hash in provenance claims
-   - **Attachment files**: For each checkpoint with an `outputs_sha256`, verifies the file `attachments/{hash}.txt` exists and matches the hash
-   - **Tamper detection**: Any modification to prompts, attachments, or checkpoint hashes will cause verification to fail
+The verification process has 4 stages:
 
-### Future: Phase 2 - Graded Replay
+#### 1. File Integrity
+- Parses CAR from `.car.json` (plain JSON) or `.car.zip` (compressed archive)
+- Auto-detects format and extracts if needed
+- Validates JSON structure against CAR schema
 
-The next version will support **reproducibility verification** by re-running the workflow and comparing outputs:
+#### 2. Hash Chain Verification
+- Each checkpoint contains a cryptographic chain: `SHA256(prev_chain || canonical_json(checkpoint_body))`
+- Verifies every checkpoint's `curr_chain` matches the computed hash
+- Uses JCS (JSON Canonicalization Scheme) for deterministic hashing
+- **Detects**: Any modification to checkpoint metadata, timestamps, or token counts
+
+#### 3. Signature Verification
+- Each checkpoint is digitally signed with Ed25519
+- Verifies signature against the checkpoint's `curr_chain` hash
+- Uses the public key from `signer_public_key` field
+- **Detects**: Forged checkpoints or unauthorized modifications
+
+#### 4. Content Integrity Verification
+- **Config hash**: Computes `SHA256(canonical_json(run.steps))` and verifies against provenance claim
+  - **Detects**: Modified prompts, changed models, altered workflow configuration
+- **Attachment verification**: For each file in `attachments/`, verifies content matches filename hash
+  - Files are content-addressed: `attachments/{sha256_hash}.txt`
+  - **Detects**: Modified outputs, tampered attachments, substituted files
+
+**Result**: Any tampering with prompts, models, outputs, or execution metadata causes verification to fail.
+
+### 🔮 Phase 2: Graded Replay (FUTURE)
+
+The next phase will add **reproducibility verification** by re-executing workflows:
 
 - Parse workflow specification from CAR
-- Re-execute each step (requires API keys via env vars)
-- Compare outputs with similarity scoring
-- Generate graded verification report (A+, A, B, etc.)
+- Re-execute each step using the same models/prompts (requires API keys via env vars)
+- Compare outputs with semantic similarity scoring
+- Generate graded verification report:
+  - **A+**: Exact match (deterministic outputs)
+  - **A**: High similarity (>95% semantic match)
+  - **B**: Good similarity (>80% semantic match)
+  - **C**: Partial similarity (>60% semantic match)
+  - **F**: Failed to reproduce (<60% similarity)
+
+This will enable verification of reproducibility claims and detection of model drift over time.
 
 ## CAR File Format
 
