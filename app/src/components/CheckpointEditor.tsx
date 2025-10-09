@@ -89,12 +89,51 @@ export default function CheckpointEditor({
   submitting = false,
 }: CheckpointEditorProps) {
   const mergedModels = React.useMemo(() => {
-    const set = new Set<string>(availableModels);
+    const modelIdSet = new Set<string>();
+
+    console.log('[CheckpointEditor] Building merged models list');
+    console.log('[CheckpointEditor] catalogModels:', catalogModels.length);
+    console.log('[CheckpointEditor] availableModels:', availableModels);
+
+    catalogModels.forEach(model => {
+      console.log(`[CheckpointEditor] Checking model ${model.id}:`, {
+        requires_network: model.requires_network,
+        requires_api_key: model.requires_api_key,
+        is_api_key_configured: model.is_api_key_configured,
+      });
+
+      // Add local models (like Ollama) ONLY if they are detected as available on the system.
+      if (!model.requires_network) {
+        if (availableModels.includes(model.id)) {
+          console.log(`[CheckpointEditor] Adding local model: ${model.id}`);
+          modelIdSet.add(model.id);
+        }
+      }
+      // Add remote models ONLY if their API key is configured.
+      else if (model.requires_api_key && model.is_api_key_configured) {
+        console.log(`[CheckpointEditor] Adding remote model with API key: ${model.id}`);
+        modelIdSet.add(model.id);
+      }
+      // Handle models that don't need a key (like the stub-model).
+      else if (!model.requires_api_key) {
+        console.log(`[CheckpointEditor] Adding model without API key requirement: ${model.id}`);
+        modelIdSet.add(model.id);
+      }
+    });
+
+    // Ensure the initial value is in the list if we are editing an existing step.
     if (initialValue?.model) {
-      set.add(initialValue.model);
+      modelIdSet.add(initialValue.model);
     }
-    return Array.from(set);
-  }, [availableModels, initialValue?.model]);
+
+    // If after all checks the list is empty, add the stub model as a last resort.
+    if (modelIdSet.size === 0) {
+      modelIdSet.add("stub-model");
+    }
+
+    console.log('[CheckpointEditor] Final merged models:', Array.from(modelIdSet));
+    return Array.from(modelIdSet);
+  }, [catalogModels, availableModels, initialValue?.model]);
 
   // Filter steps to only show previous steps (for chaining)
   // When creating a new step, show all existing steps
@@ -121,21 +160,27 @@ export default function CheckpointEditor({
 
   // Find first local model (prioritize Ollama, then any non-network model)
   const defaultModel = React.useMemo(() => {
-    // First try to find an Ollama model
-    const ollamaModel = catalogModels.find(m =>
-      m.provider === "ollama" && m.enabled && availableModels.includes(m.id)
-    );
-    if (ollamaModel) return ollamaModel.id;
+    // 1. If an initial model is provided, use it.
+    if (initialValue?.model && catalogModels.some(m => m.id === initialValue.model)) {
+      return initialValue.model;
+    }
 
-    // Then try any local model (doesn't require network)
-    const localModel = catalogModels.find(m =>
-      !m.requires_network && m.enabled && availableModels.includes(m.id)
-    );
-    if (localModel) return localModel.id;
+    // 2. Prioritize the first available and configured Ollama model.
+    const ollamaModel = catalogModels.find(m => m.provider === "ollama" && m.is_api_key_configured);
+    if (ollamaModel) {
+      return ollamaModel.id;
+    }
 
-    // Fallback to first available model or stub
-    return mergedModels[0] ?? "stub-model";
-  }, [catalogModels, availableModels, mergedModels]);
+    // 3. Next, prioritize the first available and configured remote model.
+    const remoteModel = catalogModels.find(m => m.requires_network && m.is_api_key_configured);
+    if (remoteModel) {
+      return remoteModel.id;
+    }
+    
+    // 4. Fallback to the first enabled model in the catalog, or finally the stub model.
+    const firstEnabled = catalogModels.find(m => m.enabled);
+    return firstEnabled?.id ?? "stub-model";
+  }, [catalogModels, initialValue?.model]);
 
   const [stepType, setStepType] = React.useState(
     initialValue?.stepType ?? "prompt", // Default to new prompt type instead of legacy llm

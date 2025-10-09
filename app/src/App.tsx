@@ -45,6 +45,7 @@ export default function App() {
               projectId={selectedProject}
               selectedRunId={selectedRunId}
               onPolicyUpdated={requestRunsRefresh}
+              onApiKeysUpdated={requestRunsRefresh}
             />
           ) : (
             <div>Select a project</div>

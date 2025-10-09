@@ -84,12 +84,14 @@ interface ContextPanelProps {
   projectId: string;
   selectedRunId: string | null;
   onPolicyUpdated?: () => void;
+  onApiKeysUpdated?: () => void;
 }
 
 export default function ContextPanel({
   projectId,
   selectedRunId,
   onPolicyUpdated,
+  onApiKeysUpdated,
 }: ContextPanelProps) {
   const [policy, setPolicy] = React.useState<Policy | null>(null);
   const [loading, setLoading] = React.useState<boolean>(true);
@@ -795,7 +797,12 @@ export default function ContextPanel({
       )}
 
       {showApiKeySettings && (
-        <ApiKeySettingsModal onClose={() => setShowApiKeySettings(false)} />
+        <ApiKeySettingsModal
+          onClose={() => {
+            setShowApiKeySettings(false);
+            onApiKeysUpdated?.();
+          }}
+        />
       )}
 
       {/* --- Settings Section --- */}

@@ -24,6 +24,10 @@ pub struct ModelDef {
     pub id: String,
     pub provider: String,
     pub display_name: String,
+    
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_name: Option<String>,
+
     pub description: String,
 
     /// USD cost per million tokens (blended input/output)
@@ -182,20 +186,48 @@ impl ModelCatalog {
 
     /// Get default catalog path
     fn default_catalog_path() -> Result<PathBuf> {
-        // Try to find catalog relative to executable or in standard config location
-        let mut path = std::env::current_dir()?;
-        path.push("config");
-        path.push("model_catalog.toml");
+        // Try multiple locations to find the catalog
+        let mut candidates = Vec::new();
 
-        if !path.exists() {
-            // Try relative to parent directory (for development)
-            path = std::env::current_dir()?;
-            path.push("..");
-            path.push("config");
-            path.push("model_catalog.toml");
+        // 1. Try current directory + config/model_catalog.toml
+        if let Ok(cwd) = std::env::current_dir() {
+            let path = cwd.join("config").join("model_catalog.toml");
+            eprintln!("[model_catalog] Trying: {}", path.display());
+            candidates.push(path);
         }
 
-        Ok(path)
+        // 2. Try parent directory + config/model_catalog.toml (for Tauri dev mode)
+        if let Ok(cwd) = std::env::current_dir() {
+            let path = cwd.join("..").join("config").join("model_catalog.toml");
+            eprintln!("[model_catalog] Trying: {}", path.display());
+            candidates.push(path);
+        }
+
+        // 3. Try executable directory + config/model_catalog.toml
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                let path = exe_dir.join("config").join("model_catalog.toml");
+                eprintln!("[model_catalog] Trying: {}", path.display());
+                candidates.push(path);
+            }
+        }
+
+        // Return the first path that exists
+        for path in &candidates {
+            if path.exists() {
+                eprintln!("[model_catalog] ✓ Found catalog at: {}", path.display());
+                return Ok(path.clone());
+            }
+        }
+
+        // If none exist, return the first candidate and let the error be handled upstream
+        eprintln!("[model_catalog] ✗ Could not find model_catalog.toml in any of these locations:");
+        for path in &candidates {
+            eprintln!("[model_catalog]   - {}", path.display());
+        }
+
+        candidates.into_iter().next()
+            .ok_or_else(|| anyhow!("Could not determine catalog path"))
     }
 
     /// Compute SHA256 hash of the catalog content (excluding signature block)
@@ -364,6 +396,7 @@ impl ModelCatalog {
                     id: "stub-model".to_string(),
                     provider: "internal".to_string(),
                     display_name: "Stub Model".to_string(),
+                    api_name: None,
                     description: "Testing model".to_string(),
                     cost_per_million_tokens: 0.0,
                     nature_cost_per_million_tokens: 0.0,

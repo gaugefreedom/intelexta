@@ -748,7 +748,7 @@ export default function EditorPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshToken]);
 
   React.useEffect(() => {
     let cancelled = false;
