@@ -29,6 +29,8 @@ import {
   type FinalizeInteractiveCheckpoint,
   type RunCostEstimates,
   getCheckpointDetails,
+  getProjectUsageLedger,
+  type ProjectUsageLedgerSnapshot,
 } from "../lib/api";
 import { interactiveFeatureEnabled } from "../lib/featureFlags";
 import CheckpointEditor, { CheckpointFormValue } from "./CheckpointEditor";
@@ -612,6 +614,17 @@ export default function EditorPanel({
   const [costEstimateError, setCostEstimateError] = React.useState<string | null>(null);
   const [costsRefreshToken, setCostsRefreshToken] = React.useState(0);
 
+  const [projectLedger, setProjectLedger] = React.useState<ProjectUsageLedgerSnapshot | null>(
+    null,
+  );
+  const [projectLedgerLoading, setProjectLedgerLoading] = React.useState(false);
+  const [projectLedgerError, setProjectLedgerError] = React.useState<string | null>(null);
+  const [projectLedgerRefreshToken, setProjectLedgerRefreshToken] = React.useState(0);
+
+  const refreshProjectLedger = React.useCallback(() => {
+    setProjectLedgerRefreshToken((token) => token + 1);
+  }, []);
+
   const [catalogModels, setCatalogModels] = React.useState<CatalogModel[]>([]);
   const [availableModels, setAvailableModels] = React.useState<string[]>(["stub-model"]);
   const [modelsLoading, setModelsLoading] = React.useState(false);
@@ -725,6 +738,97 @@ export default function EditorPanel({
     return messages;
   }, [costEstimates]);
 
+  const projectLedgerSummary = React.useMemo(() => {
+    if (!projectLedger) {
+      return null as { message: string; severity: "info" | "warn" | "error" } | null;
+    }
+
+    const { totals, budgets } = projectLedger;
+    const segments: string[] = [];
+    let severity: "info" | "warn" | "error" = "info";
+
+    const formatTokens = (value: number) => `${Math.round(value).toLocaleString()} tokens`;
+    const formatUsd = (value: number) =>
+      value.toLocaleString(undefined, {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    const formatNature = (value: number) =>
+      `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} nature`;
+
+    const evaluate = (
+      label: string,
+      used: number,
+      budget: number,
+      formatter: (value: number) => string,
+    ) => {
+      if (budget <= 0) {
+        if (used > 0) {
+          segments.push(`${label} ${formatter(used)} used (no budget)`);
+        }
+        return;
+      }
+      const ratio = used / budget;
+      const percent = Math.min(ratio * 100, 999).toFixed(1);
+      segments.push(`${label} ${formatter(used)} / ${formatter(budget)} (${percent}%)`);
+      if (ratio >= 1) {
+        severity = "error";
+      } else if (ratio >= 0.9 && severity !== "error") {
+        severity = "warn";
+      }
+    };
+
+    evaluate("Tokens", totals.tokens, budgets.tokens, formatTokens);
+    evaluate("USD", totals.usd, budgets.usd, formatUsd);
+    evaluate("Nature", totals.natureCost, budgets.natureCost, formatNature);
+
+    if (segments.length === 0) {
+      return null;
+    }
+
+    return { message: segments.join(" · "), severity };
+  }, [projectLedger]);
+
+  const projectLedgerCalloutStyle = React.useMemo(() => {
+    if (!projectLedgerSummary) {
+      return null;
+    }
+    switch (projectLedgerSummary.severity) {
+      case "error":
+        return {
+          background: "#402020",
+          border: "1px solid #7f1d1d",
+          color: "#f8caca",
+        } as const;
+      case "warn":
+        return {
+          background: "#3a2f1f",
+          border: "1px solid #b45309",
+          color: "#fcd9a1",
+        } as const;
+      default:
+        return {
+          background: "#1f2933",
+          border: "1px solid #2f3b4d",
+          color: "#9cdcfe",
+        } as const;
+    }
+  }, [projectLedgerSummary]);
+
+  const projectLedgerUpdatedLabel = React.useMemo(() => {
+    const raw = projectLedger?.lastUpdated;
+    if (!raw) {
+      return null;
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      return raw;
+    }
+    return parsed.toLocaleString();
+  }, [projectLedger]);
+
   React.useEffect(() => {
     let cancelled = false;
     setModelsLoading(true);
@@ -806,6 +910,35 @@ export default function EditorPanel({
       cancelled = true;
     };
   }, [projectId, refreshToken, onSelectRun, selectedRunId]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setProjectLedgerLoading(true);
+    setProjectLedgerError(null);
+
+    getProjectUsageLedger(projectId)
+      .then((snapshot) => {
+        if (!cancelled) {
+          setProjectLedger(snapshot);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error("Failed to load project ledger", err);
+          setProjectLedger(null);
+          setProjectLedgerError("Unable to load project usage summary.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProjectLedgerLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, refreshToken, projectLedgerRefreshToken]);
 
   React.useEffect(() => {
     if (!selectedRunId) {
@@ -1211,6 +1344,7 @@ export default function EditorPanel({
           : 'Run executed successfully.',
       );
       onRunExecuted?.(selectedRunId, execution);
+      refreshProjectLedger();
     } catch (err) {
       console.error("Failed to execute run", err);
       const message = err instanceof Error ? err.message : "Unable to execute run.";
@@ -1218,7 +1352,7 @@ export default function EditorPanel({
     } finally {
       setExecutingRun(false);
     }
-  }, [selectedRunId, onRunExecuted, concordantStepsMissingEpsilon]);
+  }, [selectedRunId, onRunExecuted, concordantStepsMissingEpsilon, refreshProjectLedger]);
 
   const handleCloneRun = React.useCallback(async () => {
     if (!selectedRunId) {
@@ -1399,6 +1533,33 @@ export default function EditorPanel({
       <h2>Workflow Builder</h2>
       <div style={{ fontSize: "0.85rem", marginBottom: "0.75rem", color: "#9cdcfe" }}>
         Project: {projectId}
+      </div>
+      <div style={{ marginBottom: "0.75rem", display: "flex", flexDirection: "column", gap: "6px" }}>
+        {projectLedgerLoading && (
+          <div style={{ color: "#9cdcfe", fontSize: "0.85rem" }}>Loading project usage…</div>
+        )}
+        {projectLedgerError && (
+          <div style={{ color: "#f48771", fontSize: "0.85rem" }}>{projectLedgerError}</div>
+        )}
+        {!projectLedgerLoading && !projectLedgerError && projectLedgerSummary && projectLedgerCalloutStyle && (
+          <div
+            style={{
+              ...projectLedgerCalloutStyle,
+              borderRadius: "6px",
+              padding: "8px 12px",
+              fontSize: "0.85rem",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>Project usage</div>
+            <div>{projectLedgerSummary.message}</div>
+            {projectLedgerUpdatedLabel && (
+              <div style={{ fontSize: "0.75rem", opacity: 0.8 }}>Updated {projectLedgerUpdatedLabel}</div>
+            )}
+          </div>
+        )}
       </div>
       {conversationContext && interactiveSupport ? (
         <InteractiveConversationView
