@@ -623,6 +623,7 @@ export default function EditorPanel({
   const [editorDetailsLoading, setEditorDetailsLoading] = React.useState(false);
   const [editorDetailsError, setEditorDetailsError] = React.useState<string | null>(null);
   const activeEditorRef = React.useRef<EditorState | null>(null);
+  const pendingRunSelectionRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     activeEditorRef.current = activeEditor;
@@ -758,6 +759,19 @@ export default function EditorPanel({
       .then((runList) => {
         if (cancelled) return;
         setRuns(runList);
+
+        const pendingRunId = pendingRunSelectionRef.current;
+        if (pendingRunId) {
+          const pendingRun = runList.find((run) => run.id === pendingRunId) ?? null;
+          if (pendingRun) {
+            pendingRunSelectionRef.current = null;
+            const latestExecutionId = pendingRun.executions?.[0]?.id ?? null;
+            onSelectRun(pendingRun.id, latestExecutionId);
+          } else {
+            return;
+          }
+        }
+
         if (runList.length === 0) {
           if (selectedRunId !== null) {
             onSelectRun(null, null);
@@ -969,6 +983,7 @@ export default function EditorPanel({
       setStatusMessage("Run created. Configure steps before execution.");
       onRunsMutated?.();
       // Select the new run after triggering refresh
+      pendingRunSelectionRef.current = runId;
       onSelectRun(runId, undefined);
     } catch (err) {
       console.error("Failed to create run", err);
@@ -1247,6 +1262,7 @@ export default function EditorPanel({
       }
 
       setStatusMessage("Run cloned. Switched to the duplicate for editing.");
+      pendingRunSelectionRef.current = clonedRunId;
       onSelectRun(clonedRunId, null);
       onRunsMutated?.();
     } catch (err) {
