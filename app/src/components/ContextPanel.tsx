@@ -1,7 +1,6 @@
 import React from "react";
 import {
   getPolicy,
-  getProjectUsageLedger,
   updatePolicy,
   updatePolicyWithNotes,
   getPolicyVersions,
@@ -18,7 +17,6 @@ import {
   type ReplayReport,
   type ImportedCarSnapshot,
   type CheckpointDetails,
-  type ProjectUsageLedgerSnapshot,
   ProofBadgeKind,
 } from "../lib/api.js";
 import {
@@ -112,17 +110,6 @@ export default function ContextPanel({
   const [costError, setCostError] = React.useState<string | null>(null);
   const [costRefreshToken, setCostRefreshToken] = React.useState(0);
 
-  const [ledgerSnapshot, setLedgerSnapshot] = React.useState<ProjectUsageLedgerSnapshot | null>(
-    null,
-  );
-  const [ledgerLoading, setLedgerLoading] = React.useState<boolean>(false);
-  const [ledgerError, setLedgerError] = React.useState<string | null>(null);
-  const [ledgerRefreshToken, setLedgerRefreshToken] = React.useState(0);
-
-  const refreshLedger = React.useCallback(() => {
-    setLedgerRefreshToken((token) => token + 1);
-  }, []);
-
   const [exportingProject, setExportingProject] = React.useState<boolean>(false);
   const [exportStatus, setExportStatus] = React.useState<string | null>(null);
   const [exportError, setExportError] = React.useState<string | null>(null);
@@ -173,146 +160,6 @@ export default function ContextPanel({
     return messages;
   }, [costEstimates]);
 
-  const ledgerUsageRows = React.useMemo(() => {
-    if (!ledgerSnapshot) {
-      return [] as Array<{
-        key: string;
-        label: string;
-        usedText: string;
-        budgetText: string;
-        remainingText: string;
-        ratio: number | null;
-        overBudget: boolean;
-        nearBudget: boolean;
-      }>;
-    }
-
-    const { totals, budgets, remaining } = ledgerSnapshot;
-
-    const formatValue = (value: number, kind: "tokens" | "usd" | "nature") => {
-      if (kind === "tokens") {
-        return Math.round(value).toLocaleString();
-      }
-      if (kind === "usd") {
-        return value.toLocaleString(undefined, {
-          style: "currency",
-          currency: "USD",
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        });
-      }
-      return value.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-    };
-
-    const unitSuffix = (kind: "tokens" | "usd" | "nature") => {
-      if (kind === "tokens") {
-        return " tokens";
-      }
-      if (kind === "nature") {
-        return " nature";
-      }
-      return "";
-    };
-
-    const buildRow = (
-      key: "tokens" | "usd" | "nature",
-      label: string,
-      used: number,
-      budget: number,
-      remainingValue: number,
-    ) => {
-      if (budget <= 0) {
-        return {
-          key,
-          label,
-          usedText: `${formatValue(used, key)}${unitSuffix(key)}`,
-          budgetText: "—",
-          remainingText: "No budget set",
-          ratio: null,
-          overBudget: false,
-          nearBudget: false,
-        };
-      }
-
-      const ratio = budget > 0 ? used / budget : null;
-      const usedText = `${formatValue(used, key)}${unitSuffix(key)}`;
-      const budgetText = `${formatValue(budget, key)}${unitSuffix(key)}`;
-      const remainingAbs = `${formatValue(Math.abs(remainingValue), key)}${unitSuffix(key)}`;
-      const remainingText =
-        remainingValue >= 0 ? `${remainingAbs} remaining` : `Over by ${remainingAbs}`;
-
-      return {
-        key,
-        label,
-        usedText,
-        budgetText,
-        remainingText,
-        ratio,
-        overBudget: ratio !== null && ratio > 1,
-        nearBudget: ratio !== null && ratio >= 0.9 && ratio <= 1,
-      };
-    };
-
-    return [
-      buildRow("tokens", "Tokens", totals.tokens, budgets.tokens, remaining.tokens),
-      buildRow("usd", "USD", totals.usd, budgets.usd, remaining.usd),
-      buildRow(
-        "nature",
-        "Nature Cost",
-        totals.natureCost,
-        budgets.natureCost,
-        remaining.natureCost,
-      ),
-    ];
-  }, [ledgerSnapshot]);
-
-  const ledgerWarnings = React.useMemo(() => {
-    const warnings: Array<{ severity: "warn" | "error"; message: string }> = [];
-    for (const row of ledgerUsageRows) {
-      if (row.ratio === null) {
-        continue;
-      }
-      const percent = Math.min(row.ratio * 100, 999).toFixed(1);
-      if (row.ratio >= 1) {
-        warnings.push({
-          severity: "error",
-          message: `${row.label}: ${row.usedText} / ${row.budgetText} (${percent}% of budget)`,
-        });
-      } else if (row.ratio >= 0.9) {
-        warnings.push({
-          severity: "warn",
-          message: `${row.label}: ${row.usedText} / ${row.budgetText} (${percent}% of budget)`,
-        });
-      }
-    }
-    return warnings;
-  }, [ledgerUsageRows]);
-
-  const ledgerAlertSeverity = React.useMemo(() => {
-    if (ledgerWarnings.some((warning) => warning.severity === "error")) {
-      return "error" as const;
-    }
-    if (ledgerWarnings.some((warning) => warning.severity === "warn")) {
-      return "warn" as const;
-    }
-    return null;
-  }, [ledgerWarnings]);
-
-  const ledgerUpdatedLabel = React.useMemo(() => {
-    const raw = ledgerSnapshot?.lastUpdated;
-    if (!raw) {
-      return null;
-    }
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) {
-      return raw;
-    }
-    return parsed.toLocaleString();
-  }, [ledgerSnapshot]);
-
   React.useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -345,35 +192,6 @@ export default function ContextPanel({
       cancelled = true;
     };
   }, [projectId]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    setLedgerLoading(true);
-    setLedgerError(null);
-
-    getProjectUsageLedger(projectId)
-      .then((snapshot) => {
-        if (!cancelled) {
-          setLedgerSnapshot(snapshot);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          console.error("Failed to load project usage ledger", err);
-          setLedgerSnapshot(null);
-          setLedgerError("Could not load project usage summary.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLedgerLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, ledgerRefreshToken]);
 
   const handleViewHistory = React.useCallback(async () => {
     setHistoryLoading(true);
@@ -477,7 +295,6 @@ export default function ContextPanel({
       setChangeNotes("");
       setStatus(`Policy saved successfully (v${newVersion}).`);
       setCostRefreshToken((token) => token + 1);
-      refreshLedger();
       onPolicyUpdated?.();
     } catch (err) {
       console.error("Failed to save policy", err);
@@ -569,7 +386,6 @@ export default function ContextPanel({
         setProjectImportStatus(
           `Imported project ${summary.project.name} (${summary.project.id}).`,
         );
-        refreshLedger();
         onPolicyUpdated?.();
       } catch (err) {
         console.error("Failed to import project", err);
@@ -637,7 +453,6 @@ export default function ContextPanel({
         setCarImportStatus(
           `Imported CAR ${result.snapshot.carId} for run ${result.snapshot.runId}.`,
         );
-        refreshLedger();
         onPolicyUpdated?.();
       } catch (err) {
         console.error("Failed to import CAR", err);
@@ -867,92 +682,6 @@ export default function ContextPanel({
         >
           {projectId}
         </div>
-      </div>
-
-      <div style={{ marginBottom: "0.75rem", display: "flex", flexDirection: "column", gap: "8px" }}>
-        {ledgerLoading && <div style={{ color: "#9cdcfe" }}>Loading project usage…</div>}
-        {ledgerError && <div style={{ color: "#f48771" }}>{ledgerError}</div>}
-        {!ledgerLoading && !ledgerError && ledgerUsageRows.length > 0 && (
-          <div
-            style={{
-              backgroundColor: "#1f2933",
-              border: "1px solid #3f4a5a",
-              borderRadius: "6px",
-              padding: "10px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "8px",
-            }}
-          >
-            <div style={{ fontWeight: 600, color: "#9cdcfe" }}>Project usage</div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                gap: "12px",
-              }}
-            >
-              {ledgerUsageRows.map((row) => {
-                const highlightColor = row.overBudget
-                  ? "#f48771"
-                  : row.nearBudget
-                  ? "#fbbf24"
-                  : "#d4d4d4";
-                const secondaryColor = row.overBudget
-                  ? "#f8caca"
-                  : row.nearBudget
-                  ? "#fcd9a1"
-                  : "#9cdcfe";
-                return (
-                  <div key={row.key} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                    <div
-                      style={{
-                        fontSize: "0.75rem",
-                        color: "#9cdcfe",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.04em",
-                      }}
-                    >
-                      {row.label}
-                    </div>
-                    <div style={{ fontWeight: 600, color: highlightColor }}>
-                      {row.usedText} / {row.budgetText}
-                    </div>
-                    <div style={{ fontSize: "0.75rem", color: secondaryColor }}>{row.remainingText}</div>
-                  </div>
-                );
-              })}
-            </div>
-            {ledgerUpdatedLabel && (
-              <div style={{ fontSize: "0.7rem", color: "#7f9ab5" }}>Updated {ledgerUpdatedLabel}</div>
-            )}
-          </div>
-        )}
-
-        {ledgerAlertSeverity && ledgerWarnings.length > 0 && (
-          <div
-            style={{
-              backgroundColor: ledgerAlertSeverity === "error" ? "#402020" : "#3a2f1f",
-              border: ledgerAlertSeverity === "error" ? "1px solid #7f1d1d" : "1px solid #b45309",
-              color: ledgerAlertSeverity === "error" ? "#f8caca" : "#fcd9a1",
-              padding: "10px",
-              borderRadius: "6px",
-              fontSize: "0.85rem",
-              display: "flex",
-              flexDirection: "column",
-              gap: "6px",
-            }}
-          >
-            <div style={{ fontWeight: 600 }}>
-              Project usage {ledgerAlertSeverity === "error" ? "exceeds" : "is nearing"} policy budgets.
-            </div>
-            <ul style={{ margin: 0, paddingLeft: "18px" }}>
-              {ledgerWarnings.map((warning) => (
-                <li key={warning.message}>{warning.message}</li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
 
       {/* --- Cost Overrun Warning (no changes needed here) --- */}

@@ -748,15 +748,25 @@ export default function EditorPanel({
     let severity: "info" | "warn" | "error" = "info";
 
     const formatTokens = (value: number) => `${Math.round(value).toLocaleString()} tokens`;
-    const formatUsd = (value: number) =>
-      value.toLocaleString(undefined, {
+    const formatUsd = (value: number) => {
+      // Show more precision for very small values
+      if (value > 0 && value < 0.01) {
+        return `$${value.toFixed(6)}`;
+      }
+      return value.toLocaleString(undefined, {
         style: "currency",
         currency: "USD",
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       });
-    const formatNature = (value: number) =>
-      `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} nature`;
+    };
+    const formatNature = (value: number) => {
+      // Show more precision for very small values
+      if (value > 0 && value < 0.01) {
+        return `${value.toFixed(6)} nature`;
+      }
+      return `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} nature`;
+    };
 
     const evaluate = (
       label: string,

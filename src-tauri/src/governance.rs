@@ -98,9 +98,11 @@ pub fn estimate_usd_cost(tokens: u64, model_id: Option<&str>) -> f64 {
         if let Some(model) = model_id {
             return catalog.calculate_usd_cost(model, tokens);
         }
+        // If catalog is available but no model specified, use catalog's fallback
+        return (tokens as f64 / 1_000_000.0) * catalog.raw.defaults.fallback_cost_per_million_tokens;
     }
 
-    // Fallback if catalog not available or model not specified
+    // Fallback if catalog not available
     const FALLBACK_COST_PER_1K_TOKENS: f64 = 0.01;
     (tokens as f64 / 1000.0) * FALLBACK_COST_PER_1K_TOKENS
 }
@@ -118,9 +120,11 @@ pub fn estimate_nature_cost(tokens: u64, model_id: Option<&str>) -> f64 {
         if let Some(model) = model_id {
             return catalog.calculate_nature_cost(model, tokens);
         }
+        // If catalog is available but no model specified, use catalog's fallback
+        return (tokens as f64 / 1_000_000.0) * catalog.raw.defaults.fallback_nature_cost_per_million_tokens;
     }
 
-    // Fallback if catalog not available or model not specified
+    // Fallback if catalog not available
     const FALLBACK_NATURE_COST_PER_1K_TOKENS: f64 = 1.0;
     (tokens as f64 / 1000.0) * FALLBACK_NATURE_COST_PER_1K_TOKENS
 }

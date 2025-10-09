@@ -115,6 +115,26 @@ pub fn upsert_with_notes(
         params![project_id, policy_json, new_version],
     )?;
 
+    // Migrate usage ledger from previous version to new version
+    // This preserves accumulated usage while allowing new budgets to apply
+    if current_version > 0 {
+        conn.execute(
+            "INSERT INTO project_usage_ledgers (project_id, policy_version, total_tokens, total_usd, total_nature_cost)
+             SELECT project_id, ?1, total_tokens, total_usd, total_nature_cost
+             FROM project_usage_ledgers
+             WHERE project_id = ?2 AND policy_version = ?3
+             ON CONFLICT(project_id, policy_version) DO NOTHING",
+            params![new_version, project_id, current_version],
+        )?;
+    }
+
+    // Automatically upgrade all runs to the new policy version
+    // This ensures that existing runs immediately benefit from updated budgets
+    conn.execute(
+        "UPDATE runs SET policy_version = ?1 WHERE project_id = ?2",
+        params![new_version, project_id],
+    )?;
+
     Ok(())
 }
 
