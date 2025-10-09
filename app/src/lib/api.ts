@@ -270,6 +270,33 @@ export interface PolicyVersion {
   changeNotes?: string | null;
 }
 
+export interface ProjectLedgerTotals {
+  tokens: number;
+  usd: number;
+  natureCost: number;
+}
+
+export interface ProjectLedgerBudgets {
+  tokens: number;
+  usd: number;
+  natureCost: number;
+}
+
+export interface ProjectLedgerRemaining {
+  tokens: number;
+  usd: number;
+  natureCost: number;
+}
+
+export interface ProjectUsageLedgerSnapshot {
+  projectId: string;
+  policyVersion: number;
+  totals: ProjectLedgerTotals;
+  budgets: ProjectLedgerBudgets;
+  remaining: ProjectLedgerRemaining;
+  lastUpdated?: string | null;
+}
+
 export interface CostProjection {
   estimatedTokens: number;
   estimatedUsd: number;
@@ -521,6 +548,14 @@ export const finalizeInteractiveCheckpoint: FinalizeInteractiveCheckpoint | unde
 
 export async function getPolicy(projectId: string): Promise<Policy> {
   return await invoke<Policy>('get_policy', { projectId });
+}
+
+export async function getProjectUsageLedger(
+  projectId: string,
+): Promise<ProjectUsageLedgerSnapshot> {
+  return await invoke<ProjectUsageLedgerSnapshot>('get_project_usage_ledger', {
+    projectId,
+  });
 }
 
 export async function updatePolicy(projectId: string, policy: Policy): Promise<void> {

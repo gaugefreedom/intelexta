@@ -1,6 +1,6 @@
 // In src-tauri/src/api.rs
 use crate::{
-    api_keys, car, orchestrator, portability, provenance, replay,
+    api_keys, car, ledger, orchestrator, portability, provenance, replay,
     store::{self, policies::Policy},
     DbPool, Error, Project,
 };
@@ -488,9 +488,8 @@ pub fn download_checkpoint_artifact(
         )
         .optional()?;
 
-    let payload = output_payload.ok_or_else(|| {
-        Error::Api(format!("No payload found for checkpoint {}", checkpoint_id))
-    })?;
+    let payload = output_payload
+        .ok_or_else(|| Error::Api(format!("No payload found for checkpoint {}", checkpoint_id)))?;
 
     // For now, just return the payload as-is
     // In the future, this could check if a full artifact file exists on disk
@@ -1316,6 +1315,15 @@ pub fn get_current_policy_version_number(
     store::policies::get_current_version(&conn, &project_id)
 }
 
+#[tauri::command]
+pub fn get_project_usage_ledger(
+    project_id: String,
+    pool: State<'_, DbPool>,
+) -> Result<ledger::ProjectLedgerSnapshot, Error> {
+    let conn = pool.get()?;
+    ledger::get_project_ledger_snapshot(&conn, &project_id)
+}
+
 // --- MERGED AND FIXED emit_car FUNCTIONALITY ---
 pub(crate) fn emit_car_to_base_dir(
     run_id: &str,
@@ -1377,8 +1385,8 @@ pub fn emit_car(
     if let Some(custom_path) = output_path {
         // User specified a custom path - save bundle there
         let conn = pool.get()?;
-        let car = car::build_car(&conn, &run_id, None)
-            .map_err(|err| Error::Api(err.to_string()))?;
+        let car =
+            car::build_car(&conn, &run_id, None).map_err(|err| Error::Api(err.to_string()))?;
 
         let custom_path_buf = PathBuf::from(&custom_path);
         car::build_car_bundle(&conn, &run_id, None, &custom_path_buf)
@@ -1424,7 +1432,8 @@ pub fn export_project(
         let conn = pool.get()?;
         let project = portability::load_project(&conn, &project_id)?;
         let policy = store::policies::get(&conn, &project_id)?;
-        let policy_versions = crate::portability::load_policy_versions_for_export(&conn, &project_id)?;
+        let policy_versions =
+            crate::portability::load_policy_versions_for_export(&conn, &project_id)?;
         let (runs, attachments) = portability::load_runs_for_export(&conn, &project_id)?;
 
         portability::write_project_archive_to_path(
@@ -1615,8 +1624,7 @@ pub fn set_api_key(provider: String, api_key: String) -> Result<(), Error> {
     let provider_enum = api_keys::ApiKeyProvider::from_str(&provider)
         .ok_or_else(|| Error::Api(format!("Unknown provider: {}", provider)))?;
 
-    api_keys::store_api_key(provider_enum, &api_key)
-        .map_err(|e| Error::Api(e.to_string()))
+    api_keys::store_api_key(provider_enum, &api_key).map_err(|e| Error::Api(e.to_string()))
 }
 
 #[tauri::command]

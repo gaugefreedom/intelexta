@@ -41,6 +41,7 @@ pub mod chunk;
 pub mod governance;
 pub mod ingest;
 pub mod keychain;
+pub mod ledger;
 pub mod model_adapters;
 pub mod model_catalog;
 pub mod orchestrator;
