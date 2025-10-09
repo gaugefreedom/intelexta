@@ -51,6 +51,22 @@ pub fn get(conn: &Connection, project_id: &str) -> Result<Policy, Error> {
     }
 }
 
+pub fn get_for_policy_version(
+    conn: &Connection,
+    project_id: &str,
+    policy_version: Option<i64>,
+) -> Result<Policy, Error> {
+    if let Some(version) = policy_version {
+        if version > 0 {
+            if let Some(policy_version) = get_version(conn, project_id, version)? {
+                return Ok(policy_version.policy);
+            }
+        }
+    }
+
+    get(conn, project_id)
+}
+
 pub fn upsert(conn: &Connection, project_id: &str, policy: &Policy) -> Result<(), Error> {
     upsert_with_notes(conn, project_id, policy, None, None)
 }
@@ -81,7 +97,13 @@ pub fn upsert_with_notes(
     conn.execute(
         "INSERT INTO policy_versions (project_id, version, policy_json, created_by, change_notes)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![project_id, new_version, policy_json, created_by, change_notes],
+        params![
+            project_id,
+            new_version,
+            policy_json,
+            created_by,
+            change_notes
+        ],
     )?;
 
     // Update policies table with new policy and version
@@ -108,12 +130,13 @@ pub fn get_versions(conn: &Connection, project_id: &str) -> Result<Vec<PolicyVer
     let versions = stmt
         .query_map(params![project_id], |row| {
             let policy_json: String = row.get(3)?;
-            let policy: Policy = serde_json::from_str(&policy_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+            let policy: Policy = serde_json::from_str(&policy_json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
                     3,
                     rusqlite::types::Type::Text,
-                    Box::new(e)
-                ))?;
+                    Box::new(e),
+                )
+            })?;
 
             Ok(PolicyVersion {
                 id: row.get(0)?,
@@ -144,12 +167,13 @@ pub fn get_version(
             params![project_id, version],
             |row| {
                 let policy_json: String = row.get(3)?;
-                let policy: Policy = serde_json::from_str(&policy_json)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                let policy: Policy = serde_json::from_str(&policy_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
                         3,
                         rusqlite::types::Type::Text,
-                        Box::new(e)
-                    ))?;
+                        Box::new(e),
+                    )
+                })?;
 
                 Ok(PolicyVersion {
                     id: row.get(0)?,

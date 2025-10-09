@@ -16,6 +16,7 @@ const MIGRATION_SCRIPTS: &[&str] = &[
     include_str!("migrations/V12__typed_step_system.sql"),
     include_str!("migrations/V13__add_full_output_hash.sql"),
     include_str!("migrations/V14__policy_versioning.sql"),
+    include_str!("migrations/V15__project_usage_ledgers.sql"),
 ];
 
 pub fn runner() -> Migrations<'static> {

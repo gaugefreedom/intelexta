@@ -270,7 +270,7 @@ export interface PolicyVersion {
   changeNotes?: string | null;
 }
 
-export interface RunCostEstimates {
+export interface CostProjection {
   estimatedTokens: number;
   estimatedUsd: number;
   estimatedNatureCost: number;
@@ -280,6 +280,11 @@ export interface RunCostEstimates {
   exceedsTokens: boolean;
   exceedsUsd: boolean;
   exceedsNatureCost: boolean;
+}
+
+export interface RunCostEstimates {
+  perRun: CostProjection;
+  cumulative: CostProjection;
 }
 
 export interface RunStepConfig {
