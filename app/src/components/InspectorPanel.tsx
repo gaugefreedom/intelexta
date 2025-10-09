@@ -172,18 +172,48 @@ export default function InspectorPanel({
 
   const availableExecutions = selectedRun?.executions ?? [];
 
-  const activeExecutionId = React.useMemo(() => {
-    if (availableExecutions.length === 0) {
-      return null;
+  const pendingExecutionIdRef = React.useRef<string | null>(null);
+
+  if (!selectedRunId) {
+    pendingExecutionIdRef.current = null;
+  }
+
+  const selectedExecutionExists = React.useMemo(() => {
+    if (!selectedExecutionId) {
+      return false;
     }
+    return availableExecutions.some((entry) => entry.id === selectedExecutionId);
+  }, [availableExecutions, selectedExecutionId]);
+
+  if (selectedExecutionId && !selectedExecutionExists) {
+    pendingExecutionIdRef.current = selectedExecutionId;
+  } else if (
+    pendingExecutionIdRef.current &&
+    availableExecutions.some((entry) => entry.id === pendingExecutionIdRef.current)
+  ) {
+    pendingExecutionIdRef.current = null;
+  } else if (!selectedExecutionId) {
+    pendingExecutionIdRef.current = null;
+  }
+
+  const activeExecutionId = React.useMemo(() => {
+    const pendingExecutionId = pendingExecutionIdRef.current;
+
     if (selectedExecutionId) {
-      const exists = availableExecutions.some((entry) => entry.id === selectedExecutionId);
-      if (exists) {
+      if (selectedExecutionExists || pendingExecutionId === selectedExecutionId) {
         return selectedExecutionId;
       }
     }
+
+    if (
+      pendingExecutionId &&
+      !availableExecutions.some((entry) => entry.id === pendingExecutionId)
+    ) {
+      return pendingExecutionId;
+    }
+
     return availableExecutions[0]?.id ?? null;
-  }, [availableExecutions, selectedExecutionId]);
+  }, [availableExecutions, selectedExecutionExists, selectedExecutionId]);
 
   const selectedExecution = activeExecutionId
     ? availableExecutions.find((entry) => entry.id === activeExecutionId) ?? null
@@ -247,12 +277,28 @@ export default function InspectorPanel({
 
     const run = runs.find((item) => item.id === nextRunId) ?? runsWithExecutions[0];
     const executions = run.executions ?? [];
-    const nextExecutionId =
-      executions.length === 0
-        ? null
-        : selectedExecutionId && executions.some((entry) => entry.id === selectedExecutionId)
-        ? selectedExecutionId
-        : executions[0].id;
+    const pendingExecutionId = pendingExecutionIdRef.current;
+    const selectedExecutionIsAvailable =
+      selectedExecutionId !== null &&
+      executions.some((entry) => entry.id === selectedExecutionId);
+    const pendingExecutionIsMissing =
+      pendingExecutionId !== null &&
+      !executions.some((entry) => entry.id === pendingExecutionId);
+
+    if (pendingExecutionId !== null && !pendingExecutionIsMissing) {
+      pendingExecutionIdRef.current = null;
+    }
+
+    let nextExecutionId: string | null = null;
+    if (executions.length === 0) {
+      nextExecutionId = null;
+    } else if (selectedExecutionIsAvailable) {
+      nextExecutionId = selectedExecutionId;
+    } else if (pendingExecutionIsMissing) {
+      nextExecutionId = pendingExecutionId;
+    } else {
+      nextExecutionId = executions[0].id;
+    }
 
     if (nextRunId !== selectedRunId || nextExecutionId !== selectedExecutionId) {
       onSelectRun(nextRunId, nextExecutionId ?? null);
