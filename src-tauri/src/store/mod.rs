@@ -5,6 +5,7 @@
 
 pub mod migrations;
 pub mod policies;
+pub mod project_usage_ledgers;
 pub mod projects;
 
 // We'll also put the database migration logic here.

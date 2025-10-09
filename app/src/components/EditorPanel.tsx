@@ -701,20 +701,26 @@ export default function EditorPanel({
       return [] as string[];
     }
     const messages: string[] = [];
-    if (costEstimates.exceedsTokens) {
-      messages.push(
-        `Tokens: ${costEstimates.estimatedTokens.toLocaleString()} / ${costEstimates.budgetTokens.toLocaleString()}`,
-      );
-    }
-    if (costEstimates.exceedsUsd) {
-      messages.push(
-        `USD: ${costEstimates.estimatedUsd.toFixed(2)} / ${costEstimates.budgetUsd.toFixed(2)}`,
-      );
-    }
-    if (costEstimates.exceedsNatureCost) {
-      messages.push(
-        `Nature Cost: ${costEstimates.estimatedNatureCost.toFixed(2)} / ${costEstimates.budgetNatureCost.toFixed(2)}`,
-      );
+    const projections = [
+      { label: "Per-run", data: costEstimates.perRun },
+      { label: "Cumulative", data: costEstimates.cumulative },
+    ];
+    for (const { label, data } of projections) {
+      if (data.exceedsTokens) {
+        messages.push(
+          `${label} tokens: ${data.estimatedTokens.toLocaleString()} / ${data.budgetTokens.toLocaleString()}`,
+        );
+      }
+      if (data.exceedsUsd) {
+        messages.push(
+          `${label} USD: ${data.estimatedUsd.toFixed(2)} / ${data.budgetUsd.toFixed(2)}`,
+        );
+      }
+      if (data.exceedsNatureCost) {
+        messages.push(
+          `${label} Nature Cost: ${data.estimatedNatureCost.toFixed(2)} / ${data.budgetNatureCost.toFixed(2)}`,
+        );
+      }
     }
     return messages;
   }, [costEstimates]);
@@ -1635,8 +1641,16 @@ export default function EditorPanel({
                       ))}
                     </ul>
                     <div>
-                      Estimated usage totals {costEstimates.estimatedTokens.toLocaleString()} tokens (~
-                      ${costEstimates.estimatedUsd.toFixed(2)}, {costEstimates.estimatedNatureCost.toFixed(2)} Nature Cost).
+                      Estimated per-run usage totals {costEstimates.perRun.estimatedTokens.toLocaleString()} tokens (~
+                      ${costEstimates.perRun.estimatedUsd.toFixed(2)},
+                      {" "}
+                      {costEstimates.perRun.estimatedNatureCost.toFixed(2)} Nature Cost).
+                    </div>
+                    <div>
+                      Estimated cumulative usage totals {costEstimates.cumulative.estimatedTokens.toLocaleString()} tokens (~
+                      ${costEstimates.cumulative.estimatedUsd.toFixed(2)},
+                      {" "}
+                      {costEstimates.cumulative.estimatedNatureCost.toFixed(2)} Nature Cost).
                       Adjust checkpoint token budgets or update the project policy before launching this run.
                     </div>
                   </div>

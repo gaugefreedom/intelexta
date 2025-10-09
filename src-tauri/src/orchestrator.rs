@@ -293,6 +293,8 @@ pub struct StoredRun {
     pub token_budget: u64,
     pub default_model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_version: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub proof_mode: Option<RunProofMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epsilon: Option<f64>,
@@ -336,7 +338,7 @@ pub struct LlmGeneration {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct RunCostEstimates {
+pub struct CostProjection {
     pub estimated_tokens: u64,
     pub estimated_usd: f64,
     pub estimated_nature_cost: f64,
@@ -348,9 +350,22 @@ pub struct RunCostEstimates {
     pub exceeds_nature_cost: bool,
 }
 
-impl RunCostEstimates {
+impl CostProjection {
     fn exceeds_any(&self) -> bool {
         self.exceeds_tokens || self.exceeds_usd || self.exceeds_nature_cost
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCostEstimates {
+    pub per_run: CostProjection,
+    pub cumulative: CostProjection,
+}
+
+impl RunCostEstimates {
+    fn exceeds_any(&self) -> bool {
+        self.per_run.exceeds_any() || self.cumulative.exceeds_any()
     }
 }
 
@@ -363,26 +378,61 @@ fn sum_token_budgets(configs: &[RunStep]) -> u64 {
 
 fn estimate_costs_with_policy(
     policy: &store::policies::Policy,
-    projected_tokens: u64,
+    tokens_consumed_so_far: u64,
+    projected_tokens_remaining: u64,
+    run_usage_usd: f64,
+    run_usage_nature_cost: f64,
+    ledger_tokens: u64,
+    ledger_usd: f64,
+    ledger_nature_cost: f64,
 ) -> RunCostEstimates {
-    let token_budget = policy.budget_tokens;
-    let estimated_tokens = projected_tokens;
+    fn build_cost_projection(
+        policy: &store::policies::Policy,
+        estimated_tokens: u64,
+        estimated_usd: f64,
+        estimated_nature_cost: f64,
+    ) -> CostProjection {
+        CostProjection {
+            estimated_tokens,
+            estimated_usd,
+            estimated_nature_cost,
+            budget_tokens: policy.budget_tokens,
+            budget_usd: policy.budget_usd,
+            budget_nature_cost: policy.budget_nature_cost,
+            exceeds_tokens: estimated_tokens > policy.budget_tokens,
+            exceeds_usd: estimated_usd > policy.budget_usd,
+            exceeds_nature_cost: estimated_nature_cost > policy.budget_nature_cost,
+        }
+    }
 
-    // Use governance module functions for cost estimation
-    // Note: Using None for model_id since we don't have per-step model info at estimate time
-    let estimated_usd = governance::estimate_usd_cost(estimated_tokens, None);
-    let estimated_nature_cost = governance::estimate_nature_cost(estimated_tokens, None);
+    let projected_run_tokens = tokens_consumed_so_far.saturating_add(projected_tokens_remaining);
+    let estimated_future_usd = governance::estimate_usd_cost(projected_tokens_remaining, None);
+    let estimated_future_nature = governance::estimate_nature_cost(projected_tokens_remaining, None);
+
+    let per_run_estimated_usd = run_usage_usd + estimated_future_usd;
+    let per_run_estimated_nature = run_usage_nature_cost + estimated_future_nature;
+    let per_run_projection = build_cost_projection(
+        policy,
+        projected_run_tokens,
+        per_run_estimated_usd,
+        per_run_estimated_nature,
+    );
+
+    let cumulative_tokens = ledger_tokens
+        .saturating_add(tokens_consumed_so_far)
+        .saturating_add(projected_tokens_remaining);
+    let cumulative_estimated_usd = ledger_usd + per_run_estimated_usd;
+    let cumulative_estimated_nature = ledger_nature_cost + per_run_estimated_nature;
+    let cumulative_projection = build_cost_projection(
+        policy,
+        cumulative_tokens,
+        cumulative_estimated_usd,
+        cumulative_estimated_nature,
+    );
 
     RunCostEstimates {
-        estimated_tokens,
-        estimated_usd,
-        estimated_nature_cost,
-        budget_tokens: token_budget,
-        budget_usd: policy.budget_usd,
-        budget_nature_cost: policy.budget_nature_cost,
-        exceeds_tokens: estimated_tokens > token_budget,
-        exceeds_usd: estimated_usd > policy.budget_usd,
-        exceeds_nature_cost: estimated_nature_cost > policy.budget_nature_cost,
+        per_run: per_run_projection,
+        cumulative: cumulative_projection,
     }
 }
 
@@ -1045,9 +1095,27 @@ fn load_run_steps(conn: &Connection, run_id: &str) -> anyhow::Result<Vec<RunStep
 
 pub fn estimate_run_cost(conn: &Connection, run_id: &str) -> anyhow::Result<RunCostEstimates> {
     let stored_run = load_stored_run(conn, run_id)?;
-    let policy = store::policies::get(conn, &stored_run.project_id)?;
-    let projected_tokens = sum_token_budgets(&stored_run.steps);
-    Ok(estimate_costs_with_policy(&policy, projected_tokens))
+    let policy = store::policies::get_for_policy_version(
+        conn,
+        &stored_run.project_id,
+        stored_run.policy_version,
+    )?;
+    let ledger_snapshot = store::project_usage_ledgers::get(
+        conn,
+        &stored_run.project_id,
+        stored_run.policy_version,
+    )?;
+    let projected_tokens_remaining = sum_token_budgets(&stored_run.steps);
+    Ok(estimate_costs_with_policy(
+        &policy,
+        0,
+        projected_tokens_remaining,
+        0.0,
+        0.0,
+        ledger_snapshot.total_tokens,
+        ledger_snapshot.total_usd,
+        ledger_snapshot.total_nature_cost,
+    ))
 }
 
 fn load_checkpoint_config_by_id(
@@ -1109,9 +1177,18 @@ fn load_checkpoint_config_by_id(
 }
 
 pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<StoredRun> {
-    let row: Option<(String, String, i64, Option<f64>, i64, String, String)> = conn
+    let row: Option<(
+        String,
+        String,
+        i64,
+        Option<f64>,
+        i64,
+        String,
+        String,
+        Option<i64>,
+    )> = conn
         .query_row(
-            "SELECT project_id, name, seed, epsilon, token_budget, default_model, proof_mode FROM runs WHERE id = ?1",
+            "SELECT project_id, name, seed, epsilon, token_budget, default_model, proof_mode, policy_version FROM runs WHERE id = ?1",
             params![run_id],
             |row| Ok((
                 row.get(0)?,
@@ -1121,12 +1198,21 @@ pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<Stored
                 row.get(4)?,
                 row.get(5)?,
                 row.get(6)?,
+                row.get(7)?,
             )),
         )
         .optional()?;
 
-    let (project_id, name, seed_raw, epsilon, token_budget_raw, default_model, proof_mode_raw) =
-        row.ok_or_else(|| anyhow!(format!("run {run_id} not found")))?;
+    let (
+        project_id,
+        name,
+        seed_raw,
+        epsilon,
+        token_budget_raw,
+        default_model,
+        proof_mode_raw,
+        policy_version,
+    ) = row.ok_or_else(|| anyhow!(format!("run {run_id} not found")))?;
     let seed = seed_raw.max(0) as u64;
     let token_budget = token_budget_raw.max(0) as u64;
     let steps = load_run_steps(conn, run_id)?;
@@ -1141,6 +1227,7 @@ pub fn load_stored_run(conn: &Connection, run_id: &str) -> anyhow::Result<Stored
         seed,
         token_budget,
         default_model,
+        policy_version,
         proof_mode: Some(proof_mode),
         epsilon,
         steps,
@@ -1657,9 +1744,23 @@ pub(crate) fn start_run_with_client(
     let tx = conn.transaction()?;
     let execution_record = insert_run_execution(&tx, run_id)?;
     let signing_key = ensure_project_signing_key(&tx, &stored_run.project_id)?;
-    let policy = store::policies::get(tx.deref(), &stored_run.project_id)?;
+    let policy = store::policies::get_for_policy_version(
+        tx.deref(),
+        &stored_run.project_id,
+        stored_run.policy_version,
+    )?;
+    let ledger_snapshot = store::project_usage_ledgers::get(
+        tx.deref(),
+        &stored_run.project_id,
+        stored_run.policy_version,
+    )?;
+    let ledger_tokens = ledger_snapshot.total_tokens;
+    let ledger_usd = ledger_snapshot.total_usd;
+    let ledger_nature_cost = ledger_snapshot.total_nature_cost;
     let mut prev_chain = String::new();
     let mut cumulative_usage_tokens: u64 = 0;
+    let mut run_usage_usd: f64 = 0.0;
+    let mut run_usage_nature_cost: f64 = 0.0;
 
     // Track step outputs for chaining
     let mut prior_outputs: std::collections::HashMap<usize, StepOutput> = std::collections::HashMap::new();
@@ -1672,25 +1773,49 @@ pub(crate) fn start_run_with_client(
         let timestamp = Utc::now().to_rfc3339();
 
         let projected_remaining_tokens = sum_token_budgets(&stored_run.steps[index..]);
-        let projected_total_tokens =
-            cumulative_usage_tokens.saturating_add(projected_remaining_tokens);
-        let projected_costs = estimate_costs_with_policy(&policy, projected_total_tokens);
+        let projected_costs = estimate_costs_with_policy(
+            &policy,
+            cumulative_usage_tokens,
+            projected_remaining_tokens,
+            run_usage_usd,
+            run_usage_nature_cost,
+            ledger_tokens,
+            ledger_usd,
+            ledger_nature_cost,
+        );
+        let per_run_projection = &projected_costs.per_run;
+        let cumulative_projection = &projected_costs.cumulative;
 
         // Check blocking budget violations (tokens and USD)
-        let has_blocking_violation = projected_costs.exceeds_tokens || projected_costs.exceeds_usd;
+        let has_blocking_violation = per_run_projection.exceeds_tokens
+            || per_run_projection.exceeds_usd
+            || cumulative_projection.exceeds_tokens
+            || cumulative_projection.exceeds_usd;
 
         if has_blocking_violation {
             let mut issues = Vec::new();
-            if projected_costs.exceeds_tokens {
+            if per_run_projection.exceeds_tokens {
                 issues.push(format!(
-                    "tokens {} > {}",
-                    projected_costs.estimated_tokens, projected_costs.budget_tokens
+                    "per-run tokens {} > {}",
+                    per_run_projection.estimated_tokens, per_run_projection.budget_tokens
                 ));
             }
-            if projected_costs.exceeds_usd {
+            if per_run_projection.exceeds_usd {
                 issues.push(format!(
-                    "USD {:.2} > {:.2}",
-                    projected_costs.estimated_usd, projected_costs.budget_usd
+                    "per-run USD {:.2} > {:.2}",
+                    per_run_projection.estimated_usd, per_run_projection.budget_usd
+                ));
+            }
+            if cumulative_projection.exceeds_tokens {
+                issues.push(format!(
+                    "cumulative tokens {} > {}",
+                    cumulative_projection.estimated_tokens, cumulative_projection.budget_tokens
+                ));
+            }
+            if cumulative_projection.exceeds_usd {
+                issues.push(format!(
+                    "cumulative USD {:.2} > {:.2}",
+                    cumulative_projection.estimated_usd, cumulative_projection.budget_usd
                 ));
             }
 
@@ -1731,13 +1856,26 @@ pub(crate) fn start_run_with_client(
         }
 
         // Handle Nature Cost warning (non-blocking)
-        if projected_costs.exceeds_nature_cost {
+        let nature_warning_projection: Option<(&str, &CostProjection)> = if cumulative_projection
+            .exceeds_nature_cost
+        {
+            Some(("cumulative", cumulative_projection))
+        } else if per_run_projection.exceeds_nature_cost {
+            Some(("per-run", per_run_projection))
+        } else {
+            None
+        };
+
+        if let Some((scope, projection)) = nature_warning_projection {
             let warning = governance::Incident {
                 kind: "nature_cost_warning".into(),
                 severity: "warn".into(),
                 details: format!(
-                    "Nature Cost {:.2} exceeds budget {:.2} for checkpoint {} (execution continues)",
-                    projected_costs.estimated_nature_cost, projected_costs.budget_nature_cost, config.id
+                    "{} Nature Cost {:.2} exceeds budget {:.2} for checkpoint {} (execution continues)",
+                    scope,
+                    projection.estimated_nature_cost,
+                    projection.budget_nature_cost,
+                    config.id
                 ),
             };
             let warning_value = serde_json::to_value(&warning)?;
@@ -1937,6 +2075,11 @@ pub(crate) fn start_run_with_client(
 
         let total_usage = execution.usage.total();
         cumulative_usage_tokens = cumulative_usage_tokens.saturating_add(total_usage);
+        let step_model = config.model.as_deref();
+        let step_usd = governance::estimate_usd_cost(total_usage, step_model);
+        let step_nature_cost = governance::estimate_nature_cost(total_usage, step_model);
+        run_usage_usd += step_usd;
+        run_usage_nature_cost += step_nature_cost;
         let prompt_tokens = execution.usage.prompt_tokens;
         let completion_tokens = execution.usage.completion_tokens;
         let mut incident_value: Option<serde_json::Value> = None;
@@ -2005,6 +2148,15 @@ pub(crate) fn start_run_with_client(
             prior_outputs.insert(config.order_index as usize, step_output);
         }
     }
+
+    store::project_usage_ledgers::increment(
+        tx.deref(),
+        &stored_run.project_id,
+        stored_run.policy_version,
+        cumulative_usage_tokens,
+        run_usage_usd,
+        run_usage_nature_cost,
+    )?;
 
     tx.commit()?;
     Ok(execution_record)
