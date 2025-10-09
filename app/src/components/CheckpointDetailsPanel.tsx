@@ -23,6 +23,7 @@ interface PayloadViewerProps {
   viewMode: PayloadViewMode;
   onChangeMode: (mode: PayloadViewMode) => void;
   downloadBaseName: string;
+  displayOverride?: string | null;
 }
 
 function safeFileName(base: string): string {
@@ -70,6 +71,7 @@ function PayloadViewer({
   viewMode,
   onChangeMode,
   downloadBaseName,
+  displayOverride,
 }: PayloadViewerProps) {
   const hasRawValue = raw !== undefined && raw !== null;
   const hasCanonicalValue = canonical !== undefined && canonical !== null;
@@ -82,18 +84,29 @@ function PayloadViewer({
       : "No digest information recorded.";
 
   let displayContent: string;
+  let contentForCopyDownload: string;
+
   switch (viewMode) {
     case "raw":
-      displayContent = hasRawValue ? (raw as string) : "No raw content stored for this checkpoint.";
+      // Use displayOverride for preview, but raw for copy/download
+      if (displayOverride !== undefined && displayOverride !== null && hasRawValue) {
+        displayContent = displayOverride;
+        contentForCopyDownload = raw as string;
+      } else {
+        displayContent = hasRawValue ? (raw as string) : "No raw content stored for this checkpoint.";
+        contentForCopyDownload = displayContent;
+      }
       break;
     case "canonical":
       displayContent = hasCanonicalValue
         ? (canonical as string)
         : "Canonical JSON view is only available for valid JSON payloads.";
+      contentForCopyDownload = displayContent;
       break;
     case "digest":
     default:
       displayContent = digestContent;
+      contentForCopyDownload = digestContent;
       break;
   }
 
@@ -118,33 +131,27 @@ function PayloadViewer({
   };
 
   const handleCopy = React.useCallback(() => {
-    console.log(`Copy clicked - label: ${label}, viewMode: ${viewMode}, disabled: ${copyDisabled}`);
     if (copyDisabled) {
-      console.log("Copy is disabled, returning early");
       return;
     }
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
-        void navigator.clipboard.writeText(displayContent);
-        console.log("Copied to clipboard successfully");
+        void navigator.clipboard.writeText(contentForCopyDownload);
       } else {
         throw new Error("Clipboard API not available");
       }
     } catch (error) {
       console.error(`Failed to copy ${label} ${viewMode}`, error);
     }
-  }, [copyDisabled, displayContent, label, viewMode]);
+  }, [copyDisabled, contentForCopyDownload, label, viewMode]);
 
   const handleDownload = React.useCallback(() => {
-    console.log(`Download clicked - label: ${label}, viewMode: ${viewMode}, disabled: ${copyDisabled}`);
     if (copyDisabled) {
-      console.log("Download is disabled, returning early");
       return;
     }
     try {
       const fileName = `${safeFileName(`${downloadBaseName}-${label.toLowerCase()}-${viewMode}`)}.txt`;
-      console.log("Downloading file:", fileName);
-      const blob = new Blob([displayContent], {
+      const blob = new Blob([contentForCopyDownload], {
         type: "text/plain;charset=utf-8",
       });
       const url = URL.createObjectURL(blob);
@@ -155,11 +162,10 @@ function PayloadViewer({
       anchor.click();
       document.body.removeChild(anchor);
       URL.revokeObjectURL(url);
-      console.log("Download triggered successfully");
     } catch (error) {
       console.error(`Failed to download ${label} ${viewMode}`, error);
     }
-  }, [copyDisabled, displayContent, downloadBaseName, label, viewMode]);
+  }, [copyDisabled, contentForCopyDownload, downloadBaseName, label, viewMode]);
 
   return (
     <div style={{ marginTop: "16px" }}>
@@ -294,6 +300,7 @@ export default function CheckpointDetailsPanel({
 }: CheckpointDetailsPanelProps) {
   const [promptViewMode, setPromptViewMode] = React.useState<PayloadViewMode>("raw");
   const [outputViewMode, setOutputViewMode] = React.useState<PayloadViewMode>("raw");
+  const [documentCleanedText, setDocumentCleanedText] = React.useState<string | null>(null);
 
   const promptCanonical = React.useMemo(
     () => canonicalizeJsonText(checkpointDetails?.promptPayload ?? null),
@@ -304,10 +311,78 @@ export default function CheckpointDetailsPanel({
     [checkpointDetails?.outputPayload],
   );
 
+  // Fetch and extract cleaned text for document ingestion outputs
+  React.useEffect(() => {
+    // Reset when changing checkpoints
+    setDocumentCleanedText(null);
+
+    if (!open || !checkpointDetails?.id) {
+      return;
+    }
+
+    // Check if this is an ingest step by looking at the prompt payload
+    let isIngestStep = false;
+    if (checkpointDetails.promptPayload) {
+      try {
+        const promptParsed = JSON.parse(checkpointDetails.promptPayload);
+        isIngestStep = promptParsed && typeof promptParsed === "object" && promptParsed.stepType === "ingest";
+      } catch (error) {
+        // Ignore parse errors
+      }
+    }
+
+    // If not clearly an ingest step, skip the fetch (optimization)
+    if (!isIngestStep && !checkpointDetails.outputPayload?.includes('"document_id"')) {
+      return;
+    }
+
+    // Fetch the full output to get cleaned_text_with_markdown_structure
+    let cancelled = false;
+
+    invoke<string>("download_checkpoint_full_output", {
+      checkpointId: checkpointDetails.id,
+    })
+      .then((fullOutput) => {
+        if (cancelled) return;
+
+        try {
+          const parsed = JSON.parse(fullOutput);
+          if (parsed && typeof parsed === "object" && "cleaned_text_with_markdown_structure" in parsed) {
+            const cleanedText = parsed.cleaned_text_with_markdown_structure;
+            if (typeof cleanedText === "string" && cleanedText.length > 0) {
+              setDocumentCleanedText(cleanedText);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to parse full output for document:', error);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Failed to fetch full output for document:', err);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, checkpointDetails?.id, checkpointDetails?.promptPayload, checkpointDetails?.outputPayload]);
+
+  // Truncate the cleaned text for display (keep full for copy/download)
+  const documentCleanedTextTruncated = React.useMemo(() => {
+    if (!documentCleanedText) return null;
+    const MAX_DISPLAY_LENGTH = 5000;
+    if (documentCleanedText.length <= MAX_DISPLAY_LENGTH) {
+      return documentCleanedText;
+    }
+    return documentCleanedText.substring(0, MAX_DISPLAY_LENGTH) + '\n\n[... Document preview truncated. Use "Download" to get the full content ...]';
+  }, [documentCleanedText]);
+
   React.useEffect(() => {
     if (!open) {
       setPromptViewMode("raw");
       setOutputViewMode("raw");
+      setDocumentCleanedText(null);
       return;
     }
     setPromptViewMode(checkpointDetails?.promptPayload != null ? "raw" : "digest");
@@ -519,7 +594,7 @@ export default function CheckpointDetailsPanel({
             />
             <PayloadViewer
               label="Output"
-              raw={checkpointDetails.outputPayload ?? null}
+              raw={documentCleanedText ?? checkpointDetails.outputPayload ?? null}
               canonical={outputCanonical}
               digestItems={[
                 { label: "SHA-256", value: checkpointDetails.outputsSha256 ?? null },
@@ -531,6 +606,7 @@ export default function CheckpointDetailsPanel({
               viewMode={outputViewMode}
               onChangeMode={setOutputViewMode}
               downloadBaseName={checkpointDetails.id}
+              displayOverride={documentCleanedTextTruncated}
             />
             <div style={{ marginTop: "12px" }}>
               <button

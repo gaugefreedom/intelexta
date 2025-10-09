@@ -77,9 +77,18 @@ Builds verify that the file exists, so keep it in place when updating tooling or
 
 ## Status
 
-Actively developing the MVP as per `Strategic Spec v0.1`. The current codebase is being refactored to align with this new mission.
+**Phase 1 MVP Complete** ✅ - Full cryptographic integrity verification system operational.
 
-## Recent Features
+See [ROADMAP.md](ROADMAP.md) for detailed development plan and upcoming features.
+
+## Key Features
+
+### Standalone Verification Tool (v0.2+)
+- **`intelexta-verify`**: CLI tool for trustless verification of CAR (Content-Addressed Receipt) files
+- **Cryptographic Integrity**: Verifies hash chains, signatures, and content integrity
+- **Tamper Detection**: Detects modifications to prompts, models, outputs, or execution metadata
+- **No Dependencies**: Works offline without database or network access
+- **See**: [src-tauri/crates/intelexta-verify/README.md](src-tauri/crates/intelexta-verify/README.md)
 
 ### Document Processing (v0.2+)
 - **Multi-format Support**: Process PDF, LaTeX, plain text (TXT), and DOCX files into verifiable workflow steps
