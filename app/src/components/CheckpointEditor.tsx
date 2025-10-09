@@ -1007,15 +1007,6 @@ export default function CheckpointEditor({
               checkpoint.
             </div>
           ) : null}
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            Prompt
-            <textarea
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              rows={6}
-              style={{ fontFamily: "monospace" }}
-            />
-          </label>
         </>
       )}
       {error && <div style={{ color: "#f48771", fontSize: "0.85rem" }}>{error}</div>}
