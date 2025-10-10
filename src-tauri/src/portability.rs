@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -109,6 +110,18 @@ pub(crate) struct PolicyVersionExport {
     created_at: String,
     created_by: Option<String>,
     change_notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProjectUsageLedgerExport {
+    pub project_id: String,
+    pub policy_version: i64,
+    pub total_tokens: u64,
+    pub total_usd: f64,
+    pub total_nature_cost: f64,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -276,6 +289,36 @@ pub(crate) fn load_policy_versions_for_export(
     }
 
     Ok(versions)
+}
+
+pub(crate) fn load_project_usage_ledgers_for_export(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<ProjectUsageLedgerExport>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT project_id, policy_version, total_tokens, total_usd, total_nature_cost, created_at, updated_at \
+         FROM project_usage_ledgers WHERE project_id = ?1 ORDER BY policy_version ASC",
+    )?;
+
+    let rows = stmt.query_map(params![project_id], |row| {
+        let raw_tokens: i64 = row.get(2)?;
+        Ok(ProjectUsageLedgerExport {
+            project_id: row.get(0)?,
+            policy_version: row.get(1)?,
+            total_tokens: raw_tokens.max(0) as u64,
+            total_usd: row.get(3)?,
+            total_nature_cost: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    })?;
+
+    let mut ledgers = Vec::new();
+    for row in rows {
+        ledgers.push(row?);
+    }
+
+    Ok(ledgers)
 }
 
 pub(crate) fn load_runs_for_export(
@@ -573,6 +616,7 @@ pub fn write_project_archive_to_path(
     project: &Project,
     policy: &Policy,
     policy_versions: &[PolicyVersionExport],
+    project_usage_ledgers: &[ProjectUsageLedgerExport],
     runs: &[RunExport],
     attachments: &[CarAttachment],
 ) -> Result<(), Error> {
@@ -609,6 +653,19 @@ pub fn write_project_archive_to_path(
             "policy_versions.json".to_string(),
             "policy_versions",
             policy_versions_json,
+        );
+    }
+
+    if !project_usage_ledgers.is_empty() {
+        let ledgers_json = serde_json::to_vec_pretty(&project_usage_ledgers).map_err(|err| {
+            Error::Api(format!("failed to serialize project usage ledgers: {err}"))
+        })?;
+        append_entry(
+            &mut pending_entries,
+            &mut manifest_entries,
+            "project_usage_ledgers.json".to_string(),
+            "project_usage_ledgers",
+            ledgers_json,
         );
     }
 
@@ -675,6 +732,7 @@ pub fn export_project_archive(
     let project = load_project(&conn, project_id)?;
     let policy = store::policies::get(&conn, project_id)?;
     let policy_versions = load_policy_versions_for_export(&conn, project_id)?;
+    let project_usage_ledgers = load_project_usage_ledgers_for_export(&conn, project_id)?;
     let (runs, attachments) = load_runs_for_export(&conn, project_id)?;
 
     let exports_dir = base_dir.join(project_id).join("exports");
@@ -727,6 +785,19 @@ pub fn export_project_archive(
             "policy_versions.json".to_string(),
             "policy_versions",
             policy_versions_json,
+        );
+    }
+
+    if !project_usage_ledgers.is_empty() {
+        let ledgers_json = serde_json::to_vec_pretty(&project_usage_ledgers).map_err(|err| {
+            Error::Api(format!("failed to serialize project usage ledgers: {err}"))
+        })?;
+        append_entry(
+            &mut pending_entries,
+            &mut manifest_entries,
+            "project_usage_ledgers.json".to_string(),
+            "project_usage_ledgers",
+            ledgers_json,
         );
     }
 
@@ -946,6 +1017,15 @@ pub fn import_project_archive(
         .transpose()?
         .unwrap_or_default();
 
+    let project_usage_ledgers: Vec<ProjectUsageLedgerExport> = contents
+        .remove("project_usage_ledgers.json")
+        .map(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|err| Error::Api(format!("failed to parse project usage ledgers: {err}")))
+        })
+        .transpose()?
+        .unwrap_or_default();
+
     let verifying_key = decode_verifying_key(&project.pubkey)?;
 
     let mut run_exports = Vec::new();
@@ -1028,6 +1108,37 @@ pub fn import_project_archive(
             "INSERT INTO policy_versions (project_id, version, policy_json, created_by, change_notes)
              VALUES (?1, 1, ?2, 'import', 'Imported from IXP archive without version history')",
             params![&project.id, &policy_json],
+        )?;
+    }
+
+    if !project_usage_ledgers.is_empty() {
+        for ledger in &project_usage_ledgers {
+            let total_tokens = i64::try_from(ledger.total_tokens).map_err(|_| {
+                Error::Api(format!(
+                    "project usage ledger tokens exceed supported range for policy version {}",
+                    ledger.policy_version
+                ))
+            })?;
+            tx.execute(
+                "INSERT INTO project_usage_ledgers (project_id, policy_version, total_tokens, total_usd, total_nature_cost, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    &project.id,
+                    &ledger.policy_version,
+                    total_tokens,
+                    &ledger.total_usd,
+                    &ledger.total_nature_cost,
+                    &ledger.created_at,
+                    &ledger.updated_at
+                ],
+            )?;
+        }
+    } else {
+        tx.execute(
+            "INSERT INTO project_usage_ledgers (project_id, policy_version)
+             VALUES (?1, ?2)
+             ON CONFLICT(project_id, policy_version) DO NOTHING",
+            params![&project.id, current_version],
         )?;
     }
 
