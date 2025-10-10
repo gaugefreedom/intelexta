@@ -1536,6 +1536,8 @@ pub fn export_project(
         let policy = store::policies::get(&conn, &project_id)?;
         let policy_versions =
             crate::portability::load_policy_versions_for_export(&conn, &project_id)?;
+        let project_usage_ledgers =
+            crate::portability::load_project_usage_ledgers_for_export(&conn, &project_id)?;
         let (runs, attachments) = portability::load_runs_for_export(&conn, &project_id)?;
 
         portability::write_project_archive_to_path(
@@ -1543,6 +1545,7 @@ pub fn export_project(
             &project,
             &policy,
             &policy_versions,
+            &project_usage_ledgers,
             &runs,
             &attachments,
         )?;

@@ -57,7 +57,16 @@ pub fn delete(conn: &mut Connection, id: &str) -> Result<(), Error> {
     let tx = conn.transaction()?;
 
     // Delete policy version history first (foreign key to projects)
-    tx.execute("DELETE FROM policy_versions WHERE project_id = ?1", params![id])?;
+    tx.execute(
+        "DELETE FROM policy_versions WHERE project_id = ?1",
+        params![id],
+    )?;
+
+    // Delete usage ledger snapshots for all policy versions
+    tx.execute(
+        "DELETE FROM project_usage_ledgers WHERE project_id = ?1",
+        params![id],
+    )?;
 
     // Delete policies
     tx.execute("DELETE FROM policies WHERE project_id = ?1", params![id])?;
