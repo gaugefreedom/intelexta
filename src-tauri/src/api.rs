@@ -881,6 +881,79 @@ pub(crate) fn replay_run_with_pool(
         ));
     }
 
+    // Get policy and current ledger to check if replay is allowed
+    let policy = store::policies::get_for_policy_version(
+        &conn,
+        &stored_run.project_id,
+        stored_run.policy_version,
+    )?;
+
+    let current_ledger = store::project_usage_ledgers::get(
+        &conn,
+        &stored_run.project_id,
+        stored_run.policy_version,
+    )?;
+
+    // Estimate the cost of this replay based on original execution
+    // We'll check the latest execution to get the original token usage
+    let latest_execution = orchestrator::load_latest_run_execution(&conn, &run_id)
+        .map_err(|err| Error::Api(err.to_string()))?;
+
+    if let Some(execution) = latest_execution {
+        // Get all checkpoints from the latest execution to estimate replay cost
+        let checkpoints = list_checkpoints_with_pool(Some(execution.id.as_str()), pool)?;
+        let estimated_tokens: u64 = checkpoints.iter().map(|c| c.usage_tokens).sum();
+
+        if estimated_tokens > 0 {
+            // Estimate costs for the replay
+            let estimated_usd = checkpoints
+                .iter()
+                .filter_map(|c| {
+                    c.checkpoint_config_id.as_ref().and_then(|config_id| {
+                        stored_run.steps.iter()
+                            .find(|s| &s.id == config_id)
+                            .and_then(|step| step.model.as_deref())
+                            .map(|model| {
+                                crate::governance::estimate_usd_cost(c.usage_tokens, Some(model))
+                            })
+                    })
+                })
+                .sum::<f64>();
+
+            let estimated_nature_cost = checkpoints
+                .iter()
+                .filter_map(|c| {
+                    c.checkpoint_config_id.as_ref().and_then(|config_id| {
+                        stored_run.steps.iter()
+                            .find(|s| &s.id == config_id)
+                            .and_then(|step| step.model.as_deref())
+                            .map(|model| {
+                                crate::governance::estimate_nature_cost(c.usage_tokens, Some(model))
+                            })
+                    })
+                })
+                .sum::<f64>();
+
+            // Check if replay would exceed policy budget
+            let projected_tokens = current_ledger.total_tokens + estimated_tokens;
+            let projected_usd = current_ledger.total_usd + estimated_usd;
+            let projected_nature_cost = current_ledger.total_nature_cost + estimated_nature_cost;
+
+            // Enforce policy - this will return an error if budget would be exceeded
+            if let Err(incident) = crate::governance::enforce_policy(
+                &policy,
+                projected_tokens,
+                projected_usd,
+                projected_nature_cost,
+            ) {
+                return Err(Error::Api(format!(
+                    "Replay blocked by policy: {}",
+                    incident.details
+                )));
+            }
+        }
+    }
+
     let mut checkpoint_reports: Vec<replay::CheckpointReplayReport> = Vec::new();
 
     #[cfg(feature = "interactive")]
@@ -934,6 +1007,9 @@ pub(crate) fn replay_run_with_pool(
                         configured_epsilon: config.epsilon,
                         similarity_score: None,
                         grade: None,
+                        usage_tokens: None,
+                        usage_usd: None,
+                        usage_nature_cost: None,
                     });
                 checkpoint_reports.push(report);
             }
@@ -968,6 +1044,32 @@ pub(crate) fn replay_run_with_pool(
         left.cmp(&right)
             .then_with(|| a.checkpoint_config_id.cmp(&b.checkpoint_config_id))
     });
+
+    // Sum up usage from all checkpoint reports and update project ledger
+    let total_usage_tokens: u64 = checkpoint_reports
+        .iter()
+        .filter_map(|r| r.usage_tokens)
+        .sum();
+    let total_usage_usd: f64 = checkpoint_reports
+        .iter()
+        .filter_map(|r| r.usage_usd)
+        .sum();
+    let total_usage_nature_cost: f64 = checkpoint_reports
+        .iter()
+        .filter_map(|r| r.usage_nature_cost)
+        .sum();
+
+    // Only update ledger if there was actual usage
+    if total_usage_tokens > 0 {
+        store::project_usage_ledgers::increment(
+            &conn,
+            &stored_run.project_id,
+            stored_run.policy_version,
+            total_usage_tokens,
+            total_usage_usd,
+            total_usage_nature_cost,
+        )?;
+    }
 
     Ok(replay::ReplayReport::from_checkpoint_reports(
         run_id,

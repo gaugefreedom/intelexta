@@ -106,6 +106,15 @@ pub struct CheckpointReplayReport {
     /// For concordant mode only
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grade: Option<ReplayGrade>,
+    /// Token usage from replay execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_tokens: Option<u64>,
+    /// USD cost from replay execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_usd: Option<f64>,
+    /// Nature cost from replay execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_nature_cost: Option<f64>,
 }
 
 impl CheckpointReplayReport {
@@ -127,6 +136,9 @@ impl CheckpointReplayReport {
             configured_epsilon: config.epsilon,
             similarity_score: None,
             grade: None,
+            usage_tokens: None,
+            usage_usd: None,
+            usage_nature_cost: None,
         }
     }
 
@@ -148,6 +160,9 @@ impl CheckpointReplayReport {
             configured_epsilon: config.epsilon,
             similarity_score: None,
             grade: None,
+            usage_tokens: None,
+            usage_usd: None,
+            usage_nature_cost: None,
         }
     }
 }
@@ -212,6 +227,9 @@ pub fn replay_car(car: &car::Car) -> anyhow::Result<ReplayReport> {
             configured_epsilon: step.epsilon,
             similarity_score: None,
             grade: None,
+            usage_tokens: None,
+            usage_usd: None,
+            usage_nature_cost: None,
         };
 
         if let Some(process) = car.proof.process.as_ref() {
@@ -440,6 +458,13 @@ pub(crate) fn replay_exact_checkpoint(
         let model = config.model.as_deref().unwrap_or("");
         let prompt = config.prompt.as_deref().unwrap_or("");
         let generation = orchestrator::replay_llm_generation(model, prompt)?;
+
+        // Track usage and costs from replay
+        let total_usage = generation.usage.total();
+        report.usage_tokens = Some(total_usage);
+        report.usage_usd = Some(crate::governance::estimate_usd_cost(total_usage, Some(model)));
+        report.usage_nature_cost = Some(crate::governance::estimate_nature_cost(total_usage, Some(model)));
+
         provenance::sha256_hex(generation.response.as_bytes())
     };
 
@@ -506,6 +531,13 @@ pub(crate) fn replay_concordant_checkpoint(
         let model = config.model.as_deref().unwrap_or("");
         let prompt = config.prompt.as_deref().unwrap_or("");
         let generation = orchestrator::replay_llm_generation(model, prompt)?;
+
+        // Track usage and costs from replay
+        let total_usage = generation.usage.total();
+        report.usage_tokens = Some(total_usage);
+        report.usage_usd = Some(crate::governance::estimate_usd_cost(total_usage, Some(model)));
+        report.usage_nature_cost = Some(crate::governance::estimate_nature_cost(total_usage, Some(model)));
+
         let outputs_hex = provenance::sha256_hex(generation.response.as_bytes());
         let semantic = provenance::semantic_digest(&generation.response);
         (outputs_hex, semantic)
@@ -1164,6 +1196,9 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                     configured_epsilon: None,
                     similarity_score: None,
                     grade: None,
+                    usage_tokens: None,
+                    usage_usd: None,
+                    usage_nature_cost: None,
                 }
             }
         } else {
@@ -1184,6 +1219,9 @@ pub fn replay_interactive_run(run_id: String, pool: &DbPool) -> Result<ReplayRep
                 configured_epsilon: None,
                 similarity_score: None,
                 grade: None,
+                usage_tokens: None,
+                usage_usd: None,
+                usage_nature_cost: None,
             }
         };
 

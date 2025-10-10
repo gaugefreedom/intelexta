@@ -83,12 +83,12 @@ provider = "internal"
 display_name = "Stub Model (Testing)"
 api_name = "stub-model" # Internal models can just use their ID
 description = "Deterministic testing model with fixed responses"
-cost_per_million_tokens = 0.0
-nature_cost_per_million_tokens = 0.0
-energy_kwh_per_million_tokens = 0.0
+cost_per_million_tokens = 100.0
+nature_cost_per_million_tokens = 110.0
+energy_kwh_per_million_tokens = 120.0
 enabled = true
 requires_network = false
-requires_api_key = false
+requires_api_key = true
 tags = ["testing", "internal"]
 
 # ============================================================================

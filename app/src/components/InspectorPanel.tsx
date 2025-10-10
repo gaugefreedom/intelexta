@@ -129,12 +129,14 @@ export default function InspectorPanel({
   selectedRunId,
   selectedExecutionId,
   onSelectRun,
+  onProjectLedgerMutated,
 }: {
   projectId: string;
   refreshToken: number;
   selectedRunId: string | null;
   selectedExecutionId: string | null;
   onSelectRun: (runId: string | null, executionId?: string | null) => void;
+  onProjectLedgerMutated?: () => void;
 }) {
   const [runs, setRuns] = React.useState<RunSummary[]>([]);
   const [checkpoints, setCheckpoints] = React.useState<CheckpointSummary[]>([]);
@@ -458,6 +460,7 @@ export default function InspectorPanel({
     replayRun(selectedRunIdWithCheckpoint)
       .then((report) => {
         setReplayReport(report);
+        onProjectLedgerMutated?.();
       })
       .catch((err) => {
         console.error("Failed to replay run", err);
@@ -467,7 +470,7 @@ export default function InspectorPanel({
       .finally(() => {
         setReplayingRun(false);
       });
-  }, [selectedRunIdWithCheckpoint]);
+  }, [selectedRunIdWithCheckpoint, onProjectLedgerMutated]);
 
   const handleOpenDetails = React.useCallback((checkpointId: string) => {
     setSelectedCheckpointId(checkpointId);

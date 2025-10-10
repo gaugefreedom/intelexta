@@ -588,6 +588,7 @@ interface EditorPanelProps {
   selectedRunId: string | null;
   onSelectRun: (runId: string | null, executionId?: string | null) => void;
   refreshToken: number;
+  projectLedgerRefreshToken: number;
   onRunExecuted?: (runId: string, execution: RunExecutionSummary) => void;
   onRunsMutated?: () => void;
 }
@@ -597,6 +598,7 @@ export default function EditorPanel({
   selectedRunId,
   onSelectRun,
   refreshToken,
+  projectLedgerRefreshToken,
   onRunExecuted,
   onRunsMutated,
 }: EditorPanelProps) {
@@ -619,10 +621,10 @@ export default function EditorPanel({
   );
   const [projectLedgerLoading, setProjectLedgerLoading] = React.useState(false);
   const [projectLedgerError, setProjectLedgerError] = React.useState<string | null>(null);
-  const [projectLedgerRefreshToken, setProjectLedgerRefreshToken] = React.useState(0);
+  const [internalProjectLedgerRefreshToken, setInternalProjectLedgerRefreshToken] = React.useState(0);
 
   const refreshProjectLedger = React.useCallback(() => {
-    setProjectLedgerRefreshToken((token) => token + 1);
+    setInternalProjectLedgerRefreshToken((token) => token + 1);
   }, []);
 
   const [catalogModels, setCatalogModels] = React.useState<CatalogModel[]>([]);
@@ -948,7 +950,7 @@ export default function EditorPanel({
     return () => {
       cancelled = true;
     };
-  }, [projectId, refreshToken, projectLedgerRefreshToken]);
+  }, [projectId, refreshToken, projectLedgerRefreshToken, internalProjectLedgerRefreshToken]);
 
   React.useEffect(() => {
     if (!selectedRunId) {
