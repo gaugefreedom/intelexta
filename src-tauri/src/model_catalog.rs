@@ -314,7 +314,14 @@ impl ModelCatalog {
     pub fn calculate_nature_cost(&self, model_id: &str, tokens: u64) -> f64 {
         let nature_cost_per_million = self
             .get_model(model_id)
-            .map(|m| m.nature_cost_per_million_tokens)
+            .and_then(|m| {
+                let value = m.nature_cost_per_million_tokens;
+                if value.is_finite() && value > 0.0 {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(self.raw.defaults.fallback_nature_cost_per_million_tokens);
 
         (tokens as f64 / 1_000_000.0) * nature_cost_per_million
@@ -491,6 +498,39 @@ mod tests {
 
         let nature_cost = catalog.calculate_nature_cost("stub-model", 1_000_000);
         assert_eq!(nature_cost, 0.0);
+    }
+
+    #[test]
+    fn test_nature_cost_uses_fallback_when_model_missing_value() {
+        let toml = r#"
+[metadata]
+version = "1.0.0"
+created_at = "2025-01-01T00:00:00Z"
+description = "Test catalog"
+
+[defaults]
+nature_cost_algorithm = "simple"
+fallback_cost_per_million_tokens = 5.0
+fallback_nature_cost_per_million_tokens = 2.5
+
+[[models]]
+id = "zero-nature"
+provider = "test"
+display_name = "Zero Nature"
+description = "Model without nature cost data"
+cost_per_million_tokens = 0.0
+nature_cost_per_million_tokens = 0.0
+energy_kwh_per_million_tokens = 0.0
+enabled = true
+
+[providers.test]
+name = "Test Provider"
+description = "Test provider"
+"#;
+
+        let catalog = ModelCatalog::load_from_str(toml).unwrap();
+        let nature_cost = catalog.calculate_nature_cost("zero-nature", 1_000_000);
+        assert_eq!(nature_cost, 2.5);
     }
 
     #[test]
