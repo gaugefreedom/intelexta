@@ -59,16 +59,16 @@ Build a local-first control plane for verifiable Human+AI workflows with cryptog
 
 ---
 
-## Phase 2: Graded Replay 🔮 NEXT
+## Phase 2: Graded Replay
 
 **Goal**: Enable reproducibility verification by re-executing workflows and comparing outputs.
 
 ### Planned Features
 
 #### 2.1 Workflow Parser
-- [ ] Parse CAR files to extract workflow specification
-- [ ] Reconstruct step-by-step execution plan
-- [ ] Handle multi-step dependencies and data flow
+- [x] Parse CAR files to extract workflow specification
+- [x] Reconstruct step-by-step execution plan
+- [x] Handle multi-step dependencies and data flow
 
 **Design Notes**:
 - Extract from `car.run.steps` array
@@ -76,9 +76,9 @@ Build a local-first control plane for verifiable Human+AI workflows with cryptog
 - Preserve original prompts, models, and parameters
 
 #### 2.2 Model Adapter Integration
-- [ ] Use existing model adapter system from main app
-- [ ] Support API key injection via environment variables
-- [ ] Handle rate limiting and API errors gracefully
+- [x] Use existing model adapter system from main app
+- [x] Support API key injection via environment variables
+- [x] Handle rate limiting and API errors gracefully
 
 **Environment Variables**:
 ```bash
@@ -88,8 +88,8 @@ OLLAMA_HOST=http://localhost:11434
 ```
 
 #### 2.3 Similarity Scoring
-- [ ] Exact match detection (deterministic models)
-- [ ] Semantic similarity for non-deterministic outputs
+- [x] Exact match detection (deterministic models)
+- [x] Semantic similarity for non-deterministic outputs
 - [ ] Token-level diff for structured outputs (JSON, code)
 
 **Scoring Rubric**:
@@ -105,8 +105,8 @@ OLLAMA_HOST=http://localhost:11434
 - JSON structural comparison for structured outputs
 
 #### 2.4 Graded Report Generation
-- [ ] Per-step replay results
-- [ ] Aggregate reproducibility score
+- [x] Per-step replay results
+- [x] Aggregate reproducibility score
 - [ ] Diff visualization for failed reproductions
 - [ ] Export graded report to JSON
 
@@ -231,8 +231,10 @@ intelexta-verify proof.car.zip --replay --api-keys-from-env
 
 #### 4.1 Policy-as-Code
 - [ ] YAML/TOML policy definitions
-- [ ] Per-project and per-workflow policies
-- [ ] Policy versioning and migration
+- [x] Per-project policies
+- [ ] Per-workflow policies
+- [x] Policy versioning 
+- [  ] Policy migration
 
 **Example Policy**:
 ```toml
@@ -345,6 +347,7 @@ require_signatures = true
    - How accurate are our nature cost estimates?
    - Can we integrate with actual datacenter energy metrics?
    - How to account for embodied carbon in hardware?
+   - Connect user to Carbon Market for pay back?
 
 3. **Governance Trade-offs**
    - How to balance control with flexibility?

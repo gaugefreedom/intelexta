@@ -109,3 +109,9 @@ See [ROADMAP.md](ROADMAP.md) for detailed development plan and upcoming features
 - **Simplified Exports**: Project exports (.ixp) save directly to user-chosen folders without nested directory structures
 - **Backward Compatibility**: Import system handles both new and legacy project formats seamlessly
 - **Run Execution Tracking**: Proper foreign key relationships ensure reproducible execution history across imports
+
+## ⚖️ License
+
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPLv3)**. See the `LICENSE` file for details.
+
+For **commercial licensing inquiries** (e.g., to use this IP in a closed-source product), please contact Gauge Freedom, Inc.
