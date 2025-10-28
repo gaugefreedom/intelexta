@@ -28,7 +28,7 @@ whenever you change the Rust crate so the latest artifacts are written to `publi
 | `npm run dev` | Start the Vite development server with hot module reloading. |
 | `npm run build` | Create a production build in `dist`. |
 | `npm run preview` | Preview the production build locally. |
-  `npm run build:wasm` | Compile the Rust verifier crate with `wasm-pack` and place the output in `public/pkg`. |
+| `npm run build:wasm` | Compile the Rust verifier crate with `wasm-pack` and place the output in `public/pkg`. |
 | `npm run typecheck` | Run TypeScript in no-emit mode to verify the frontend types. |
 
 ### Building the WASM package
@@ -83,6 +83,23 @@ apps/web-verifier
 ├── tsconfig.node.json
 └── vite.config.ts
 ```
+
+## Manual QA
+
+1. Build the WASM bundle so the verifier glue and `.wasm` files exist in `public/pkg`:
+   ```bash
+   npm run build:wasm
+   ```
+2. Start the development server:
+   ```bash
+   npm run dev
+   ```
+3. Visit the printed local URL and drag a valid `*.car.json` transcript into the dropzone. Confirm the
+   loading skeleton appears until verification completes and the success banner references the file name.
+4. Drop a file with an unsupported extension (for example `notes.txt`). Verify the dropzone rejects the
+   file, shows a red alert with the descriptive error, and no stale results remain.
+5. Drop a failing proof (e.g. one with an invalid signature). Ensure the status banner turns red, the
+   alert surfaces the WASM error message, and the raw JSON payload is visible for debugging.
 
 ## Troubleshooting
 
