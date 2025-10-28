@@ -2,13 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import clsx from 'clsx';
 import { AlertCircle, CheckCircle2, Loader2, UploadCloud } from 'lucide-react';
-import {
-  initVerifier,
-  VerificationResult,
-  verifyCarBytes,
-  verifyCarJson
-} from '../wasm/loader';
-import WorkflowTimeline from './WorkflowTimeline';
+import { initVerifier, verifyCarBytes, verifyCarJson } from '../wasm/loader';
+import type { VerificationReport } from '../types/verifier';
+import WorkflowViewer from './WorkflowViewer';
 import MetadataCard from './MetadataCard';
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
@@ -47,18 +43,35 @@ const exampleAccept = {
 };
 
 const defaultJsonPlaceholder = `{
-  "metadata": {
-    "runId": "123",
-    "signer": "did:key:z6Mk...",
-    "model": "gpt-4.1-mini",
-    "createdAt": "2024-05-01T10:34:00Z"
+  "status": "verified",
+  "car_id": "car:123...",
+  "run_id": "run-demo",
+  "created_at": "2024-05-01T10:34:00Z",
+  "model": {
+    "name": "gpt-4.1-mini",
+    "version": "2024-05-01",
+    "kind": "text"
+  },
+  "summary": {
+    "checkpoints_verified": 0,
+    "checkpoints_total": 0,
+    "provenance_verified": 0,
+    "provenance_total": 0,
+    "attachments_verified": 0,
+    "attachments_total": 0,
+    "hash_chain_valid": false,
+    "signatures_valid": false,
+    "content_integrity_valid": false
+  },
+  "workflow": {
+    "steps": []
   }
 }`;
 
 const Verifier = () => {
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<VerificationResult | null>(null);
+  const [result, setResult] = useState<VerificationReport | null>(null);
   const [rawJson, setRawJson] = useState<string>('');
   const [droppedFileName, setDroppedFileName] = useState<string | null>(null);
 
@@ -80,9 +93,9 @@ const Verifier = () => {
     try {
       if (file.name.toLowerCase().endsWith('.json')) {
         const json = await file.text();
-        setRawJson(json || defaultJsonPlaceholder);
         const verification = await verifyCarJson(json);
         setResult(verification);
+        setRawJson(JSON.stringify(verification, null, 2));
       } else {
         const buffer = await file.arrayBuffer();
         const bytes = new Uint8Array(buffer);
@@ -169,17 +182,14 @@ const Verifier = () => {
       )}
 
       {result && (
-        <section className="grid grid-cols-1 gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="flex flex-col gap-6">
-            <MetadataCard metadata={result.metadata} />
-            <WorkflowTimeline steps={result.workflow ?? []} />
-          </div>
+        <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <WorkflowViewer report={result} />
           <aside className="flex flex-col gap-4">
-            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5">
+            <MetadataCard report={result} />
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
               <h2 className="text-lg font-semibold text-slate-100">Raw Output</h2>
               <p className="mb-4 text-sm text-slate-400">
-                Review the JSON payload returned from the verifier. Collapse sections to inspect
-                prompts, model responses, and signatures.
+                Review the normalized JSON payload returned from the verifier.
               </p>
               <pre className="max-h-[420px] overflow-auto rounded-lg bg-slate-950/80 p-4 text-xs leading-relaxed text-slate-200">
                 {rawJson || defaultJsonPlaceholder}
