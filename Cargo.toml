@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "src-tauri",
+    "src-tauri/crates/intelexta-verify",
+    "apps/web-verifier/wasm-verify"
+]
+resolver = "2"

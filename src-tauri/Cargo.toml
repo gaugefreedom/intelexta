@@ -8,11 +8,6 @@ default-run = "intelexta"
 default = ["interactive"]
 interactive = []
 
-[workspace]
-members = [
-    "crates/intelexta-verify",
-]
-
 # In src-tauri/Cargo.toml
 
 [dependencies]
