@@ -68,7 +68,7 @@ const widgetHtml = `
     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     .badge { padding: 4px 12px; border-radius: 12px; font-size: 14px; font-weight: 500; }
     .badge.verified { background: #10b981; color: white; }
-    .badge.failed { background: #ef4444; color: white; }
+    .badge.unsigned { background: #f59e0b; color: #1f2937; }
     .summary-content { padding: 16px; background: #f9fafb; border-radius: 8px; margin-bottom: 16px; line-height: 1.6; }
     .verification-info { margin-bottom: 16px; }
     .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e5e7eb; }
@@ -106,12 +106,18 @@ const widgetHtml = `
 
         const { summary, car, meta } = toolOutput;
 
+        const badgeClass = car.valid ? 'verified' : 'unsigned';
+        const badgeLabel = car.valid ? '✓ Verified' : '⚠ Unsigned';
+        const signerDisplay = car.valid ? `${car.signer.slice(0, 24)}...` : 'unsigned';
+        const signerTitle = car.valid ? 'Click to copy signer' : 'Unsigned bundle - no signer';
+        const signerOnclick = car.valid ? `onclick="navigator.clipboard.writeText('${car.signer}')"` : '';
+
         document.getElementById('root').innerHTML = \`
           <div class="summary-card">
             <div class="header">
               <h3>Verifiable Summary</h3>
-              <span class="badge \${car.valid ? 'verified' : 'failed'}">
-                \${car.valid ? '✓ Verified' : '⚠ Failed'}
+              <span class="badge \${badgeClass}">
+                \${badgeLabel}
               </span>
             </div>
 
@@ -122,8 +128,8 @@ const widgetHtml = `
             <div class="verification-info">
               <div class="info-row">
                 <span class="label">Signer:</span>
-                <code class="value" onclick="navigator.clipboard.writeText('\${car.signer}')" title="Click to copy">
-                  \${car.signer.slice(0, 24)}...
+                <code class="value" \${signerOnclick} title="\${signerTitle}">
+                  \${signerDisplay}
                 </code>
               </div>
               <div class="info-row">
@@ -242,7 +248,7 @@ server.registerTool(
       console.log(`Summary generated (${summary.length} chars)`);
 
       // 3. Generate proof bundle
-      const artifacts = await generateProofBundle(
+      const { bundle: artifacts, isSigned } = await generateProofBundle(
         source,
         summary,
         usage ? 'gpt-4o-mini' : 'local-summarizer',
@@ -266,6 +272,8 @@ server.registerTool(
       // 6. Parse manifest for metadata
       const manifest = JSON.parse(artifacts['manifest.json']);
       const receipt = JSON.parse(artifacts['receipts/ed25519.json']);
+      const signer = isSigned && receipt.publicKey ? receipt.publicKey : 'unsigned';
+      const badgeStatus = isSigned ? 'Signed (ed25519)' : 'Unsigned - no cryptographic proof';
 
       const runtime = Date.now() - startTime;
       console.log(`Total runtime: ${runtime}ms`);
@@ -273,14 +281,14 @@ server.registerTool(
       return {
         content: [{
           type: 'text',
-          text: `Verifiable summary generated.\n\nTree Hash: ${manifest.treeHash}\nSigner: ${receipt.publicKey || 'unsigned'}\nRuntime: ${runtime}ms`
+          text: `Verifiable summary generated.\n\nTree Hash: ${manifest.treeHash}\nSigner: ${signer}\nReceipt: ${badgeStatus}\nRuntime: ${runtime}ms`
         }],
         structuredContent: {
           summary,
           car: {
             id,
-            valid: true,
-            signer: receipt.publicKey || 'unsigned',
+            valid: isSigned,
+            signer,
             hash: manifest.treeHash,
             download_url: downloadUrl
           },

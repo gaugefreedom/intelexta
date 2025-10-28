@@ -76,6 +76,11 @@ export interface ProofBundle {
   'receipts/ed25519.json': string;
 }
 
+export interface ProofBundleResult {
+  bundle: ProofBundle;
+  isSigned: boolean;
+}
+
 /**
  * Generate a complete verifiable proof bundle
  *
@@ -90,7 +95,7 @@ export async function generateProofBundle(
   summary: string,
   model: string,
   secretKeyB64?: string
-): Promise<ProofBundle> {
+): Promise<ProofBundleResult> {
   const runId = `vs-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
   const createdAt = new Date().toISOString();
 
@@ -235,12 +240,17 @@ export async function generateProofBundle(
   // ========================================
   // Return all artifacts
   // ========================================
-  return {
+  const bundle: ProofBundle = {
     'summary.md': summaryMd,
     'sources.jsonl': sourcesJsonl,
     'transcript.json': transcriptJson,
     'manifest.json': manifestJson,
     'receipts/ed25519.json': receiptJson
+  };
+
+  return {
+    bundle,
+    isSigned: Boolean(secretKeyB64)
   };
 }
 
