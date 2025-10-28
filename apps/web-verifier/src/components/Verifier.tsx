@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useDropzone } from 'react-dropzone';
+import { type FileRejection, useDropzone } from 'react-dropzone';
 import clsx from 'clsx';
 import { AlertCircle, CheckCircle2, Loader2, UploadCloud } from 'lucide-react';
 import { initVerifier, verifyCarBytes, verifyCarJson } from '../wasm/loader';
 import type { VerificationReport } from '../types/verifier';
 import WorkflowViewer from './WorkflowViewer';
 import MetadataCard from './MetadataCard';
+import {
+  PROOF_FILE_ACCEPT_MESSAGE,
+  buildProofDropzoneAccept,
+  proofFileValidator,
+  validateProofFileName
+} from '../utils/proofFiles';
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
 
@@ -37,11 +43,6 @@ const StatusBanner = ({ status, message }: { status: Status; message: string }) 
   );
 };
 
-const exampleAccept = {
-  'application/vnd.ipld.car': ['.car'],
-  'application/json': ['.json']
-};
-
 const defaultJsonPlaceholder = `{
   "status": "verified",
   "car_id": "car:123...",
@@ -68,6 +69,52 @@ const defaultJsonPlaceholder = `{
   }
 }`;
 
+const LoadingSkeleton = () => (
+  <section className="grid grid-cols-1 gap-6 animate-pulse lg:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6">
+      <div className="h-6 w-48 rounded bg-slate-800/70" />
+      <div className="mt-5 space-y-3">
+        <div className="h-4 rounded bg-slate-800/60" />
+        <div className="h-4 rounded bg-slate-800/60" />
+        <div className="h-4 rounded bg-slate-800/50" />
+        <div className="h-4 rounded bg-slate-800/50" />
+      </div>
+    </div>
+    <aside className="flex flex-col gap-4">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <div className="h-5 w-32 rounded bg-slate-800/70" />
+        <div className="mt-4 space-y-2">
+          <div className="h-3 rounded bg-slate-800/60" />
+          <div className="h-3 rounded bg-slate-800/60" />
+          <div className="h-3 rounded bg-slate-800/60" />
+        </div>
+      </div>
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+        <div className="h-5 w-24 rounded bg-slate-800/70" />
+        <div className="mt-4 space-y-2">
+          <div className="h-3 rounded bg-slate-800/60" />
+          <div className="h-3 rounded bg-slate-800/60" />
+          <div className="h-3 rounded bg-slate-800/60" />
+        </div>
+      </div>
+    </aside>
+  </section>
+);
+
+const ErrorAlert = ({ message, rawJson }: { message: string; rawJson?: string }) => (
+  <div className="space-y-3 rounded-lg border border-rose-600/60 bg-rose-900/40 p-4 text-sm text-rose-100">
+    <p className="font-semibold">{message}</p>
+    {rawJson ? (
+      <pre className="max-h-64 overflow-auto rounded-md border border-rose-600/40 bg-rose-950/70 p-3 text-xs leading-relaxed text-rose-100/90">
+        {rawJson}
+      </pre>
+    ) : null}
+    <p className="text-xs text-rose-200/70">
+      Ensure the WASM bundle is available in <code>public/pkg</code> and that the file was exported from IntelexTA.
+    </p>
+  </div>
+);
+
 const Verifier = () => {
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -89,46 +136,80 @@ const Verifier = () => {
     setStatus('loading');
     setError(null);
     setResult(null);
+    setRawJson('');
+
+    const validation = validateProofFileName(file.name);
+    if (!validation.valid) {
+      setStatus('error');
+      setError(validation.message);
+      return;
+    }
 
     try {
-      if (file.name.toLowerCase().endsWith('.json')) {
+      if (validation.kind === 'json') {
         const json = await file.text();
         const verification = await verifyCarJson(json);
         setResult(verification);
         setRawJson(JSON.stringify(verification, null, 2));
+        if (verification.status === 'verified') {
+          setStatus('success');
+        } else {
+          setStatus('error');
+          setError(verification.error ?? 'Verification failed. Review the raw output for details.');
+        }
       } else {
         const buffer = await file.arrayBuffer();
         const bytes = new Uint8Array(buffer);
         const verification = await verifyCarBytes(bytes);
         setResult(verification);
         setRawJson(JSON.stringify(verification, null, 2));
+        if (verification.status === 'verified') {
+          setStatus('success');
+        } else {
+          setStatus('error');
+          setError(verification.error ?? 'Verification failed. Review the raw output for details.');
+        }
       }
-      setStatus('success');
     } catch (err) {
       console.error(err);
       setStatus('error');
+      setResult(null);
+      setRawJson('');
       setError(err instanceof Error ? err.message : 'Unknown error while verifying file');
     }
   }, []);
 
+  const onDropRejected = useCallback((fileRejections: FileRejection[]) => {
+    if (!fileRejections.length) return;
+    const [rejection] = fileRejections;
+    const firstError = rejection.errors[0];
+    setDroppedFileName(null);
+    setResult(null);
+    setRawJson('');
+    setStatus('error');
+    setError(firstError?.message ?? PROOF_FILE_ACCEPT_MESSAGE);
+  }, []);
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: exampleAccept,
+    onDropRejected,
+    accept: buildProofDropzoneAccept(),
+    validator: proofFileValidator,
     multiple: false
   });
 
   const statusMessage = useMemo(() => {
     switch (status) {
       case 'loading':
-        return 'Verifying archive with WASM verifier...';
+        return 'Verifying proof with WASM verifier...';
       case 'success':
         return droppedFileName
           ? `Successfully verified \`${droppedFileName}\``
-          : 'Verification completed';
+          : 'Verification completed.';
       case 'error':
-        return error ?? 'Verification failed. Check the console for details.';
+        return error ?? 'Verification failed. Check the details below.';
       default:
-        return 'Drop a .car or .json proof to start verification.';
+        return 'Drop a .car.json transcript or .car.zip archive to start verification.';
     }
   }, [status, droppedFileName, error]);
 
@@ -138,9 +219,7 @@ const Verifier = () => {
         <p className="text-sm uppercase tracking-[0.35em] text-brand-400">IntelexTA</p>
         <h1 className="text-4xl font-semibold text-white sm:text-5xl">Workflow Proof Verifier</h1>
         <p className="text-base text-slate-300 sm:text-lg">
-          Validate signed workflow archives directly in your browser. Upload a CAR bundle
-          exported from IntelexTA or drop a JSON transcript to preview steps, prompts, and
-          outputs.
+          Validate signed workflow archives directly in your browser. Upload a CAR bundle exported from IntelexTA or drop a JSON transcript to preview steps, prompts, and outputs.
         </p>
       </header>
 
@@ -156,11 +235,12 @@ const Verifier = () => {
         <input {...getInputProps()} />
         <UploadCloud className="mb-4 h-12 w-12 text-brand-300" />
         <p className="text-lg font-medium text-slate-100">
-          {isDragActive ? 'Release to verify your file' : 'Drag & drop a CAR or JSON file here'}
+          {isDragActive
+            ? 'Release to verify your file'
+            : 'Drag & drop a .car.json or .car.zip file here'}
         </p>
         <p className="mt-2 max-w-md text-sm text-slate-400">
-          Supports IntelexTA signed CAR archives and JSON transcripts. Files stay in the browser and
-          are never uploaded.
+          Supports IntelexTA signed CAR archives and JSON transcripts. Files stay in the browser and are never uploaded.
         </p>
         {droppedFileName && (
           <p className="mt-4 rounded-full border border-slate-700 bg-slate-800/80 px-5 py-1 text-xs uppercase tracking-wide text-slate-300">
@@ -172,16 +252,12 @@ const Verifier = () => {
       <StatusBanner status={status} message={statusMessage} />
 
       {status === 'error' && error && (
-        <div className="rounded-lg border border-rose-600/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-          <p>{error}</p>
-          <p className="mt-1 text-xs text-rose-200/70">
-            Ensure the WASM bundle is available in <code>public/pkg</code> and the file is a valid
-            IntelexTA proof archive.
-          </p>
-        </div>
+        <ErrorAlert message={error} rawJson={rawJson || undefined} />
       )}
 
-      {result && (
+      {status === 'loading' && <LoadingSkeleton />}
+
+      {result && status !== 'loading' && (
         <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
           <WorkflowViewer report={result} />
           <aside className="flex flex-col gap-4">
