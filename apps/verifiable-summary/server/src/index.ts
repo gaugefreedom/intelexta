@@ -160,16 +160,25 @@ const widgetHtml = `
 </html>
 `;
 
-// Register UI resource
-// Note: Actual API may vary - this is a placeholder implementation
-try {
-  (server as any).setResourceHandler?.('ui://widget/verifiable-summary.html', async () => ({
-    mimeType: 'text/html+skybridge',
-    text: widgetHtml
-  }));
-} catch (error) {
-  console.warn('Resource registration may need adjustment based on SDK version');
-}
+const WIDGET_RESOURCE_URI = 'ui://widget/verifiable-summary';
+
+server.registerResource(
+  'verifiable-summary-widget',
+  WIDGET_RESOURCE_URI,
+  {
+    title: 'Verifiable Summary Widget',
+    description: 'Renders verifiable summary results in ChatGPT',
+    mimeType: 'text/html+skybridge'
+  },
+  async () => ({
+    contents: [
+      {
+        uri: WIDGET_RESOURCE_URI,
+        text: widgetHtml
+      }
+    ]
+  })
+);
 
 // ============================================================================
 // Register Tool: summarize_content
@@ -190,13 +199,16 @@ server.registerTool(
     annotations: {
       title: 'Summarize with Verification',
       openai: {
-        outputTemplate: 'ui://widget/verifiable-summary.html',
+        outputTemplate: WIDGET_RESOURCE_URI,
         widgetAccessible: true,
         toolInvocation: {
           invoking: 'Generating verifiable summary...',
           invoked: 'Summary complete with cryptographic proof.'
         }
       }
+    },
+    _meta: {
+      'openai/outputTemplate': WIDGET_RESOURCE_URI
     }
   },
   async (params) => {
