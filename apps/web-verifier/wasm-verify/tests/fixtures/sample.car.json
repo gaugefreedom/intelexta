@@ -1,0 +1,94 @@
+{
+  "id": "car:c4af460d98fbb45cd8d2be1daa49a17f447a09327fcefa2317734af2dbb968ae",
+  "run_id": "run-demo",
+  "created_at": "2024-01-02T03:04:05Z",
+  "run": {
+    "kind": "exact",
+    "name": "Demo run",
+    "model": "demo-model",
+    "version": "1.0",
+    "seed": 42,
+    "steps": [
+      {
+        "id": "step-1",
+        "run_id": "run-demo",
+        "order_index": 0,
+        "checkpoint_type": "Step",
+        "step_type": "llm",
+        "model": "demo-model",
+        "prompt": "What is the answer?",
+        "token_budget": 1000,
+        "proof_mode": "exact",
+        "epsilon": null,
+        "config_json": null
+      }
+    ],
+    "sampler": null
+  },
+  "proof": {
+    "match_kind": "process",
+    "epsilon": null,
+    "distance_metric": null,
+    "original_semantic_digest": null,
+    "replay_semantic_digest": null,
+    "process": {
+      "sequential_checkpoints": [
+        {
+          "id": "ckpt-1",
+          "parent_checkpoint_id": null,
+          "turn_index": null,
+          "prev_chain": "0000000000000000000000000000000000000000000000000000000000000000",
+          "curr_chain": "2c34ca190b352b0dff746ccfc9b67103788d159055a2632b262457e3364e8169",
+          "signature": "4JtR2I1PlktfQ6kWHyzcDcSqj7b7s475HWBZR0lj5PRs1XK+hLzGAEl9ySWI9y172fWA7twxgpF42Xc4Ih4TBg==",
+          "run_id": "run-demo",
+          "kind": "Step",
+          "timestamp": "2024-01-02T03:04:05Z",
+          "inputs_sha256": "7fa36b95d5c98859ed72b4787f3c28b29eaa103970786755c9711cbb19be631c",
+          "outputs_sha256": null,
+          "usage_tokens": 10,
+          "prompt_tokens": 7,
+          "completion_tokens": 3
+        }
+      ]
+    }
+  },
+  "policy_ref": {
+    "hash": "sha256:policy",
+    "egress": false,
+    "estimator": "tokens * 0",
+    "model_catalog_hash": "sha256:unknown",
+    "model_catalog_version": "unknown"
+  },
+  "budgets": {
+    "usd": 1.0,
+    "tokens": 100,
+    "nature_cost": 0.1
+  },
+  "provenance": [
+    {
+      "claim_type": "config",
+      "sha256": "sha256:ae4e6ac690889c999e039c5b17163ed70a1be4ffc5c1633f60296f21b637ef12"
+    },
+    {
+      "claim_type": "input",
+      "sha256": "sha256:7fa36b95d5c98859ed72b4787f3c28b29eaa103970786755c9711cbb19be631c"
+    }
+  ],
+  "checkpoints": [
+    "ckpt-1"
+  ],
+  "sgrade": {
+    "score": 95,
+    "components": {
+      "provenance": 1.0,
+      "energy": 0.9,
+      "replay": 0.95,
+      "consent": 0.8,
+      "incidents": 1.0
+    }
+  },
+  "signer_public_key": "Dy6Myp2L2d7s3OOxVvVJaT+i5RjgrrBSuRf9WlVuGdg=",
+  "signatures": [
+    "ed25519:4JtR2I1PlktfQ6kWHyzcDcSqj7b7s475HWBZR0lj5PRs1XK+hLzGAEl9ySWI9y172fWA7twxgpF42Xc4Ih4TBg=="
+  ]
+}
