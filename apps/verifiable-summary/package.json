@@ -1,0 +1,19 @@
+{
+  "name": "@intelexta/verifiable-summary",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server for verifiable summaries with cryptographic proofs",
+  "type": "module",
+  "scripts": {
+    "dev:server": "cd server && npm run dev",
+    "dev:web": "cd web && npm run dev",
+    "build:server": "cd server && npm run build",
+    "build:web": "cd web && npm run build",
+    "build": "npm run build:web && npm run build:server",
+    "start": "cd server && npm start"
+  },
+  "workspaces": [
+    "server",
+    "web"
+  ]
+}

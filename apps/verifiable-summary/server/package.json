@@ -1,0 +1,31 @@
+{
+  "name": "@intelexta/verifiable-summary-server",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MCP server for verifiable summaries",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "keygen": "node scripts/generate-keypair.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.4",
+    "express": "^4.18.2",
+    "jszip": "^3.10.1",
+    "json-canonicalize": "^1.0.4",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/express": "^4.17.21",
+    "typescript": "^5.3.3",
+    "tsx": "^4.7.0",
+    "vitest": "^1.1.0"
+  }
+}
