@@ -8,7 +8,8 @@ transcripts dropped by the user, and renders a friendly timeline and metadata vi
 
 - Node.js 20+
 - npm 9+
-- IntelexTA verifier WASM artifacts generated via `wasm-pack build`.
+- [`wasm-pack`](https://rustwasm.github.io/wasm-pack/installer/)
+- IntelexTA verifier WASM artifacts generated via the provided helper scripts.
 
 ## Getting started
 
@@ -17,37 +18,44 @@ cd apps/web-verifier
 npm install
 ```
 
-During development Vite will serve files from the `public` directory directly. Make sure the
-`wasm-pack` output has been copied to `public/pkg` (for example `public/pkg/web_verifier.js` and
-`public/pkg/web_verifier_bg.wasm`).
+During development Vite will serve files from the `public` directory directly. Run `npm run build:wasm`
+whenever you change the Rust crate so the latest artifacts are written to `public/pkg`.
 
 ### Available scripts
 
-| Script        | Description |
-| ------------- | ----------- |
+| Script | Description |
+| ------ | ----------- |
 | `npm run dev` | Start the Vite development server with hot module reloading. |
 | `npm run build` | Create a production build in `dist`. |
 | `npm run preview` | Preview the production build locally. |
-| `npm run build:wasm` | Build the app and copy the WASM artifacts into `dist/pkg` for deployment. |
+| `npm run build:wasm` | Compile the Rust verifier crate with `wasm-pack` and place the output in `public/pkg`. |
+| `npm run typecheck` | Run TypeScript in no-emit mode to verify the frontend types. |
 
 ### Building the WASM package
 
-1. Build the verifier crate using `wasm-pack`. For example:
-   ```bash
-   wasm-pack build --target web --out-dir pkg
-   ```
-2. Copy the resulting `pkg` directory into `apps/web-verifier/public/pkg`:
-   ```bash
-   cp -r pkg apps/web-verifier/public/
-   ```
+The repository provides a reusable script at `scripts/build-wasm.sh` that targets the web build of the
+Rust crate and copies the generated glue code and `.wasm` binaries into `public/pkg`:
 
-### Deployment notes
+```bash
+npm run build:wasm
+```
 
-- When deploying, run `npm run build:wasm` to ensure the WebAssembly files are bundled into the
-  `dist/pkg` directory alongside the Vite output.
-- If hosting behind a CDN make sure `application/wasm` is served with the correct MIME type.
-- The app is static and can be deployed to any static host (e.g. Cloudflare Pages, Vercel, GitHub
-  Pages) as long as the `/pkg` directory is present.
+The script checks for `wasm-pack` and fails fast with a helpful error message when the binary is not
+installed.
+
+### Deployment workflow
+
+1. Ensure you are in the project root (`/workspace/intelexta`).
+2. Build the WebAssembly package and frontend bundle:
+   ```bash
+   cd apps/web-verifier
+   npm run build:wasm && npm run build
+   ```
+3. Upload the `apps/web-verifier/dist/` directory to your static host (e.g. DreamHost). The build copies
+   the `pkg` directory so the WebAssembly files and JS glue are served alongside the compiled assets.
+
+For CI/CD or automated deployments, run the same pair of commands prior to publishing the contents of
+`dist/`.
 
 ### Project structure
 
@@ -81,3 +89,5 @@ apps/web-verifier
 - **CORS errors:** When developing with a remote backend double-check the `public/pkg` path is
   accessible from the dev server origin.
 - **Type errors:** Re-run `npm install` to make sure TypeScript types for dependencies are present.
+- **Stale WASM bundle:** Rebuild the WebAssembly artifacts with `npm run build:wasm` and restart the dev
+  server.

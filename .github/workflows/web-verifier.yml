@@ -1,0 +1,41 @@
+name: Web verifier CI
+
+on:
+  push:
+    paths:
+      - 'apps/web-verifier/**'
+      - 'scripts/build-wasm.sh'
+      - '.github/workflows/web-verifier.yml'
+  pull_request:
+    paths:
+      - 'apps/web-verifier/**'
+      - 'scripts/build-wasm.sh'
+      - '.github/workflows/web-verifier.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web-verifier
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm install
+      - name: Build WebAssembly package
+        run: npm run build:wasm
+      - name: Type check frontend
+        run: npm run typecheck
+      - name: Build frontend assets
+        run: npm run build

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:wasm": "wasm-pack build apps/web-verifier/wasm-verify --target web --out-dir public/pkg --release"
+    "build:wasm": "../../scripts/build-wasm.sh",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "clsx": "^2.1.0",
