@@ -6,6 +6,7 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import express from 'express';
 import JSZip from 'jszip';
@@ -315,12 +316,26 @@ app.get('/download/:id', (req, res) => {
   res.send(entry.buffer);
 });
 
-// MCP endpoint (method depends on SDK version)
-// This is a placeholder - actual wiring depends on the SDK's HTTP adapter
-app.post('/mcp', express.json(), async (_req, res) => {
-  // TODO: Wire up MCP server's HTTP handler
-  // server.handleHttp(req, res);
-  res.status(501).json({ error: 'MCP HTTP handler not yet implemented' });
+// MCP endpoint wired through the official streamable HTTP transport
+app.post('/mcp', express.json(), async (req, res) => {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true
+  });
+
+  res.on('close', () => {
+    transport.close();
+  });
+
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (error) {
+    console.error('Error handling MCP request:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to handle MCP request' });
+    }
+  }
 });
 
 // Start server
