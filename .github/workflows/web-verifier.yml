@@ -1,4 +1,4 @@
-ame: Web verifier CI
+name: Web Verifier CI/CD
 
 on:
   push:
@@ -32,10 +32,31 @@ jobs:
           node-version: '20'
           cache: 'npm'
       - name: Install dependencies
-        run: npm install
-      - name: Build WebAssembly package
-        run: npm run build:wasm
+        run: npm ci
+      - name: Build WebAssembly and frontend bundles
+        run: npm run build:wasm && npm run build
       - name: Type check frontend
         run: npm run typecheck
-      - name: Build frontend assets
-        run: npm run build
+      - name: Upload production bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-verifier-dist
+          path: apps/web-verifier/dist
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-verifier-dist
+          path: dist
+      - name: Deploy to Netlify
+        uses: netlify/actions/cli@master
+        with:
+          args: deploy --dir=dist --prod
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}

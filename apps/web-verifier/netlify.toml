@@ -1,0 +1,18 @@
+[build]
+  base = "apps/web-verifier"
+  publish = "dist"
+  command = "npm ci && npm run build:wasm && npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[headers]]
+  for = "/pkg/*.wasm"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    Content-Type = "application/wasm"
+
+[[headers]]
+  for = "/pkg/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
