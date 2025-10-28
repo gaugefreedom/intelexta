@@ -1,0 +1,1173 @@
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..8f2d5c52b63dd7a4827995faf59d37a7ba95fede
+--- /dev/null
++++ b/Cargo.toml
+@@ -0,0 +1,7 @@
++[workspace]
++members = [
++    "src-tauri",
++    "src-tauri/crates/intelexta-verify",
++    "apps/web-verifier/wasm-verify"
++]
++resolver = "2"
+diff --git a/apps/web-verifier/package.json b/apps/web-verifier/package.json
+index 1d0448abd01ec97235447f81d78ecd4a33e87352..fb23410ca672d43f1e41888c66c5d9594474eb4f 100644
+--- a/apps/web-verifier/package.json
++++ b/apps/web-verifier/package.json
+@@ -1,31 +1,30 @@
+ {
+   "name": "web-verifier",
+   "version": "0.1.0",
+   "private": true,
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+     "build": "vite build",
+     "preview": "vite preview",
+-    "build:wasm": "npm run build && npm run copy:wasm",
+-    "copy:wasm": "mkdir -p dist/pkg && cp -r public/pkg/. dist/pkg/"
++    "build:wasm": "wasm-pack build apps/web-verifier/wasm-verify --target web --out-dir public/pkg --release"
+   },
+   "dependencies": {
+     "clsx": "^2.1.0",
+     "lucide-react": "^0.364.0",
+     "react": "^18.2.0",
+     "react-dom": "^18.2.0",
+     "react-dropzone": "^14.2.3"
+   },
+   "devDependencies": {
+     "@types/react": "^18.2.66",
+     "@types/react-dom": "^18.2.22",
+     "@types/react-dropzone": "^14.2.6",
+     "@vitejs/plugin-react": "^5.0.2",
+     "autoprefixer": "^10.4.18",
+     "postcss": "^8.4.35",
+     "tailwindcss": "^3.4.3",
+     "typescript": "^5.4.2",
+     "vite": "^5.1.4"
+   }
+ }
+diff --git a/apps/web-verifier/wasm-verify/Cargo.toml b/apps/web-verifier/wasm-verify/Cargo.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..c4bb53d086a68ba0ff676b24b20a5c71c3a172a5
+--- /dev/null
++++ b/apps/web-verifier/wasm-verify/Cargo.toml
+@@ -0,0 +1,23 @@
++[package]
++name = "intelexta-wasm-verify"
++version = "0.1.0"
++edition = "2021"
++
++[lib]
++crate-type = ["cdylib", "rlib"]
++
++[dependencies]
++anyhow = "1"
++base64 = "0.22"
++chrono = { version = "0.4", features = ["serde"] }
++hex = "0.4"
++serde = { version = "1", features = ["derive"] }
++serde_json = "1"
++serde_jcs = "0.1"
++serde-wasm-bindgen = "0.6"
++sha2 = "0.10"
++ed25519-dalek = { version = "2.1", features = ["serde"] }
++wasm-bindgen = "0.2"
++zip = { version = "0.6", default-features = false, features = ["deflate"] }
++getrandom = { version = "0.2", features = ["js"] }
++
+diff --git a/apps/web-verifier/wasm-verify/README.md b/apps/web-verifier/wasm-verify/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..1283d4d977897c25107f1889964c5316c7a61467
+--- /dev/null
++++ b/apps/web-verifier/wasm-verify/README.md
+@@ -0,0 +1,46 @@
++# Intelexta Web Verifier (WASM)
++
++This crate exposes the Intelexta CAR verification pipeline as a WebAssembly module that can be
++consumed by the `apps/web-verifier` frontend. It reuses the core verification logic from the
++CLI tool while operating entirely in-memory, making it safe to run inside the browser.
++
++## Building
++
++Install [`wasm-pack`](https://rustwasm.github.io/wasm-pack/installer/) and run:
++
++```bash
++wasm-pack build apps/web-verifier/wasm-verify \
++  --target web \
++  --out-dir public/pkg \
++  --release
++```
++
++This command emits the generated JavaScript bindings and `.wasm` binary to
++`apps/web-verifier/public/pkg`. The Vite dev server serves assets from this directory at runtime.
++
++## Exposed API
++
++The crate exports two entry points that return structured verification reports via
++`serde_wasm_bindgen`:
++
++- `verify_car_bytes(bytes: &[u8])` – detects `.car.json` vs `.car.zip`, verifies proofs, and returns
++  a `JsValue` that can be deserialized in TypeScript.
++- `verify_car_json(json: &str)` – optimized path when the frontend already has the JSON contents.
++
++Both functions emit rich error information through `JsError` when validation fails.
++
++## Testing
++
++The core logic is covered by integration-style tests that load fixture data with `include_bytes!`.
++Run them with:
++
++```bash
++cargo test -p intelexta-wasm-verify
++```
++
++## Packaging Notes
++
++- The crate is compiled as both an `rlib` and a `cdylib` so it can be unit-tested natively while
++  still producing WebAssembly binaries via `wasm-pack`.
++- All verification work happens in memory. CAR archives are decompressed with `zip` using an
++  in-memory cursor, so no filesystem access is required inside the browser sandbox.
+diff --git a/apps/web-verifier/wasm-verify/TESTING.md b/apps/web-verifier/wasm-verify/TESTING.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..c431846f872c50382653b0c1f8ac6fe98e619129
+--- /dev/null
++++ b/apps/web-verifier/wasm-verify/TESTING.md
+@@ -0,0 +1,25 @@
++# Testing guide for `intelexta-wasm-verify`
++
++## Rust unit tests
++
++```bash
++cargo test -p intelexta-wasm-verify
++```
++
++These tests execute the verification pipeline against the fixtures stored in
++`tests/fixtures`. They assert that both the standalone `.car.json` and the
++`.car.zip` archive validate successfully and that the generated report matches
++the expectations used by the browser UI.
++
++## WebAssembly build smoke test
++
++```bash
++wasm-pack build apps/web-verifier/wasm-verify \
++  --target web \
++  --out-dir public/pkg \
++  --release
++```
++
++This command produces a production-ready WASM bundle. The output directory can
++be served locally with `npm run dev` from `apps/web-verifier` to exercise the
++end-to-end integration.
+diff --git a/apps/web-verifier/wasm-verify/src/lib.rs b/apps/web-verifier/wasm-verify/src/lib.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..3e53eae196973cdaccfc21d4d5bc904d6f87480c
+--- /dev/null
++++ b/apps/web-verifier/wasm-verify/src/lib.rs
+@@ -0,0 +1,653 @@
++use std::io::{Cursor, Read};
++
++use anyhow::{anyhow, Context, Result};
++use base64::{engine::general_purpose::STANDARD, Engine as _};
++use ed25519_dalek::{Signature, Verifier, VerifyingKey};
++use serde::Serialize;
++use serde_json::Value;
++use sha2::{Digest, Sha256};
++use wasm_bindgen::prelude::*;
++
++const ZIP_MAGIC: &[u8; 4] = b"PK\x03\x04";
++
++mod model;
++use model::{Car, ProcessCheckpointProof};
++
++#[wasm_bindgen]
++pub fn verify_car_bytes(bytes: &[u8]) -> Result<JsValue, JsError> {
++    let decoded = decode_car(bytes).map_err(to_js_error)?;
++    let report = verify_car(decoded).map_err(to_js_error)?;
++    serde_wasm_bindgen::to_value(&report).map_err(|err| JsError::new(&err.to_string()))
++}
++
++#[wasm_bindgen]
++pub fn verify_car_json(json: &str) -> Result<JsValue, JsError> {
++    let decoded = decode_car(json.as_bytes()).map_err(to_js_error)?;
++    let report = verify_car(decoded).map_err(to_js_error)?;
++    serde_wasm_bindgen::to_value(&report).map_err(|err| JsError::new(&err.to_string()))
++}
++
++fn to_js_error(err: anyhow::Error) -> JsError {
++    JsError::new(&err.to_string())
++}
++
++fn decode_car(bytes: &[u8]) -> Result<DecodedCar> {
++    if bytes.len() >= ZIP_MAGIC.len() && &bytes[..ZIP_MAGIC.len()] == ZIP_MAGIC {
++        load_car_from_zip(bytes)
++    } else {
++        load_car_from_json(bytes)
++    }
++}
++
++fn load_car_from_json(bytes: &[u8]) -> Result<DecodedCar> {
++    let car: Car = serde_json::from_slice(bytes).context("Failed to parse CAR JSON")?;
++    Ok(DecodedCar {
++        car,
++        attachments: Vec::new(),
++    })
++}
++
++fn load_car_from_zip(bytes: &[u8]) -> Result<DecodedCar> {
++    let reader = Cursor::new(bytes);
++    let mut archive = zip::ZipArchive::new(reader).context("Failed to read CAR ZIP archive")?;
++
++    let mut car_json = None;
++    let mut attachments = Vec::new();
++
++    for i in 0..archive.len() {
++        let mut file = archive.by_index(i)?;
++        let name = file.name().to_string();
++
++        let mut buffer = Vec::new();
++        file.read_to_end(&mut buffer)?;
++
++        if name == "car.json" {
++            car_json = Some(buffer);
++        } else if name.starts_with("attachments/") && !name.ends_with('/') {
++            attachments.push(Attachment { name, data: buffer });
++        }
++    }
++
++    let car_data = car_json.ok_or_else(|| anyhow!("CAR ZIP is missing car.json"))?;
++    let car: Car =
++        serde_json::from_slice(&car_data).context("Failed to parse car.json from ZIP")?;
++
++    Ok(DecodedCar { car, attachments })
++}
++
++fn verify_car(decoded: DecodedCar) -> Result<VerificationReport> {
++    let DecodedCar { car, attachments } = decoded;
++
++    let mut summary = SummaryMetrics {
++        checkpoints_verified: 0,
++        checkpoints_total: 0,
++        provenance_verified: 0,
++        provenance_total: car.provenance.len(),
++        attachments_verified: 0,
++        attachments_total: attachments
++            .iter()
++            .filter(|attachment| {
++                attachment.name.starts_with("attachments/") && !attachment.name.ends_with('/')
++            })
++            .count(),
++        hash_chain_valid: false,
++        signatures_valid: false,
++        content_integrity_valid: false,
++    };
++
++    let mut steps = Vec::new();
++    let mut overall_error = None;
++
++    let process = match &car.proof.process {
++        Some(process) if !process.sequential_checkpoints.is_empty() => process,
++        Some(_) => {
++            let message = "CAR has no checkpoints to verify".to_string();
++            steps.push(WorkflowStep::failure(
++                "hash_chain",
++                "Hash chain integrity",
++                &message,
++            ));
++            steps.extend(skipped_steps(
++                ["signatures", "provenance", "attachments"],
++                [
++                    "Signature validation",
++                    "Provenance verification",
++                    "Attachment integrity",
++                ],
++                &message,
++            ));
++            return Ok(build_report(car, summary, steps, Some(message)));
++        }
++        None => {
++            let message = format!(
++                "CAR has no process proof (match_kind: {}). This CAR was likely exported with an older version of Intelexta. Please re-export the CAR to include cryptographic signatures for verification.",
++                car.proof.match_kind
++            );
++            steps.push(WorkflowStep::failure(
++                "hash_chain",
++                "Hash chain integrity",
++                &message,
++            ));
++            steps.extend(skipped_steps(
++                ["signatures", "provenance", "attachments"],
++                [
++                    "Signature validation",
++                    "Provenance verification",
++                    "Attachment integrity",
++                ],
++                &message,
++            ));
++            return Ok(build_report(car, summary, steps, Some(message)));
++        }
++    };
++
++    summary.checkpoints_total = process.sequential_checkpoints.len();
++
++    match verify_hash_chain(&process.sequential_checkpoints) {
++        Ok(count) => {
++            summary.hash_chain_valid = true;
++            summary.checkpoints_verified = count;
++            steps.push(WorkflowStep::success(
++                "hash_chain",
++                "Hash chain integrity",
++                vec![StepDetail::new(
++                    "Sequential checkpoints",
++                    format!("{count}/{} verified", summary.checkpoints_total),
++                )],
++            ));
++        }
++        Err(err) => {
++            let message = format!("Hash chain verification failed: {err}");
++            steps.push(WorkflowStep::failure(
++                "hash_chain",
++                "Hash chain integrity",
++                &message,
++            ));
++            steps.extend(skipped_steps(
++                ["signatures", "provenance", "attachments"],
++                [
++                    "Signature validation",
++                    "Provenance verification",
++                    "Attachment integrity",
++                ],
++                &message,
++            ));
++            overall_error = Some(message);
++            return Ok(build_report(car, summary, steps, overall_error));
++        }
++    }
++
++    match verify_signatures(&car.signer_public_key, &process.sequential_checkpoints) {
++        Ok(_) => {
++            summary.signatures_valid = true;
++            steps.push(WorkflowStep::success(
++                "signatures",
++                "Signature validation",
++                vec![StepDetail::new(
++                    "Checkpoint signatures",
++                    format!("{} verified", summary.checkpoints_total),
++                )],
++            ));
++        }
++        Err(err) => {
++            let message = format!("Signature verification failed: {err}");
++            steps.push(WorkflowStep::failure(
++                "signatures",
++                "Signature validation",
++                &message,
++            ));
++            steps.extend(skipped_steps(
++                ["provenance", "attachments"],
++                ["Provenance verification", "Attachment integrity"],
++                &message,
++            ));
++            overall_error = Some(message);
++            return Ok(build_report(car, summary, steps, overall_error));
++        }
++    }
++
++    match verify_provenance(&car, &process.sequential_checkpoints) {
++        Ok(verified) => {
++            summary.provenance_verified = verified;
++            steps.push(WorkflowStep::success(
++                "provenance",
++                "Provenance verification",
++                vec![StepDetail::new(
++                    "Provenance claims",
++                    format!("{verified}/{} verified", summary.provenance_total),
++                )],
++            ));
++        }
++        Err(err) => {
++            let message = format!("Content integrity verification failed: {err}");
++            steps.push(WorkflowStep::failure(
++                "provenance",
++                "Provenance verification",
++                &message,
++            ));
++            steps.push(WorkflowStep::skipped(
++                "attachments",
++                "Attachment integrity",
++                &message,
++            ));
++            overall_error = Some(message);
++            return Ok(build_report(car, summary, steps, overall_error));
++        }
++    }
++
++    match verify_all_attachments(&attachments) {
++        Ok(verified) => {
++            summary.attachments_verified = verified;
++            steps.push(WorkflowStep::success(
++                "attachments",
++                "Attachment integrity",
++                vec![StepDetail::new(
++                    "Attachment files",
++                    format!("{verified}/{} verified", summary.attachments_total),
++                )],
++            ));
++        }
++        Err(err) => {
++            let message = format!("Attachment verification failed: {err}");
++            steps.push(WorkflowStep::failure(
++                "attachments",
++                "Attachment integrity",
++                &message,
++            ));
++            overall_error = Some(message);
++            return Ok(build_report(car, summary, steps, overall_error));
++        }
++    }
++
++    summary.content_integrity_valid = true;
++
++    Ok(build_report(car, summary, steps, overall_error))
++}
++
++fn build_report(
++    car: Car,
++    mut summary: SummaryMetrics,
++    steps: Vec<WorkflowStep>,
++    error: Option<String>,
++) -> VerificationReport {
++    let status = if summary.hash_chain_valid
++        && summary.signatures_valid
++        && summary.content_integrity_valid
++    {
++        VerificationStatus::Verified
++    } else {
++        VerificationStatus::Failed
++    };
++
++    if !summary.hash_chain_valid {
++        summary.content_integrity_valid = false;
++    }
++
++    let signer = if car.signer_public_key.is_empty() {
++        None
++    } else {
++        Some(SignerSummary {
++            public_key: car.signer_public_key.clone(),
++        })
++    };
++
++    VerificationReport {
++        status,
++        car_id: car.id.clone(),
++        run_id: car.run_id.clone(),
++        created_at: car.created_at.to_rfc3339(),
++        signer,
++        model: ModelSummary {
++            name: car.run.model.clone(),
++            version: car.run.version.clone(),
++            kind: car.run.kind.clone(),
++        },
++        steps,
++        summary,
++        error,
++    }
++}
++
++fn verify_hash_chain(checkpoints: &[ProcessCheckpointProof]) -> Result<usize> {
++    let mut verified = 0;
++
++    for (index, checkpoint) in checkpoints.iter().enumerate() {
++        let expected = compute_checkpoint_hash(checkpoint)?;
++        if expected != checkpoint.curr_chain {
++            return Err(anyhow!(
++                "Hash chain broken at checkpoint #{index} (id: {})\nExpected: {expected}\nFound: {}",
++                checkpoint.id,
++                checkpoint.curr_chain
++            ));
++        }
++        verified += 1;
++    }
++
++    Ok(verified)
++}
++
++fn compute_checkpoint_hash(checkpoint: &ProcessCheckpointProof) -> Result<String> {
++    #[derive(Serialize)]
++    struct CheckpointBody<'a> {
++        run_id: &'a str,
++        kind: &'a str,
++        timestamp: &'a str,
++        inputs_sha256: &'a Option<String>,
++        outputs_sha256: &'a Option<String>,
++        incident: Option<Value>,
++        usage_tokens: u64,
++        prompt_tokens: u64,
++        completion_tokens: u64,
++    }
++
++    let body = CheckpointBody {
++        run_id: &checkpoint.run_id,
++        kind: &checkpoint.kind,
++        timestamp: &checkpoint.timestamp,
++        inputs_sha256: &checkpoint.inputs_sha256,
++        outputs_sha256: &checkpoint.outputs_sha256,
++        incident: None,
++        usage_tokens: checkpoint.usage_tokens,
++        prompt_tokens: checkpoint.prompt_tokens,
++        completion_tokens: checkpoint.completion_tokens,
++    };
++
++    let body_json = serde_json::to_value(&body)?;
++    let canonical = canonical_json(&body_json)?;
++
++    let mut hasher = Sha256::new();
++    hasher.update(checkpoint.prev_chain.as_bytes());
++    hasher.update(&canonical);
++    Ok(hex::encode(hasher.finalize()))
++}
++
++fn canonical_json(value: &Value) -> Result<Vec<u8>> {
++    serde_jcs::to_vec(value).map_err(|err| anyhow!("Failed to canonicalize JSON: {err}"))
++}
++
++fn verify_signatures(public_key_b64: &str, checkpoints: &[ProcessCheckpointProof]) -> Result<()> {
++    let public_key_bytes = STANDARD
++        .decode(public_key_b64)
++        .context("Invalid signer public key base64")?;
++
++    let verifying_key = VerifyingKey::from_bytes(
++        &public_key_bytes
++            .try_into()
++            .map_err(|_| anyhow!("Public key must be 32 bytes"))?,
++    )
++    .context("Invalid Ed25519 public key")?;
++
++    for (index, checkpoint) in checkpoints.iter().enumerate() {
++        let signature_bytes = STANDARD
++            .decode(&checkpoint.signature)
++            .with_context(|| format!("Invalid signature base64 at checkpoint #{index}"))?;
++
++        let signature = Signature::from_bytes(
++            &signature_bytes
++                .try_into()
++                .map_err(|_| anyhow!("Signature must be 64 bytes at checkpoint #{index}"))?,
++        );
++
++        verifying_key
++            .verify(checkpoint.curr_chain.as_bytes(), &signature)
++            .with_context(|| format!("Signature verification failed at checkpoint #{index}"))?;
++    }
++
++    Ok(())
++}
++
++fn verify_provenance(car: &Car, checkpoints: &[ProcessCheckpointProof]) -> Result<usize> {
++    let mut verified = 0;
++
++    for (index, claim) in car.provenance.iter().enumerate() {
++        let expected_hash = claim.sha256.strip_prefix("sha256:").ok_or_else(|| {
++            anyhow!(
++                "Invalid provenance claim #{}: hash must start with 'sha256:'",
++                index
++            )
++        })?;
++
++        match claim.claim_type.as_str() {
++            "config" => {
++                let spec_json = serde_json::to_value(&car.run.steps)?;
++                let canonical = canonical_json(&spec_json)?;
++                let computed = hex::encode(Sha256::digest(&canonical));
++
++                if computed != expected_hash {
++                    return Err(anyhow!(
++                        "Config hash mismatch at provenance claim #{}\nExpected: {}\nComputed: {}",
++                        index,
++                        expected_hash,
++                        computed
++                    ));
++                }
++                verified += 1;
++            }
++            "input" | "output" => {
++                let exists = checkpoints.iter().any(|checkpoint| {
++                    checkpoint
++                        .inputs_sha256
++                        .as_deref()
++                        .map(|hash| hash == expected_hash)
++                        .unwrap_or(false)
++                        || checkpoint
++                            .outputs_sha256
++                            .as_deref()
++                            .map(|hash| hash == expected_hash)
++                            .unwrap_or(false)
++                });
++
++                if !exists {
++                    return Err(anyhow!(
++                        "{} hash not found in checkpoints at provenance claim #{}",
++                        claim.claim_type,
++                        index
++                    ));
++                }
++                verified += 1;
++            }
++            _ => {}
++        }
++    }
++
++    Ok(verified)
++}
++
++fn verify_all_attachments(attachments: &[Attachment]) -> Result<usize> {
++    let mut verified = 0;
++
++    for attachment in attachments
++        .iter()
++        .filter(|att| att.name.starts_with("attachments/") && !att.name.ends_with('/'))
++    {
++        let expected = attachment
++            .name
++            .strip_prefix("attachments/")
++            .ok_or_else(|| anyhow!("Invalid attachment path: {}", attachment.name))?;
++
++        let (hash, _extension) = expected
++            .split_once('.')
++            .ok_or_else(|| anyhow!("Invalid attachment filename format: {}", attachment.name))?;
++
++        let computed = hex::encode(Sha256::digest(&attachment.data));
++
++        if computed != hash {
++            return Err(anyhow!(
++                "Attachment content mismatch\nFile: {}\nExpected hash: {}\nComputed hash: {}",
++                attachment.name,
++                hash,
++                computed
++            ));
++        }
++
++        verified += 1;
++    }
++
++    Ok(verified)
++}
++
++fn skipped_steps<const N: usize>(
++    keys: [&'static str; N],
++    labels: [&'static str; N],
++    reason: &str,
++) -> Vec<WorkflowStep> {
++    keys.into_iter()
++        .zip(labels)
++        .map(|(key, label)| WorkflowStep::skipped(key, label, reason))
++        .collect()
++}
++
++struct DecodedCar {
++    car: Car,
++    attachments: Vec<Attachment>,
++}
++
++struct Attachment {
++    name: String,
++    data: Vec<u8>,
++}
++
++#[derive(Serialize)]
++#[serde(rename_all = "snake_case")]
++enum VerificationStatus {
++    Verified,
++    Failed,
++}
++
++#[derive(Serialize)]
++pub struct VerificationReport {
++    pub status: VerificationStatus,
++    pub car_id: String,
++    pub run_id: String,
++    pub created_at: String,
++    pub signer: Option<SignerSummary>,
++    pub model: ModelSummary,
++    pub steps: Vec<WorkflowStep>,
++    pub summary: SummaryMetrics,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub error: Option<String>,
++}
++
++#[derive(Serialize)]
++pub struct SignerSummary {
++    pub public_key: String,
++}
++
++#[derive(Serialize)]
++pub struct ModelSummary {
++    pub name: String,
++    pub version: String,
++    pub kind: String,
++}
++
++#[derive(Serialize, Default)]
++pub struct SummaryMetrics {
++    pub checkpoints_verified: usize,
++    pub checkpoints_total: usize,
++    pub provenance_verified: usize,
++    pub provenance_total: usize,
++    pub attachments_verified: usize,
++    pub attachments_total: usize,
++    pub hash_chain_valid: bool,
++    pub signatures_valid: bool,
++    pub content_integrity_valid: bool,
++}
++
++#[derive(Serialize)]
++pub struct WorkflowStep {
++    pub key: &'static str,
++    pub label: &'static str,
++    pub status: StepStatus,
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub details: Vec<StepDetail>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub error: Option<String>,
++}
++
++impl WorkflowStep {
++    fn success(key: &'static str, label: &'static str, details: Vec<StepDetail>) -> Self {
++        Self {
++            key,
++            label,
++            status: StepStatus::Passed,
++            details,
++            error: None,
++        }
++    }
++
++    fn failure(key: &'static str, label: &'static str, message: &str) -> Self {
++        Self {
++            key,
++            label,
++            status: StepStatus::Failed,
++            details: Vec::new(),
++            error: Some(message.to_string()),
++        }
++    }
++
++    fn skipped(key: &'static str, label: &'static str, reason: &str) -> Self {
++        Self {
++            key,
++            label,
++            status: StepStatus::Skipped,
++            details: Vec::new(),
++            error: Some(reason.to_string()),
++        }
++    }
++}
++
++#[derive(Serialize)]
++pub struct StepDetail {
++    pub label: String,
++    pub value: String,
++}
++
++impl StepDetail {
++    fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
++        Self {
++            label: label.into(),
++            value: value.into(),
++        }
++    }
++}
++
++#[derive(Serialize)]
++#[serde(rename_all = "snake_case")]
++pub enum StepStatus {
++    Passed,
++    Failed,
++    Skipped,
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    const SAMPLE_JSON: &[u8] = include_bytes!("../tests/fixtures/sample.car.json");
++    const SAMPLE_ZIP: &[u8] = include_bytes!("../tests/fixtures/sample.car.zip");
++
++    #[test]
++    fn verify_sample_json() {
++        let decoded = decode_car(SAMPLE_JSON).expect("decode json");
++        let report = verify_car(decoded).expect("verify json");
++        assert!(matches!(report.status, VerificationStatus::Verified));
++        assert!(report.summary.hash_chain_valid);
++        assert!(report.summary.signatures_valid);
++        assert!(report.summary.content_integrity_valid);
++        assert_eq!(
++            report.summary.checkpoints_verified,
++            report.summary.checkpoints_total
++        );
++    }
++
++    #[test]
++    fn verify_sample_zip() {
++        let decoded = decode_car(SAMPLE_ZIP).expect("decode zip");
++        let report = verify_car(decoded).expect("verify zip");
++        assert!(matches!(report.status, VerificationStatus::Verified));
++        assert_eq!(
++            report.summary.attachments_verified,
++            report.summary.attachments_total
++        );
++    }
++}
+diff --git a/apps/web-verifier/wasm-verify/src/model.rs b/apps/web-verifier/wasm-verify/src/model.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..44c80c60b399beda5d2c24d6880a2694a5e50642
+--- /dev/null
++++ b/apps/web-verifier/wasm-verify/src/model.rs
+@@ -0,0 +1,165 @@
++use chrono::{DateTime, Utc};
++use serde::{Deserialize, Serialize};
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct Car {
++    pub id: String,
++    pub run_id: String,
++    pub created_at: DateTime<Utc>,
++    pub run: RunInfo,
++    pub proof: Proof,
++    pub policy_ref: PolicyRef,
++    pub budgets: Budgets,
++    pub provenance: Vec<ProvenanceClaim>,
++    pub checkpoints: Vec<String>,
++    pub sgrade: SGrade,
++    pub signer_public_key: String,
++    pub signatures: Vec<String>,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct RunInfo {
++    pub kind: String,
++    pub name: String,
++    pub model: String,
++    pub version: String,
++    pub seed: u64,
++    pub steps: Vec<RunStep>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub sampler: Option<Sampler>,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct Sampler {
++    pub temp: f32,
++    pub top_p: f32,
++    pub rng: String,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct RunStep {
++    pub id: String,
++    pub run_id: String,
++    pub order_index: i64,
++    pub checkpoint_type: String,
++    #[serde(default = "default_step_type")]
++    pub step_type: String,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub model: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub prompt: Option<String>,
++    #[serde(default)]
++    pub token_budget: u64,
++    #[serde(default)]
++    pub proof_mode: RunProofMode,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub epsilon: Option<f64>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub config_json: Option<String>,
++}
++
++fn default_step_type() -> String {
++    "llm".to_string()
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
++#[serde(rename_all = "lowercase")]
++pub enum RunProofMode {
++    Exact,
++    Concordant,
++}
++
++impl Default for RunProofMode {
++    fn default() -> Self {
++        RunProofMode::Exact
++    }
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct Proof {
++    pub match_kind: String,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub epsilon: Option<f64>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub distance_metric: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub original_semantic_digest: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub replay_semantic_digest: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub process: Option<ProcessProof>,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct ProcessProof {
++    pub sequential_checkpoints: Vec<ProcessCheckpointProof>,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct ProcessCheckpointProof {
++    pub id: String,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub parent_checkpoint_id: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub turn_index: Option<u32>,
++    pub prev_chain: String,
++    pub curr_chain: String,
++    pub signature: String,
++    pub run_id: String,
++    pub kind: String,
++    pub timestamp: String,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub inputs_sha256: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub outputs_sha256: Option<String>,
++    pub usage_tokens: u64,
++    pub prompt_tokens: u64,
++    pub completion_tokens: u64,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct PolicyRef {
++    pub hash: String,
++    pub egress: bool,
++    pub estimator: String,
++    #[serde(default = "default_catalog_hash")]
++    pub model_catalog_hash: String,
++    #[serde(default = "default_catalog_version")]
++    pub model_catalog_version: String,
++}
++
++fn default_catalog_hash() -> String {
++    "sha256:unknown".to_string()
++}
++
++fn default_catalog_version() -> String {
++    "unknown".to_string()
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct Budgets {
++    pub usd: f64,
++    pub tokens: u64,
++    pub nature_cost: f64,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct ProvenanceClaim {
++    pub claim_type: String,
++    pub sha256: String,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct SGrade {
++    pub score: u8,
++    pub components: SGradeComponents,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone)]
++pub struct SGradeComponents {
++    pub provenance: f32,
++    pub energy: f32,
++    pub replay: f32,
++    pub consent: f32,
++    pub incidents: f32,
++}
+diff --git a/apps/web-verifier/wasm-verify/tests/fixtures/sample.car.json b/apps/web-verifier/wasm-verify/tests/fixtures/sample.car.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..38e49c5d51f99984c8f2aa076617c5ee12255461
+--- /dev/null
++++ b/apps/web-verifier/wasm-verify/tests/fixtures/sample.car.json
+@@ -0,0 +1,94 @@
++{
++  "id": "car:c4af460d98fbb45cd8d2be1daa49a17f447a09327fcefa2317734af2dbb968ae",
++  "run_id": "run-demo",
++  "created_at": "2024-01-02T03:04:05Z",
++  "run": {
++    "kind": "exact",
++    "name": "Demo run",
++    "model": "demo-model",
++    "version": "1.0",
++    "seed": 42,
++    "steps": [
++      {
++        "id": "step-1",
++        "run_id": "run-demo",
++        "order_index": 0,
++        "checkpoint_type": "Step",
++        "step_type": "llm",
++        "model": "demo-model",
++        "prompt": "What is the answer?",
++        "token_budget": 1000,
++        "proof_mode": "exact",
++        "epsilon": null,
++        "config_json": null
++      }
++    ],
++    "sampler": null
++  },
++  "proof": {
++    "match_kind": "process",
++    "epsilon": null,
++    "distance_metric": null,
++    "original_semantic_digest": null,
++    "replay_semantic_digest": null,
++    "process": {
++      "sequential_checkpoints": [
++        {
++          "id": "ckpt-1",
++          "parent_checkpoint_id": null,
++          "turn_index": null,
++          "prev_chain": "0000000000000000000000000000000000000000000000000000000000000000",
++          "curr_chain": "2c34ca190b352b0dff746ccfc9b67103788d159055a2632b262457e3364e8169",
++          "signature": "4JtR2I1PlktfQ6kWHyzcDcSqj7b7s475HWBZR0lj5PRs1XK+hLzGAEl9ySWI9y172fWA7twxgpF42Xc4Ih4TBg==",
++          "run_id": "run-demo",
++          "kind": "Step",
++          "timestamp": "2024-01-02T03:04:05Z",
++          "inputs_sha256": "7fa36b95d5c98859ed72b4787f3c28b29eaa103970786755c9711cbb19be631c",
++          "outputs_sha256": null,
++          "usage_tokens": 10,
++          "prompt_tokens": 7,
++          "completion_tokens": 3
++        }
++      ]
++    }
++  },
++  "policy_ref": {
++    "hash": "sha256:policy",
++    "egress": false,
++    "estimator": "tokens * 0",
++    "model_catalog_hash": "sha256:unknown",
++    "model_catalog_version": "unknown"
++  },
++  "budgets": {
++    "usd": 1.0,
++    "tokens": 100,
++    "nature_cost": 0.1
++  },
++  "provenance": [
++    {
++      "claim_type": "config",
++      "sha256": "sha256:ae4e6ac690889c999e039c5b17163ed70a1be4ffc5c1633f60296f21b637ef12"
++    },
++    {
++      "claim_type": "input",
++      "sha256": "sha256:7fa36b95d5c98859ed72b4787f3c28b29eaa103970786755c9711cbb19be631c"
++    }
++  ],
++  "checkpoints": [
++    "ckpt-1"
++  ],
++  "sgrade": {
++    "score": 95,
++    "components": {
++      "provenance": 1.0,
++      "energy": 0.9,
++      "replay": 0.95,
++      "consent": 0.8,
++      "incidents": 1.0
++    }
++  },
++  "signer_public_key": "Dy6Myp2L2d7s3OOxVvVJaT+i5RjgrrBSuRf9WlVuGdg=",
++  "signatures": [
++    "ed25519:4JtR2I1PlktfQ6kWHyzcDcSqj7b7s475HWBZR0lj5PRs1XK+hLzGAEl9ySWI9y172fWA7twxgpF42Xc4Ih4TBg=="
++  ]
++}
+diff --git a/apps/web-verifier/wasm-verify/tests/fixtures/sample.car.zip b/apps/web-verifier/wasm-verify/tests/fixtures/sample.car.zip
+new file mode 100644
+index 0000000000000000000000000000000000000000..75f04c2403065fac8d42a6fc5123ca9da729717d
+GIT binary patch
+literal 1419
+zcmWIWW@Zs#U|`^2h?S0so}QxnM4E+xL7fXE!oZN6SfrO#oS(Nf>~`L53xV46;SzOs
+z%ve2RHKa7ecyHxie!J+dN=LUIQ{y7HO-YeKo?4yJPwr1&qBrf5iN5RKq{6fci#e9X
+zOWwP8AKm0Jef80xf}KKk=l=*S)j2ik2)~QeQWeHIMemIJGN1jPqWny77Uv0zj|NNU
+z-E_L7l9+fT@#mdKC%1K3`+P2$b7<YWH%?5~Cmf53mUld2@AgAtBKMQE6ZShDoL;z}
+z^GBZC*`(+YKCX8=E}YBn5xw7Ny3gzexAeW+<)vIpOK&*$?+$&xi*aSwEhhbs+$IsC
+z4X)o$Zn$<qBl*X9UGZ9>b64-4V3T=Vw|n#dC)@UJpQd@@#vR6YJ{+?uj<6lswzAvn
+zc-8$KujfdAc$rpx<Au)YyH~z{UTsyb{5tmWt3CG$_G(;l%1=0`UCRCGeCC36+XIez
+z&VH6~*w871FF1XpYyA!8=VnK>yuz=n(mnn1=_@VmPd}o1&)qA3|8IR;(dXFUCYzQ!
+z)=WEs`9*FN>Y9CYV0kRE;L3%A$Aco4wO-mIB=Fwhw9}cnTXjAydX%~*;kb5ehlOrY
+zK$V>8Ld~E5Ud~XQdi8{`^NRJlGkDqlU3j3mc-b7QGxxS#G!Ba_(Br+pvNZYTo(tO=
+z*RFAE`uiYP<&FeToW--n@qf-5i>#f(o}*+FUvMVi5vz)0=CnY25hY<APE9wt-bEtp
+zJgkiB3*Ci;gzOhQs9eY|$ahmFTD0=$*{d?||9t<|Gv|^2)3EgaZMVPf{%ig*YEJ#$
+zWt^dQy!Y1n@0+vmlhu!sWgnjJpPy@2Q~mpu@5yh^Uk7hHJ|*RKc*y;GPtV5N{nYt$
+zxwpP>(*7Dt`%fnw=V@GQ*4(PAQPw8icG~~dt%c7+FK3Ca=2dsh*nXj>I`L4GiGWTQ
+z6Pu=Lr@!*7$|e`i!~;85DlG1BQ{?p#IU1qDna0^7CszDp*VW=b@*Wqp<~hGni{Cl3
+z-a%4Zmfd`=`QB~Ht9z%&DeW<Qu&;iXl~mYYm+PsD-!`_KjL6?{%fhp?a^0>8g=>m$
+z`i33zW^E3f=~WyXeegw#x9-1)1v7sgZ_19lR{4iv-`Z`Vwb8b6)|Hk#g~_kxn#i@?
+z2|0i1z#f;X6`r!}!R~h>uJ{>V;I^5%O?t%|v))+-S?wB?8>PSQn|xv8*3-<fzoZL4
+zC_Yh2(de3y(9^iEgG0!t@P#CoVxRDb%|0xLB=+dIw6sbd^n4L`!XUEDw(4JqP~R&5
+zCm&9qk*zGcTB~HUXlAojpQG0FJ9{VmYSRd`o}1tpUw8WAt|qVZODe;DZLFOZCVHag
+zz0^^+<mLb88cM8Prg`dtRk2A_x0gs}{T#-+1GU<z&!iV*3Oj$O;I97ubQAyoo90iL
+zJy(9RtJ|}C&(50j`tw8&-YnI7da|;5+Q!n#oBMn}`z_<^vRKKpM1{j3`mb5z7E}9O
+z_P^u<Pzn%pp?!;mfCYyD5C;HpVo6D2az<`yUP-aOd0L{eS(2q`ifOW?g@vhQYKpm0
+zl8L#6d75#ukwub`Wolxgp@Ffbxq-QbnYk%YmARo|a#E6^Wm2k{v0<`aNkz$NkFzIF
+zhI{B}ditC@;d@q_ks-jFkx7IZcM%431Q;|hf+$#lhOP_U-4Hzt3=NEqz~YeFz6kJU
+SWdqs31cY0F^g*B<3=9Bbja-BP
+
+literal 0
+HcmV?d00001
+
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index 70b7e0947eff9ad1353a3d851d2fe8b7958500fc..0dde5eb3678053646bf9955b1184559d83bf2f9f 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -1,40 +1,35 @@
+ [package]
+ name = "intelexta"
+ version = "0.1.0"
+ edition = "2021"
+ default-run = "intelexta"
+ 
+ [features]
+ default = ["interactive"]
+ interactive = []
+ 
+-[workspace]
+-members = [
+-    "crates/intelexta-verify",
+-]
+-
+ # In src-tauri/Cargo.toml
+ 
+ [dependencies]
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+ thiserror = "1"
+ anyhow = "1"
+ tauri = { version = "2.0.0-rc.15", features = [] }
+ tauri-plugin-dialog = "2.0.0-rc.5"
+ chrono = { version = "0.4", features = ["serde"] }
+ rusqlite = { version = "0.31", features = ["bundled", "chrono", "serde_json"] }
+ rusqlite_migration = "1"
+ uuid = { version = "1.8", features = ["v4", "serde"] }
+ r2d2 = "0.8"
+ r2d2_sqlite = "0.24"
+ sha2 = "0.10"
+ ed25519-dalek = { version = "2.1", features = ["serde", "rand_core"] }
+ base64 = "0.22"
+ clap = { version = "4.5", features = ["derive"] }
+ rand = "0.8"
+ tiktoken-rs = "0.7.0"
+ pdf-extract = "0.9.0"
+ keyring = "3.0"
+ dirs = "5.0"
+ serde_jcs = "0.1.0"
+
