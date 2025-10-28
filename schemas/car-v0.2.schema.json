@@ -144,8 +144,6 @@
         "run_id",
         "order_index",
         "checkpoint_type",
-        "model",
-        "prompt",
         "token_budget",
         "proof_mode"
       ],
@@ -169,14 +167,19 @@
           "description": "Type of checkpoint produced by the step.",
           "minLength": 1
         },
-        "model": {
+        "step_type": {
           "type": "string",
-          "description": "Model requested by the step.",
+          "description": "Type of step execution (e.g., 'llm', 'ingest', 'summarize', 'prompt').",
+          "default": "llm"
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Model requested by the step. Optional for document ingestion steps.",
           "minLength": 1
         },
         "prompt": {
-          "type": "string",
-          "description": "Prompt material supplied to the model."
+          "type": ["string", "null"],
+          "description": "Prompt material supplied to the model. Optional for document ingestion steps."
         },
         "token_budget": {
           "type": "integer",
@@ -195,6 +198,10 @@
           "type": "number",
           "description": "Tolerance for concordant proof steps.",
           "minimum": 0
+        },
+        "config_json": {
+          "type": ["string", "null"],
+          "description": "Optional JSON configuration for specialized step types (e.g., document ingestion)."
         }
       }
     },

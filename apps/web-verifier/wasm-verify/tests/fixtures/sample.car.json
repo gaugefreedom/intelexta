@@ -11,16 +11,16 @@
     "steps": [
       {
         "id": "step-1",
-        "run_id": "run-demo",
-        "order_index": 0,
-        "checkpoint_type": "Step",
-        "step_type": "llm",
+        "runId": "run-demo",
+        "orderIndex": 0,
+        "checkpointType": "Step",
+        "stepType": "llm",
         "model": "demo-model",
         "prompt": "What is the answer?",
-        "token_budget": 1000,
-        "proof_mode": "exact",
+        "tokenBudget": 1000,
+        "proofMode": "exact",
         "epsilon": null,
-        "config_json": null
+        "configJson": null
       }
     ],
     "sampler": null

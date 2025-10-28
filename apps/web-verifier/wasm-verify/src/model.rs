@@ -18,6 +18,7 @@ pub struct Car {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct RunInfo {
     pub kind: String,
     pub name: String,
@@ -37,6 +38,7 @@ pub struct Sampler {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct RunStep {
     pub id: String,
     pub run_id: String,

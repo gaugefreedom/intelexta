@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import WorkflowViewer from '../WorkflowViewer';
 import type { VerificationReport } from '../../types/verifier';
+import { describe, it, expect } from 'vitest';
+
 
 const baseReport: VerificationReport = {
   status: 'verified',
@@ -64,6 +66,9 @@ describe('WorkflowViewer', () => {
     const emptyReport: VerificationReport = { ...baseReport, workflow: { steps: [] } };
     render(<WorkflowViewer report={emptyReport} />);
 
-    expect(screen.getByText('No workflow steps were returned by the verifier.')).toBeInTheDocument();
+    // Partial/regex match works even if the message has extra guidance text
+    expect(screen.getByText(/No workflow steps were returned by the verifier/i)).toBeInTheDocument();
+    // (optional) also assert the guidance sentence exists
+    expect(screen.getByText(/Upload a CAR archive/i)).toBeInTheDocument();
   });
 });
