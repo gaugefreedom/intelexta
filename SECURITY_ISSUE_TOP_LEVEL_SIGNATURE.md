@@ -1,8 +1,9 @@
 # Security Issue: Missing Top-Level Signature Verification
 
 **Severity**: HIGH
-**Status**: Identified, Fix In Progress
+**Status**: ✅ RESOLVED (2025-10-29)
 **Affects**: web-verifier (WASM), intelexta-verify (CLI)
+**Fixed In**: Commit [to be tagged]
 
 ## Issue Description
 
@@ -267,6 +268,55 @@ cd test && zip -r ../tampered.car.zip * && cd ..
 - **Day 4**: Update CLI verifier
 - **Day 5**: Testing and validation
 - **Week 2**: Deploy with backward compatibility
+
+## Resolution Summary
+
+### What Was Fixed
+
+1. **Signature Generation** (`apps/verifiable-summary/server/src/provenance.ts`)
+   - Now generates dual signatures: `ed25519-body:` and `ed25519-checkpoint:`
+   - Body signature covers entire CAR document (prevents field tampering)
+   - Checkpoint signature covers chain hash (maintains chain integrity)
+
+2. **CLI Verifier** (`src-tauri/crates/intelexta-verify/src/main.rs`)
+   - Added `verify_top_level_signature()` function
+   - Preserves raw JSON to avoid DateTime serialization issues
+   - Verifies body signature before checkpoint signatures
+
+3. **WASM Verifier** (`apps/web-verifier/wasm-verify/src/lib.rs`)
+   - Added `verify_top_level_signature()` function
+   - Preserves raw JSON from ZIP/file upload
+   - Integrated into verification workflow
+
+4. **Tests**
+   - Updated `provenance.test.ts` to expect dual signatures
+   - Verified tamper detection works (modifying `created_at` fails verification)
+
+### Testing Verification
+
+```bash
+# Generate signed CAR (with dual signatures)
+# Use verifiable-summary GPT or generate programmatically
+
+# Verify original passes
+./target/release/intelexta-verify verifiable.car.zip
+# ✅ VERIFIED
+
+# Modify created_at
+unzip verifiable.car.zip -d test/
+node -e "const fs=require('fs'); const c=JSON.parse(fs.readFileSync('test/car.json')); c.created_at='1970-01-01T00:00:00Z'; fs.writeFileSync('test/car.json', JSON.stringify(c,null,2));"
+
+# Verify tampered fails
+./target/release/intelexta-verify test/car.json
+# ❌ FAILED: Top-level body signature verification failed
+```
+
+### Backward Compatibility
+
+The fix maintains backward compatibility:
+- Legacy CARs without `ed25519-body:` prefix skip top-level verification
+- New CARs with dual signatures get full verification
+- No breaking changes to existing workflows
 
 ## Contact
 

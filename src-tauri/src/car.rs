@@ -463,8 +463,23 @@ pub fn build_car(conn: &Connection, run_id: &str, run_execution_id: Option<&str>
 
     let signing_key = provenance::load_secret_key(&project_id)
         .with_context(|| format!("failed to load signing key for project {project_id}"))?;
-    let signature = provenance::sign_bytes(&signing_key, car.id.as_bytes());
-    car.signatures.push(format!("ed25519:{signature}"));
+
+    // Generate checkpoint signature (signs the CAR ID)
+    let checkpoint_signature = provenance::sign_bytes(&signing_key, car.id.as_bytes());
+
+    // Generate body signature: serialize CAR to JSON (as it will be written to file),
+    // parse back as Value, remove signatures, canonicalize, and sign
+    let car_json_string = serde_json::to_string(&car)?;
+    let mut car_json: serde_json::Value = serde_json::from_str(&car_json_string)?;
+    if let Some(obj) = car_json.as_object_mut() {
+        obj.remove("signatures");
+    }
+    let body_canonical = provenance::canonical_json(&car_json);
+    let body_signature = provenance::sign_bytes(&signing_key, &body_canonical);
+
+    // Store dual signatures
+    car.signatures.push(format!("ed25519-body:{body_signature}"));
+    car.signatures.push(format!("ed25519-checkpoint:{checkpoint_signature}"));
 
     Ok(car)
 }
