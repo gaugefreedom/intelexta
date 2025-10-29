@@ -203,9 +203,14 @@ const Verifier = () => {
       case 'loading':
         return 'Verifying proof with WASM verifier...';
       case 'success':
-        return droppedFileName
-          ? `Successfully verified \`${droppedFileName}\``
-          : 'Verification completed.';
+        if (droppedFileName) {
+          const isZip = droppedFileName.endsWith('.car.zip');
+          const hint = isZip
+            ? ' — You can extract the archive to examine individual artifacts (summary.md, manifest.json, receipts/)'
+            : '';
+          return `Successfully verified \`${droppedFileName}\`${hint}`;
+        }
+        return 'Verification completed.';
       case 'error':
         return error ?? 'Verification failed. Check the details below.';
       default:

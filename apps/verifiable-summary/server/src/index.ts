@@ -108,9 +108,9 @@ const widgetHtml = `
 
         const badgeClass = car.valid ? 'verified' : 'unsigned';
         const badgeLabel = car.valid ? '✓ Verified' : '⚠ Unsigned';
-        const signerDisplay = car.valid ? `${car.signer.slice(0, 24)}...` : 'unsigned';
+        const signerDisplay = car.valid ? \`\${car.signer.slice(0, 24)}...\` : 'unsigned';
         const signerTitle = car.valid ? 'Click to copy signer' : 'Unsigned bundle - no signer';
-        const signerOnclick = car.valid ? `onclick="navigator.clipboard.writeText('${car.signer}')"` : '';
+        const signerOnclick = car.valid ? \`onclick="navigator.clipboard.writeText('\${car.signer}')"\` : '';
 
         document.getElementById('root').innerHTML = \`
           <div class="summary-card">
@@ -269,10 +269,9 @@ server.registerTool(
       zipStore.set(id, { buffer: zipBuffer, createdAt: Date.now() });
       const downloadUrl = `${PUBLIC_BASE_URL}/download/${id}`;
 
-      // 6. Parse manifest for metadata
-      const manifest = JSON.parse(artifacts['manifest.json']);
-      const receipt = JSON.parse(artifacts['receipts/ed25519.json']);
-      const signer = isSigned && receipt.publicKey ? receipt.publicKey : 'unsigned';
+      // 6. Parse car.json for metadata
+      const carData = JSON.parse(artifacts['car.json']);
+      const signer = isSigned && carData.signer_public_key ? carData.signer_public_key : 'unsigned';
       const badgeStatus = isSigned ? 'Signed (ed25519)' : 'Unsigned - no cryptographic proof';
 
       const runtime = Date.now() - startTime;
@@ -281,15 +280,16 @@ server.registerTool(
       return {
         content: [{
           type: 'text',
-          text: `Verifiable summary generated.\n\nTree Hash: ${manifest.treeHash}\nSigner: ${signer}\nReceipt: ${badgeStatus}\nRuntime: ${runtime}ms`
+          text: `Verifiable summary generated.\n\nCAR ID: ${carData.id}\nSigner: ${signer}\nStatus: ${badgeStatus}\nRuntime: ${runtime}ms`
         }],
         structuredContent: {
           summary,
           car: {
             id,
+            car_id: carData.id,
             valid: isSigned,
             signer,
-            hash: manifest.treeHash,
+            hash: carData.id.replace('car:', ''),
             download_url: downloadUrl
           },
           meta: {

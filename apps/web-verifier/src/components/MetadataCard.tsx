@@ -30,6 +30,15 @@ const formatDate = (value: string) => {
   return parsed.toLocaleString();
 };
 
+const truncateHash = (hash: string, prefixLen = 12, suffixLen = 8) => {
+  if (!hash || hash.length <= prefixLen + suffixLen + 3) return hash;
+  return `${hash.slice(0, prefixLen)}...${hash.slice(-suffixLen)}`;
+};
+
+const copyToClipboard = (text: string) => {
+  navigator.clipboard.writeText(text).catch(console.error);
+};
+
 const MetadataCard = ({ report }: MetadataCardProps) => {
   if (!report) {
     return (
@@ -44,8 +53,18 @@ const MetadataCard = ({ report }: MetadataCardProps) => {
 
   const statusStyle = statusStyles[report.status] ?? statusStyles.failed;
   const summary = report.summary;
-  const modelLabel = [report.model.name, report.model.version].filter(Boolean).join(' · ') || 'Unknown model';
-  const signerLabel = report.signer?.public_key ?? 'Signer not provided';
+
+  // Extract workflow name from model (e.g., "workflow:llm question")
+  const modelName = report.model.name.startsWith('workflow:')
+    ? report.model.name.replace('workflow:', '')
+    : report.model.name;
+
+  // Truncate version hash
+  const modelVersion = report.model.version ? truncateHash(report.model.version, 8, 8) : '';
+  const modelLabel = [modelName, modelVersion].filter(Boolean).join(' · ') || 'Unknown model';
+
+  const signerKey = report.signer?.public_key ?? '';
+  const signerLabel = signerKey ? truncateHash(signerKey, 16, 8) : 'Unsigned';
 
   const numericMetrics = [
     {
@@ -98,25 +117,43 @@ const MetadataCard = ({ report }: MetadataCardProps) => {
 
         <div className="flex items-start gap-3 rounded-lg border border-slate-800/60 bg-slate-950/60 px-4 py-3">
           <FileBadge2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-brand-300" aria-hidden />
-          <div>
+          <div className="flex-1 min-w-0">
             <dt className="text-xs uppercase tracking-wide text-slate-400">CAR ID</dt>
-            <dd className="text-sm font-medium text-slate-100">{report.car_id || 'Unknown CAR'}</dd>
+            <dd
+              className="text-sm font-medium text-slate-100 font-mono cursor-pointer hover:text-brand-300 transition-colors truncate"
+              onClick={() => copyToClipboard(report.car_id)}
+              title={`${report.car_id}\n\nClick to copy full ID`}
+            >
+              {truncateHash(report.car_id, 16, 12)}
+            </dd>
           </div>
         </div>
 
         <div className="flex items-start gap-3 rounded-lg border border-slate-800/60 bg-slate-950/60 px-4 py-3">
           <Fingerprint className="mt-0.5 h-5 w-5 flex-shrink-0 text-brand-300" aria-hidden />
-          <div>
+          <div className="flex-1 min-w-0">
             <dt className="text-xs uppercase tracking-wide text-slate-400">Signer</dt>
-            <dd className="text-sm font-medium text-slate-100 break-all">{signerLabel}</dd>
+            <dd
+              className={`text-sm font-medium font-mono ${signerKey ? 'text-slate-100 cursor-pointer hover:text-brand-300 transition-colors' : 'text-slate-400'}`}
+              onClick={signerKey ? () => copyToClipboard(signerKey) : undefined}
+              title={signerKey ? `${signerKey}\n\nClick to copy full key` : 'Unsigned - no cryptographic proof'}
+            >
+              {signerLabel}
+            </dd>
           </div>
         </div>
 
         <div className="flex items-start gap-3 rounded-lg border border-slate-800/60 bg-slate-950/60 px-4 py-3">
           <ShieldCheck className="mt-0.5 h-5 w-5 flex-shrink-0 text-brand-300" aria-hidden />
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-slate-400">Model</dt>
-            <dd className="text-sm font-medium text-slate-100">{modelLabel}</dd>
+          <div className="flex-1 min-w-0">
+            <dt className="text-xs uppercase tracking-wide text-slate-400">Workflow</dt>
+            <dd
+              className="text-sm font-medium text-slate-100 cursor-pointer hover:text-brand-300 transition-colors"
+              onClick={() => copyToClipboard(`${report.model.name} · ${report.model.version}`)}
+              title={`${report.model.name}\nVersion: ${report.model.version}\n\nClick to copy`}
+            >
+              {modelLabel}
+            </dd>
           </div>
         </div>
 
