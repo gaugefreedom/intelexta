@@ -41,8 +41,10 @@ fn decode_car(bytes: &[u8]) -> Result<DecodedCar> {
 
 fn load_car_from_json(bytes: &[u8]) -> Result<DecodedCar> {
     let car: Car = serde_json::from_slice(bytes).context("Failed to parse CAR JSON")?;
+    let raw_json = String::from_utf8(bytes.to_vec()).context("Invalid UTF-8 in CAR JSON")?;
     Ok(DecodedCar {
         car,
+        raw_json,
         attachments: Vec::new(),
     })
 }
@@ -71,12 +73,13 @@ fn load_car_from_zip(bytes: &[u8]) -> Result<DecodedCar> {
     let car_data = car_json.ok_or_else(|| anyhow!("CAR ZIP is missing car.json"))?;
     let car: Car =
         serde_json::from_slice(&car_data).context("Failed to parse car.json from ZIP")?;
+    let raw_json = String::from_utf8(car_data).context("Invalid UTF-8 in car.json")?;
 
-    Ok(DecodedCar { car, attachments })
+    Ok(DecodedCar { car, raw_json, attachments })
 }
 
 fn verify_car(decoded: DecodedCar) -> Result<VerificationReport> {
-    let DecodedCar { car, attachments } = decoded;
+    let DecodedCar { car, raw_json, attachments } = decoded;
 
     let mut summary = SummaryMetrics {
         checkpoints_verified: 0,
@@ -170,6 +173,28 @@ fn verify_car(decoded: DecodedCar) -> Result<VerificationReport> {
                     "Provenance verification",
                     "Attachment integrity",
                 ],
+                &message,
+            ));
+            overall_error = Some(message);
+            return Ok(build_report(car, summary, steps, overall_error));
+        }
+    }
+
+    // Verify top-level body signature (if present)
+    match verify_top_level_signature(&car, &raw_json) {
+        Ok(_) => {
+            // Top-level signature verified or not present (legacy format)
+        }
+        Err(err) => {
+            let message = format!("Top-level body signature verification failed: {err}");
+            steps.push(WorkflowStep::failure(
+                "signatures",
+                "Signature validation",
+                &message,
+            ));
+            steps.extend(skipped_steps(
+                ["provenance", "attachments"],
+                ["Provenance verification", "Attachment integrity"],
                 &message,
             ));
             overall_error = Some(message);
@@ -365,6 +390,66 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>> {
     serde_jcs::to_vec(value).map_err(|err| anyhow!("Failed to canonicalize JSON: {err}"))
 }
 
+fn verify_top_level_signature(car: &Car, raw_json: &str) -> Result<()> {
+    // Check if we have the new signature format (ed25519-body:...)
+    if car.signatures.is_empty() {
+        return Err(anyhow!("No signatures found in CAR"));
+    }
+
+    let first_sig = &car.signatures[0];
+
+    // If it's the new format, verify top-level body signature
+    if first_sig.starts_with("ed25519-body:") {
+        if car.signer_public_key.is_empty() {
+            return Err(anyhow!("Top-level signature present but signer_public_key is empty"));
+        }
+
+        // Extract signature
+        let sig_b64 = first_sig.strip_prefix("ed25519-body:").unwrap();
+
+        // Parse raw JSON as Value and remove signatures field
+        let mut car_json: Value = serde_json::from_str(raw_json)
+            .context("Failed to parse raw JSON")?;
+
+        // Remove signatures field
+        if let Some(obj) = car_json.as_object_mut() {
+            obj.remove("signatures");
+        }
+
+        // Canonicalize the body (without re-serializing through Rust structs)
+        let canonical = canonical_json(&car_json)?;
+
+        // Verify signature
+        let public_key_bytes = STANDARD
+            .decode(&car.signer_public_key)
+            .context("Invalid signer public key base64")?;
+
+        let verifying_key = VerifyingKey::from_bytes(
+            &public_key_bytes
+                .try_into()
+                .map_err(|_| anyhow!("Public key must be 32 bytes"))?,
+        )
+        .context("Invalid Ed25519 public key")?;
+
+        let signature_bytes = STANDARD
+            .decode(sig_b64)
+            .context("Invalid top-level signature base64")?;
+
+        let signature = Signature::from_bytes(
+            &signature_bytes
+                .try_into()
+                .map_err(|_| anyhow!("Signature must be 64 bytes"))?,
+        );
+
+        verifying_key
+            .verify(&canonical, &signature)
+            .context("Top-level body signature verification failed")?;
+    }
+    // else: legacy format (no ed25519-body prefix), skip top-level verification
+
+    Ok(())
+}
+
 fn verify_signatures(public_key_b64: &str, checkpoints: &[ProcessCheckpointProof]) -> Result<()> {
     let public_key_bytes = STANDARD
         .decode(public_key_b64)
@@ -499,6 +584,7 @@ fn skipped_steps<const N: usize>(
 
 struct DecodedCar {
     car: Car,
+    raw_json: String,
     attachments: Vec<Attachment>,
 }
 

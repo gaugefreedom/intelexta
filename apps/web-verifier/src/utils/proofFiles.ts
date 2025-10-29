@@ -46,6 +46,14 @@ export type ProofFileValidationError = FileError & { code: 'file-invalid-type' }
 export type FileLike = Pick<File, 'name'> | { name: string };
 
 export function proofFileValidator(file: FileLike): ProofFileValidationError | null {
+  // Safety check for undefined filename
+  if (!file || !file.name) {
+    return {
+      code: 'file-invalid-type',
+      message: PROOF_FILE_ACCEPT_MESSAGE
+    };
+  }
+
   const validation = validateProofFileName(file.name);
   if (!validation.valid) {
     return {

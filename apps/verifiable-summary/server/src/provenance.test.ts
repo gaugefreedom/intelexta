@@ -52,8 +52,11 @@ describe('generateProofBundle', () => {
     // Check signed fields
     expect(carData.signer_public_key).toBeDefined();
     expect(carData.signer_public_key.length).toBeGreaterThan(0);
-    expect(carData.signatures).toHaveLength(1);
-    expect(carData.signatures[0]).toMatch(/^ed25519:.+/);
+
+    // Check dual signatures (body + checkpoint)
+    expect(carData.signatures).toHaveLength(2);
+    expect(carData.signatures[0]).toMatch(/^ed25519-body:.+/);
+    expect(carData.signatures[1]).toMatch(/^ed25519-checkpoint:.+/);
 
     // Verify deterministic ID
     expect(carData.id).toMatch(/^car:[0-9a-f]{64}$/);

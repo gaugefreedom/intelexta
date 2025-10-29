@@ -24,7 +24,9 @@ let modulePromise: Promise<VerifierModule> | null = null;
 async function loadModule(): Promise<VerifierModule> {
   if (!modulePromise) {
     // IMPORTANT: load via URL string, not a static import
-    const jsUrl = new URL('/pkg/intelexta_wasm_verify.js', window.location.origin).toString();
+    // Add cache buster in development
+    const cacheBuster = import.meta.env.DEV ? `?t=${Date.now()}` : '';
+    const jsUrl = new URL(`/pkg/intelexta_wasm_verify.js${cacheBuster}`, window.location.origin).toString();
     modulePromise = import(/* @vite-ignore */ jsUrl) as Promise<VerifierModule>;
 
     const mod = await modulePromise;
@@ -32,7 +34,7 @@ async function loadModule(): Promise<VerifierModule> {
     // Let wasm-bindgen locate the .wasm relative to the JS file
     // If your glue expects a URL explicitly, pass the correct filename:
     if (typeof mod.default === 'function') {
-      await mod.default(new URL('/pkg/intelexta_wasm_verify_bg.wasm', window.location.origin));
+      await mod.default(new URL(`/pkg/intelexta_wasm_verify_bg.wasm${cacheBuster}`, window.location.origin));
       // or simply: await mod.default();  // works for most wasm-pack builds
     }
     return mod;

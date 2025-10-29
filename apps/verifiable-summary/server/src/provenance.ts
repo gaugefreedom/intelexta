@@ -284,13 +284,22 @@ Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
   let signatures: string[];
 
   if (secretKeyB64) {
-    // Build body with ID for signing
+    // Build body with ID (for signing the complete document)
     const bodyWithId = { id: carId, ...carBody };
-    const canonicalWithId = canonicalize(bodyWithId);
 
-    // Sign the canonical representation
-    const signature = signEd25519(canonicalWithId, secretKeyB64);
-    signatures = [`ed25519:${signature}`];
+    // Sign 1: Top-level body (covers ALL fields including created_at, budgets, sgrade)
+    const bodyCanonical = canonicalize(bodyWithId);
+    const bodySignature = signEd25519(bodyCanonical, secretKeyB64);
+
+    // Sign 2: Use the checkpoint signature already computed in step 2
+    // (checkpointSignature variable contains the signature of curr_chain)
+
+    // Store both signatures
+    // Format: ["ed25519-body:<sig>", "ed25519-checkpoint:<sig>"]
+    signatures = [
+      `ed25519-body:${bodySignature}`,
+      `ed25519-checkpoint:${checkpointSignature}`
+    ];
   } else {
     // Unsigned bundle (for dev/testing)
     signatures = ['unsigned:'];

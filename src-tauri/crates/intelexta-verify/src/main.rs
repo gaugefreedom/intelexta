@@ -52,10 +52,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Load and parse the CAR file
-    let (car, car_path) = load_car_file(&cli.car_file)?;
+    let (car, raw_json, car_path) = load_car_file(&cli.car_file)?;
 
-    // Run verification (pass the path for attachment verification)
-    let report = verify_car(&car, &car_path)?;
+    // Run verification (pass the path for attachment verification and raw JSON for signature verification)
+    let report = verify_car(&car, &raw_json, &car_path)?;
 
     // Output results
     match cli.format {
@@ -72,13 +72,13 @@ fn main() -> Result<()> {
 }
 
 /// Load CAR from either JSON or ZIP file
-/// Returns the parsed CAR and the path to use for attachment verification
-fn load_car_file(path: &PathBuf) -> Result<(Car, PathBuf)> {
+/// Returns the parsed CAR, the raw JSON string, and the path to use for attachment verification
+fn load_car_file(path: &PathBuf) -> Result<(Car, String, PathBuf)> {
     let extension = path.extension()
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
-    let car = match extension {
+    let (car, raw_json) = match extension {
         "zip" => load_car_from_zip(path)?,
         "json" => load_car_from_json(path)?,
         _ => {
@@ -89,20 +89,22 @@ fn load_car_file(path: &PathBuf) -> Result<(Car, PathBuf)> {
         }
     };
 
-    Ok((car, path.clone()))
+    Ok((car, raw_json, path.clone()))
 }
 
 /// Load CAR from JSON file
-fn load_car_from_json(path: &PathBuf) -> Result<Car> {
+fn load_car_from_json(path: &PathBuf) -> Result<(Car, String)> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    serde_json::from_str(&contents)
-        .with_context(|| format!("Failed to parse CAR JSON from: {}", path.display()))
+    let car = serde_json::from_str(&contents)
+        .with_context(|| format!("Failed to parse CAR JSON from: {}", path.display()))?;
+
+    Ok((car, contents))
 }
 
 /// Load CAR from ZIP file (extract car.json)
-fn load_car_from_zip(path: &PathBuf) -> Result<Car> {
+fn load_car_from_zip(path: &PathBuf) -> Result<(Car, String)> {
     let file = fs::File::open(path)
         .with_context(|| format!("Failed to open ZIP file: {}", path.display()))?;
 
@@ -117,12 +119,14 @@ fn load_car_from_zip(path: &PathBuf) -> Result<Car> {
     car_file.read_to_string(&mut contents)
         .context("Failed to read car.json from ZIP")?;
 
-    serde_json::from_str(&contents)
-        .context("Failed to parse car.json from ZIP")
+    let car = serde_json::from_str(&contents)
+        .context("Failed to parse car.json from ZIP")?;
+
+    Ok((car, contents))
 }
 
 /// Main verification logic
-fn verify_car(car: &Car, car_path: &PathBuf) -> Result<VerificationReport> {
+fn verify_car(car: &Car, raw_json: &str, car_path: &PathBuf) -> Result<VerificationReport> {
     let mut report = VerificationReport {
         car_id: car.id.clone(),
         file_integrity: true,
@@ -167,6 +171,12 @@ fn verify_car(car: &Car, car_path: &PathBuf) -> Result<VerificationReport> {
             report.error = Some(format!("Hash chain verification failed: {}", e));
             return Ok(report);
         }
+    }
+
+    // Verify top-level body signature (if present)
+    if let Err(e) = verify_top_level_signature(car, raw_json) {
+        report.error = Some(format!("Top-level body signature verification failed: {}", e));
+        return Ok(report);
     }
 
     // Verify signatures
@@ -312,6 +322,71 @@ fn verify_signatures(
             .verify(message, &signature)
             .with_context(|| format!("Signature verification failed at checkpoint #{}", i))?;
     }
+
+    Ok(())
+}
+
+/// Verify top-level body signature (if present in new format)
+///
+/// New CAR format includes dual signatures:
+/// - ed25519-body:<sig> - covers entire CAR body (prevents tampering with created_at, budgets, etc.)
+/// - ed25519-checkpoint:<sig> - covers checkpoint chain hash (verified by verify_signatures)
+fn verify_top_level_signature(car: &Car, raw_json: &str) -> Result<()> {
+    if car.signatures.is_empty() {
+        return Err(anyhow!("No signatures found in CAR"));
+    }
+
+    let first_sig = &car.signatures[0];
+
+    // If it's the new format with top-level body signature, verify it
+    if first_sig.starts_with("ed25519-body:") {
+        if car.signer_public_key.is_empty() {
+            return Err(anyhow!("Top-level signature present but signer_public_key is empty"));
+        }
+
+        let sig_b64 = first_sig.strip_prefix("ed25519-body:").unwrap();
+
+        // Parse raw JSON as Value and remove signatures field
+        let mut car_json: serde_json::Value = serde_json::from_str(raw_json)
+            .context("Failed to parse raw JSON")?;
+
+        // Remove signatures field
+        if let Some(obj) = car_json.as_object_mut() {
+            obj.remove("signatures");
+        }
+
+        // Canonicalize the body (without re-serializing through Rust structs)
+        let canonical = canonical_json(&car_json)?;
+
+        // Parse public key
+        let public_key_bytes = STANDARD
+            .decode(&car.signer_public_key)
+            .context("Invalid signer public key base64")?;
+
+        let public_key = VerifyingKey::from_bytes(
+            &public_key_bytes
+                .try_into()
+                .map_err(|_| anyhow!("Public key must be 32 bytes"))?,
+        )
+        .context("Invalid Ed25519 public key")?;
+
+        // Parse signature
+        let signature_bytes = STANDARD
+            .decode(sig_b64)
+            .context("Invalid top-level signature base64")?;
+
+        let signature = Signature::from_bytes(
+            &signature_bytes
+                .try_into()
+                .map_err(|_| anyhow!("Signature must be 64 bytes"))?,
+        );
+
+        // Verify signature
+        public_key
+            .verify(&canonical, &signature)
+            .context("Top-level body signature verification failed")?;
+    }
+    // else: legacy format without top-level signature, skip this check
 
     Ok(())
 }
