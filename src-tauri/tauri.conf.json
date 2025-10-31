@@ -15,8 +15,7 @@
         "title": "Intelexta",
         "width": 1200,
         "height": 800,
-        "resizable": true,
-        "icon": "icons/icon.ico"
+        "resizable": true
       }
     ],
     "security": {
