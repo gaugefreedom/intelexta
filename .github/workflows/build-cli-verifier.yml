@@ -37,6 +37,18 @@ jobs:
           # Cache the Rust build artifacts for the intelexta-verify package
           key: ${{ matrix.platform }}-cli-${{ hashFiles('**/Cargo.lock') }}
 
+      # --- Install Linux Dependencies ---
+      - name: Install Linux dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
       # --- Build Step ---
       - name: Build binary
         # This command builds ONLY the intelexta-verify package
@@ -62,7 +74,7 @@ jobs:
           else
             # Linux: target/release/intelexta-verify
             echo "BINARY_PATH=target/release/${PKG_NAME}" >> $GITHUB_OUTPUT
-            echo "ASSET_NAME=${PKG_NAME}-linux-x664" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=${PKG_NAME}-linux-x64" >> $GITHUB_OUTPUT
           fi
 
       # --- Upload Step ---
