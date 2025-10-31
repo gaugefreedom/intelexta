@@ -1,0 +1,68 @@
+# .github/workflows/build-desktop-alpha.yml
+#
+# This workflow builds the Intelexta Desktop (Tauri) app for all platforms.
+# It also triggers on a "v*" tag.
+
+name: Build Intelexta Desktop
+
+on:
+  push:
+    tags:
+      - 'v*' # Runs on version tags
+
+permissions:
+  contents: write # Required to create the draft release
+
+jobs:
+  build-desktop:
+    name: Build Desktop App
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18 # Or your project's node version
+
+      # --- Install Frontend Dependencies ---
+      # We must specify the working directory for the React app
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: ./app # Your React app is in 'app/'
+
+      # --- Build Frontend ---
+      # This must run before the Tauri build
+      - name: Build frontend
+        run: npm run build
+        working-directory: ./app
+
+      # --- Run the Tauri Action ---
+      # This is the magic. It handles all Tauri dependencies,
+      # finds your built frontend, and builds the app.
+      - name: Build Tauri App
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # This tells the action to run in the 'intelexta/' root
+          # and find the Tauri project in 'src-tauri/'
+          projectPath: .
+          
+          # This tells the action to create a DRAFT release for the new tag.
+          # It will automatically find and upload the .dmg, .exe, .AppImage, etc.
+          releaseId: ${{ steps.create_release.id.outputs.id }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "Intelexta Desktop ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: true # Marks it as an "alpha" or pre-release

@@ -1,0 +1,80 @@
+# .github/workflows/build-cli-verifier.yml
+#
+# This workflow builds the `intelexta-verify` CLI tool for Windows, macOS, and Linux.
+# It triggers when you push a tag in the format "v*" (e.g., "v0.3.0-alpha").
+# It creates a DRAFT release and uploads the binaries there.
+
+name: Build CLI Verifier
+
+on:
+  push:
+    tags:
+      - 'v*' # Runs on version tags like v0.2.1, v0.3.0-alpha
+
+permissions:
+  contents: write # Required to create the draft release
+
+jobs:
+  build-cli:
+    name: Build intelexta-verify
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Cache the Rust build artifacts for the intelexta-verify package
+          key: ${{ matrix.platform }}-cli-${{ hashFiles('**/Cargo.lock') }}
+
+      # --- Build Step ---
+      - name: Build binary
+        # This command builds ONLY the intelexta-verify package
+        run: cargo build --release --package intelexta-verify
+        # Note: The 'intelexta' path is the root, so Cargo finds the package.
+
+      # --- Determine Binary Name (for upload) ---
+      - name: Set binary name and path
+        id: set_names
+        shell: bash
+        run: |
+          # The package name
+          PKG_NAME="intelexta-verify"
+
+          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            # Windows: target/release/intelexta-verify.exe
+            echo "BINARY_PATH=target/release/${PKG_NAME}.exe" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=${PKG_NAME}-windows-x64.exe" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+            # macOS: target/release/intelexta-verify
+            echo "BINARY_PATH=target/release/${PKG_NAME}" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=${PKG_NAME}-macos-x64" >> $GITHUB_OUTPUT
+          else
+            # Linux: target/release/intelexta-verify
+            echo "BINARY_PATH=target/release/${PKG_NAME}" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=${PKG_NAME}-linux-x664" >> $GITHUB_OUTPUT
+          fi
+
+      # --- Upload Step ---
+      # This action finds a draft release (or creates one) for the tag
+      # and uploads the binary as a release asset.
+      - name: Upload binary to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ steps.set_names.outputs.BINARY_PATH }}
+          asset_name: ${{ steps.set_names.outputs.ASSET_NAME }}
+          tag: ${{ github.ref_name }}
+          release_name: "Release ${{ github.ref_name }}"
+          draft: true # Creates a draft release. You must manually publish it.
+          overwrite: true
