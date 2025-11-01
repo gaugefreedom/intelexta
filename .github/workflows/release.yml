@@ -1,0 +1,155 @@
+# .github/workflows/release.yml
+#
+# This is the single, perfected workflow for your alpha release.
+# It fixes the GLIBC bug and the missing CLI dependencies.
+
+name: Create Unified Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Runs on version tags
+
+permissions:
+  contents: write # Required to create the release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ------------------------------------------------------------------
+  # JOB 1: CREATE THE DRAFT RELEASE
+  # ------------------------------------------------------------------
+  create-release:
+    name: Create Draft Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+      - name: Create Draft Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: "Intelexta ${{ github.ref_name }} (Alpha)"
+          draft: true
+          prerelease: true
+
+  # ------------------------------------------------------------------
+  # JOB 2: BUILD ALL CLI VERIFIERS
+  # ------------------------------------------------------------------
+  build-cli:
+    name: Build CLI Verifier
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        # We explicitly use ubuntu-22.04 for GLIBC compatibility
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # --- [THE FIX] ---
+      # Added this step. Because the CLI depends on the desktop package,
+      # it needs the same GUI libraries to compile, even for the CLI.
+      - name: Install Linux dependencies (Ubuntu 22.04)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Build CLI binary
+        run: cargo build --release --package intelexta-verify
+
+      - name: Set Binary Name and Path
+        id: set_names
+        shell: bash
+        run: |
+          PKG_NAME="intelexta-verify"
+          BIN_PATH="target/release/${PKG_NAME}"
+          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            echo "BINARY_PATH=${BIN_PATH}.exe" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=${PKG_NAME}-windows-x64.exe" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+            # macos-latest is Apple Silicon (arm64)
+            echo "BINARY_PATH=${BIN_PATH}" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=${PKG_NAME}-macos-arm64" >> $GITHUB_OUTPUT
+          else
+            echo "BINARY_PATH=${BIN_PATH}" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=${PKG_NAME}-linux-x64" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload CLI asset to draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "${{ steps.set_names.outputs.BINARY_PATH }}#${{ steps.set_names.outputs.ASSET_NAME }}" --clobber
+
+  # ------------------------------------------------------------------
+  # JOB 3: BUILD ALL DESKTOP APPS
+  # ------------------------------------------------------------------
+  build-desktop:
+    name: Build Desktop App
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        # We explicitly use ubuntu-22.04 for GLIBC compatibility
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: ./app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend deps
+        working-directory: ./app
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ./app
+        run: npm run build
+
+      - name: Install Linux dependencies (Ubuntu 22.04)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Build Tauri App and upload to existing draft
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: .
+          # Reuse the draft created in job 1:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          releaseDraft: true
+          tagName: ${{ github.ref_name }}
+
