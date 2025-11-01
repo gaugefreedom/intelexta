@@ -65,11 +65,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev \
-            libwebkit2gtk-4.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
             libsoup-3.0-dev \
-            libappindicator3-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
+          # sanity check: fail early if pkg-config can’t see the .pc files
+          pkg-config --print-errors --exists javascriptcoregtk-4.1 libsoup-3.0
 
       - name: Build CLI binary
         run: cargo build --release --package intelexta-verify
@@ -137,11 +140,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev \
-            libwebkit2gtk-4.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
             libsoup-3.0-dev \
-            libappindicator3-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
+          # sanity check: fail early if pkg-config can’t see the .pc files
+          pkg-config --print-errors --exists javascriptcoregtk-4.1 libsoup-3.0
 
       - name: Build Tauri App and upload to existing draft
         uses: tauri-apps/tauri-action@v0
