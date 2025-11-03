@@ -230,6 +230,50 @@ impl ModelCatalog {
             }
         }
 
+        // 6. Try AppImage/Linux bundle: /path/to/usr/share/config/model_catalog.toml
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                // For AppImage: exe is at /tmp/.mount_XXX/usr/bin/intelexta
+                // Resources are at /tmp/.mount_XXX/usr/share/...
+                let path = exe_dir.join("..").join("share").join("config").join("model_catalog.toml");
+                eprintln!("[model_catalog] Trying: {}", path.display());
+                candidates.push(path);
+            }
+        }
+
+        // 7. Try AppImage/Linux bundle: /path/to/usr/config/model_catalog.toml
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                // Another common location: /tmp/.mount_XXX/usr/config/...
+                let path = exe_dir.join("..").join("config").join("model_catalog.toml");
+                eprintln!("[model_catalog] Trying: {}", path.display());
+                candidates.push(path);
+            }
+        }
+
+        // 8. Try direct sibling to binary: ../config/model_catalog.toml
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                if let Some(parent_dir) = exe_dir.parent() {
+                    let path = parent_dir.join("config").join("model_catalog.toml");
+                    eprintln!("[model_catalog] Trying: {}", path.display());
+                    candidates.push(path);
+                }
+            }
+        }
+
+        // 9. Try Tauri AppImage resource location: ../lib/ProductName/_up_/config/model_catalog.toml
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                if let Some(parent_dir) = exe_dir.parent() {
+                    // Tauri bundles resources with _up_ for parent directory
+                    let path = parent_dir.join("lib").join("Intelexta").join("_up_").join("config").join("model_catalog.toml");
+                    eprintln!("[model_catalog] Trying: {}", path.display());
+                    candidates.push(path);
+                }
+            }
+        }
+
         // Return the first path that exists
         for path in &candidates {
             if path.exists() {
