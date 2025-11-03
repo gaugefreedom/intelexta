@@ -537,6 +537,16 @@ struct OllamaTagsResponse {
 #[derive(Debug, Deserialize)]
 struct OllamaModelEntry {
     name: String,
+    #[serde(default)]
+    details: Option<OllamaModelDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaModelDetails {
+    #[serde(default)]
+    family: Option<String>,
+    #[serde(default)]
+    families: Option<Vec<String>>,
 }
 
 pub fn list_local_models() -> anyhow::Result<Vec<String>> {
@@ -632,8 +642,46 @@ fn fetch_ollama_models() -> anyhow::Result<Vec<String>> {
     }
 
     let tags: OllamaTagsResponse = serde_json::from_slice(&body)?;
-    let models = tags.models.into_iter().map(|entry| entry.name).collect();
+
+    // Filter out embedding models (like BERT) and only keep generative models
+    let models = tags.models.into_iter()
+        .filter(|entry| {
+            // Check if this is a generative model
+            if let Some(details) = &entry.details {
+                // Check family field
+                if let Some(family) = &details.family {
+                    let family_lower = family.to_lowercase();
+                    // Exclude embedding model families
+                    if family_lower == "bert" || family_lower == "nomic-bert" {
+                        eprintln!("[ollama] Skipping embedding model: {} (family: {})", entry.name, family);
+                        return false;
+                    }
+                }
+
+                // Check families array
+                if let Some(families) = &details.families {
+                    for family in families {
+                        let family_lower = family.to_lowercase();
+                        if family_lower == "bert" || family_lower == "nomic-bert" {
+                            eprintln!("[ollama] Skipping embedding model: {} (families: {:?})", entry.name, families);
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            // Include the model if it passed all checks
+            true
+        })
+        .map(|entry| entry.name)
+        .collect();
+
     Ok(models)
+}
+
+/// Public API to fetch Ollama models for merging with catalog
+pub fn fetch_ollama_models_list() -> anyhow::Result<Vec<String>> {
+    fetch_ollama_models()
 }
 
 pub(crate) fn perform_ollama_stream(model: &str, prompt: &str) -> anyhow::Result<LlmGeneration> {

@@ -95,6 +95,7 @@ fn main() {
         api::set_api_key,
         api::delete_api_key,
         api::list_catalog_models,
+        api::list_all_available_models,
         api::estimate_model_cost
     ]);
 

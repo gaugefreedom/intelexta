@@ -663,6 +663,10 @@ export async function listCatalogModels(): Promise<CatalogModel[]> {
   return await invoke<CatalogModel[]>('list_catalog_models');
 }
 
+export async function listAllAvailableModels(): Promise<CatalogModel[]> {
+  return await invoke<CatalogModel[]>('list_all_available_models');
+}
+
 export async function estimateModelCost(modelId: string, tokens: number): Promise<ModelCostEstimate> {
   return await invoke<ModelCostEstimate>('estimate_model_cost', { modelId, tokens });
 }

@@ -1828,3 +1828,79 @@ pub fn estimate_model_cost(model_id: String, tokens: u64) -> Result<ModelCostEst
         energy_kwh: catalog.calculate_energy_kwh(&model_id, tokens),
     })
 }
+
+/// Get all available models: catalog models + dynamically discovered Ollama models
+#[tauri::command]
+pub fn list_all_available_models() -> Result<Vec<CatalogModel>, Error> {
+    let catalog = model_catalog::try_get_global_catalog()
+        .ok_or_else(|| Error::Api("Model catalog not initialized".to_string()))?;
+
+    // Get all catalog models
+    let mut models: Vec<CatalogModel> = catalog
+        .get_enabled_models()
+        .into_iter()
+        .map(|model_def| {
+            // Check if API key is configured for this model
+            let is_api_key_configured = if model_def.requires_api_key {
+                let provider = match model_def.provider.as_str() {
+                    "anthropic" => Some(api_keys::ApiKeyProvider::Anthropic),
+                    "openai" => Some(api_keys::ApiKeyProvider::OpenAI),
+                    "google" => Some(api_keys::ApiKeyProvider::Google),
+                    "groq" => Some(api_keys::ApiKeyProvider::Groq),
+                    "xai" => Some(api_keys::ApiKeyProvider::XAI),
+                    _ => None,
+                };
+                provider.map(|p| api_keys::has_api_key(p)).unwrap_or(false)
+            } else {
+                true // Local models don't need API keys
+            };
+
+            CatalogModel {
+                id: model_def.id.clone(),
+                provider: model_def.provider.clone(),
+                display_name: model_def.display_name.clone(),
+                description: model_def.description.clone(),
+                cost_per_million_tokens: model_def.cost_per_million_tokens,
+                nature_cost_per_million_tokens: model_def.nature_cost_per_million_tokens,
+                energy_kwh_per_million_tokens: model_def.energy_kwh_per_million_tokens,
+                enabled: model_def.enabled,
+                requires_network: model_def.requires_network,
+                requires_api_key: model_def.requires_api_key,
+                tags: model_def.tags.clone(),
+                context_window: model_def.context_window,
+                max_output_tokens: model_def.max_output_tokens,
+                is_api_key_configured,
+            }
+        })
+        .collect();
+
+    // Get dynamically discovered Ollama models
+    if let Ok(ollama_models) = orchestrator::fetch_ollama_models_list() {
+        for ollama_model_name in ollama_models {
+            // Skip if this model is already in the catalog
+            if models.iter().any(|m| m.id == ollama_model_name) {
+                continue;
+            }
+
+            // Add as a dynamic Ollama model with default values
+            models.push(CatalogModel {
+                id: ollama_model_name.clone(),
+                provider: "ollama".to_string(),
+                display_name: format!("{} (Local)", ollama_model_name),
+                description: format!("Dynamically discovered Ollama model: {}", ollama_model_name),
+                cost_per_million_tokens: 0.0,
+                nature_cost_per_million_tokens: 5.0, // Default fallback
+                energy_kwh_per_million_tokens: 0.1,   // Default fallback
+                enabled: true,
+                requires_network: false,
+                requires_api_key: false,
+                tags: vec!["local".to_string(), "ollama".to_string(), "dynamic".to_string()],
+                context_window: None,
+                max_output_tokens: None,
+                is_api_key_configured: true, // Local model, always available
+            });
+        }
+    }
+
+    Ok(models)
+}

@@ -84,10 +84,24 @@ impl ModelAdapter for OllamaAdapter {
 
     fn can_handle(&self, model_id: &str) -> bool {
         // Check if model is from Ollama provider in catalog
-        model_catalog::try_get_global_catalog()
-            .and_then(|catalog| catalog.get_model(model_id))
-            .map(|model_def| model_def.provider == "ollama")
-            .unwrap_or(false)
+        if let Some(catalog) = model_catalog::try_get_global_catalog() {
+            if let Some(model_def) = catalog.get_model(model_id) {
+                return model_def.provider == "ollama";
+            }
+        }
+
+        // If not in catalog, check if it looks like an Ollama model
+        // Ollama models typically have formats like: "model:tag" or "model:version"
+        // Examples: "llama3.2:1b", "gemma:2b", "bge-m3:latest"
+        // Also accept simple names without tags for models pulled from Ollama
+        if model_id.contains(':') || model_id.contains('.') || model_id.contains('-') {
+            // Try to verify it's actually available in Ollama by checking the API
+            // For now, we'll be permissive and assume any model with these patterns
+            // that made it this far is an Ollama model
+            return true;
+        }
+
+        false
     }
 
     fn provider_name(&self) -> &'static str {

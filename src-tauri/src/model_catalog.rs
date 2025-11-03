@@ -203,10 +203,28 @@ impl ModelCatalog {
             candidates.push(path);
         }
 
-        // 3. Try executable directory + config/model_catalog.toml
+        // 3. Try executable directory + config/model_catalog.toml (production builds)
         if let Ok(exe) = std::env::current_exe() {
             if let Some(exe_dir) = exe.parent() {
                 let path = exe_dir.join("config").join("model_catalog.toml");
+                eprintln!("[model_catalog] Trying: {}", path.display());
+                candidates.push(path);
+            }
+        }
+
+        // 4. Try executable directory + ../Resources/config/model_catalog.toml (macOS app bundle)
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                let path = exe_dir.join("..").join("Resources").join("config").join("model_catalog.toml");
+                eprintln!("[model_catalog] Trying: {}", path.display());
+                candidates.push(path);
+            }
+        }
+
+        // 5. Try executable directory + resources/config/model_catalog.toml (Windows/Linux bundle)
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                let path = exe_dir.join("resources").join("config").join("model_catalog.toml");
                 eprintln!("[model_catalog] Trying: {}", path.display());
                 candidates.push(path);
             }

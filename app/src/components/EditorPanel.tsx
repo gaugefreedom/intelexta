@@ -3,6 +3,7 @@ import {
   CheckpointSummary,
   CheckpointDetails,
   listCatalogModels,
+  listAllAvailableModels,
   type CatalogModel,
   RunSummary,
   RunExecutionSummary,
@@ -845,7 +846,7 @@ export default function EditorPanel({
     let cancelled = false;
     setModelsLoading(true);
     setModelsError(null);
-    listCatalogModels()
+    listAllAvailableModels()
       .then((models) => {
         if (cancelled) return;
         setCatalogModels(models);
