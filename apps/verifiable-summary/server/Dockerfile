@@ -39,12 +39,19 @@ COPY --from=builder /app/package-lock.json ./
 # Install only production dependencies using the lock file
 RUN npm ci --omit=dev
 
+# Create non-root user and group for running the service
+RUN groupadd --system app && \
+    useradd --system --create-home --gid app app
+
 # Copy built application from builder stage
-COPY --from=builder /app/dist ./dist
+COPY --from=builder --chown=app:app /app/dist ./dist
 
 # Copy any necessary runtime files
 # Note: .env files should be set via Cloud Run environment variables
-COPY --from=builder /app/.env.example ./.env.example
+COPY --from=builder --chown=app:app /app/.env.example ./.env.example
+
+# Ensure working directory ownership for runtime operations
+RUN chown -R app:app /app
 
 # Expose port (Cloud Run will override this with PORT env var)
 # The application should listen on process.env.PORT || 8080
@@ -56,4 +63,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Start the application
 # Cloud Run sets the PORT environment variable automatically
+USER app
 CMD ["node", "dist/index.js"]
