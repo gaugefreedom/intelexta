@@ -42,11 +42,14 @@ docker build -t intelexta-verifiable-summary:latest .
 docker run -p 8080:8080 \
   -e PORT=8080 \
   -e NODE_ENV=production \
+  --user 65532:65532 \
   intelexta-verifiable-summary:latest
 
 # Test the endpoint
 curl http://localhost:8080/health
 ```
+
+> **Operator note:** The runtime image now creates an unprivileged `app` user and runs the service as that account. If you need to override the user when running the container manually, use the UID/GID shown above (Cloud Run uses the container default automatically).
 
 ### Step 3: Deploy to Cloud Run
 
