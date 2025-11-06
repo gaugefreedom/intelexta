@@ -29,15 +29,19 @@ FROM node:20-slim
 # Set environment to production
 ENV NODE_ENV=production
 
+# Create a non-root user and group
+RUN groupadd --system --gid 1001 nodejs && \
+    useradd --system --uid 1001 --gid nodejs nodejs
+
 # Set working directory
 WORKDIR /app
 
 # Copy package files AND the lock file from the builder stage
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/package-lock.json ./
+COPY --from=builder --chown=nodejs:nodejs /app/package.json ./
+COPY --from=builder --chown=nodejs:nodejs /app/package-lock.json ./
 
 # Install only production dependencies using the lock file
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Create non-root user and group for running the service
 RUN groupadd --system app && \
