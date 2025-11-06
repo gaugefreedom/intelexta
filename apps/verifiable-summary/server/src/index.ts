@@ -404,8 +404,8 @@ const widgetHtml = `
         const newOutput = getSnapshot();
         if (newOutput !== currentOutput) {
           currentOutput = newOutput;
-          render();
         }
+        render();
       });
 
       render();
