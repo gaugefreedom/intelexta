@@ -1,0 +1,39 @@
+# Node modules (will be installed during build)
+node_modules/
+npm-debug.log
+
+# Build artifacts (will be generated during build)
+dist/
+
+# Environment files (use Cloud Run environment variables instead)
+.env
+.env.local
+.env.*.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+*.test.ts
+*.spec.ts
+__tests__/
+coverage/
+
+# Documentation
+*.md
+!README.md
+
+# Scripts (except production scripts)
+scripts/

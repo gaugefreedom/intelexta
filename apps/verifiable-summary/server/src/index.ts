@@ -21,8 +21,14 @@ config();
 
 // Configuration
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
+const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 const ED25519_SECRET_KEY = process.env.ED25519_SECRET_KEY;
+
+// Validate production environment
+if (!process.env.PUBLIC_URL || PUBLIC_URL.includes('localhost')) {
+  console.warn('⚠️  WARNING: PUBLIC_URL is not set to production domain!');
+  console.warn('⚠️  Download URLs will use localhost and will not work in production.');
+}
 
 // ============================================================================
 // Initialize MCP Server
@@ -267,7 +273,7 @@ server.registerTool(
       // 5. Store and generate download URL
       const id = randomUUID();
       zipStore.set(id, { buffer: zipBuffer, createdAt: Date.now() });
-      const downloadUrl = `${PUBLIC_BASE_URL}/download/${id}`;
+      const downloadUrl = `${PUBLIC_URL}/download/${id}`;
 
       // 6. Parse car.json for metadata
       const carData = JSON.parse(artifacts['car.json']);
@@ -325,6 +331,11 @@ app.get('/health', (_req, res) => {
 
 // Download endpoint
 app.get('/download/:id', (req, res) => {
+  // Add CORS headers for cross-origin downloads
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   const entry = zipStore.get(req.params.id);
 
   if (!entry) {
@@ -337,7 +348,7 @@ app.get('/download/:id', (req, res) => {
 });
 
 // MCP endpoint wired through the official streamable HTTP transport
-app.post('/mcp', express.json(), async (req, res) => {
+app.post('/mcp', express.json({ limit: '10mb' }), async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true
@@ -364,7 +375,7 @@ app.listen(PORT, () => {
 ╔═══════════════════════════════════════════════════════════╗
 ║  Verifiable Summary MCP Server                            ║
 ╠═══════════════════════════════════════════════════════════╣
-║  URL: ${PUBLIC_BASE_URL.padEnd(49)} ║
+║  URL: ${PUBLIC_URL.padEnd(49)} ║
 ║  Port: ${PORT.toString().padEnd(48)} ║
 ║  Signing: ${(ED25519_SECRET_KEY ? 'Enabled' : 'Disabled (unsigned mode)').padEnd(44)} ║
 ╚═══════════════════════════════════════════════════════════╝
