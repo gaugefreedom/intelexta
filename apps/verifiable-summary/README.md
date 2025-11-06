@@ -219,6 +219,37 @@ curl -X POST http://localhost:3000/mcp \
 - [ ] Verification API endpoint
 - [ ] Analytics dashboard
 
+## Regression: Escaped Summary Content
+
+To confirm that summaries render safely (and `<script>` tags do not execute inside the widget):
+
+1. Start the MCP server locally:
+   ```bash
+   cd apps/verifiable-summary/server
+   npm run dev
+   ```
+2. Visit the widget resource directly at [http://localhost:3000/widget/verifiable-summary](http://localhost:3000/widget/verifiable-summary).
+3. Open your browser devtools console and run:
+   ```js
+   window.openai = {
+     toolOutput: {
+       summary: "<script>window.__xss_executed = true</script>\nSecond line",
+       car: {
+         valid: true,
+         signer: 'abcdefghijklmnopqrstuvwxyz123456',
+         hash: '0123456789abcdef0123456789abcdef01234567',
+         download_url: 'https://example.com/fake.car'
+       },
+       meta: { bytes_processed: 1234, runtime_ms: 56 }
+     },
+     openExternal: ({ href }) => console.log('openExternal called with', href)
+   };
+   window.dispatchEvent(new Event('openai:set_globals'));
+   ```
+4. Verify that no alert fires and `window.__xss_executed` remains `undefined`. The `<script>` tag should render as plain text with line breaks preserved.
+
+This manual regression ensures summary HTML is escaped before rendering.
+
 ## Troubleshooting
 
 ### "Bundle not found"
