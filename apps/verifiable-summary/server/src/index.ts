@@ -11,7 +11,6 @@ import { z } from 'zod';
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { LRUCache } from 'lru-cache';
 import JSZip from 'jszip';
 import { randomUUID } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
@@ -19,12 +18,8 @@ import { config } from 'dotenv';
 
 import { generateProofBundle } from './provenance.js';
 import { summarize } from './summarizer.js';
-<<<<<<< HEAD
 import { fetchRemoteFile, validateRemoteFileUrl } from './urlValidation.js';
 import { LimitedBundleStorage } from './storage.js';
-=======
-import { validateSafeUrl, validateFileSize } from './security.js';
->>>>>>> 498544e (docker update for merge)
 
 // Load environment variables
 config();
@@ -33,7 +28,6 @@ config();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 const ED25519_SECRET_KEY = process.env.ED25519_SECRET_KEY;
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB limit for fetched files
 
 const DEFAULT_REMOTE_FILE_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
 const REMOTE_FILE_MAX_BYTES = (() => {
@@ -298,22 +292,8 @@ const widgetHtml = `
 
       let currentOutput = getSnapshot();
 
-<<<<<<< HEAD
       const setSummaryContent = (text) => {
         if (!summaryEl) {
-=======
-      // XSS-safe HTML escaping function
-      const escapeHtml = (str) => {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-      };
-
-      const render = () => {
-        const toolOutput = getSnapshot();
-        if (!toolOutput) {
-          document.getElementById('root').innerHTML = '<div class="loading">Generating summary...</div>';
->>>>>>> 498544e (docker update for merge)
           return;
         }
 
@@ -322,31 +302,16 @@ const widgetHtml = `
         const fragments = sanitized.split('\n');
         const nodes = [];
 
-<<<<<<< HEAD
         for (let i = 0; i < fragments.length; i += 1) {
           if (i > 0) {
             nodes.push(document.createElement('br'));
           }
           nodes.push(document.createTextNode(fragments[i]));
         }
-=======
-        const badgeClass = car.valid ? 'verified' : 'unsigned';
-        const badgeLabel = car.valid ? '✓ Verified' : '⚠ Unsigned';
-        const signerDisplay = car.valid ? \`\${car.signer.slice(0, 24)}...\` : 'unsigned';
-        const signerTitle = car.valid ? 'Click to copy signer' : 'Unsigned bundle - no signer';
-
-        // Escape all user-controllable content to prevent XSS
-        const safeSummary = escapeHtml(summary).replace(/\\n/g, '<br>');
-        const safeSignerDisplay = escapeHtml(signerDisplay);
-        const safeSignerTitle = escapeHtml(signerTitle);
-        const safeHash = escapeHtml(car.hash);
-        const safeDownloadUrl = escapeHtml(car.download_url);
->>>>>>> 498544e (docker update for merge)
 
         summaryEl.replaceChildren(...nodes);
       };
 
-<<<<<<< HEAD
       const render = () => {
         const toolOutput = getSnapshot();
 
@@ -396,47 +361,6 @@ const widgetHtml = `
         downloadButton.onclick = car.download_url
           ? () => window.openai?.openExternal?.({ href: car.download_url })
           : null;
-=======
-            <div class="summary-content">
-              <p>\${safeSummary}</p>
-            </div>
-
-            <div class="verification-info">
-              <div class="info-row">
-                <span class="label">Signer:</span>
-                <code class="value" id="signer-value" title="\${safeSignerTitle}" style="\${car.valid ? 'cursor: pointer;' : ''}">
-                  \${safeSignerDisplay}
-                </code>
-              </div>
-              <div class="info-row">
-                <span class="label">Tree Hash:</span>
-                <code class="value" title="\${safeHash}">\${escapeHtml(car.hash.slice(0, 20))}...</code>
-              </div>
-              <div class="info-row">
-                <span class="label">Processed:</span>
-                <span class="value">\${meta.bytes_processed.toLocaleString()} bytes in \${meta.runtime_ms}ms</span>
-              </div>
-            </div>
-
-            <div class="actions">
-              <button class="btn btn-primary" id="download-btn">
-                Download CAR Bundle
-              </button>
-            </div>
-          </div>
-        \`;
-
-        // Add event listeners after DOM is created (safer than inline onclick)
-        if (car.valid) {
-          document.getElementById('signer-value')?.addEventListener('click', () => {
-            navigator.clipboard.writeText(car.signer);
-          });
-        }
-
-        document.getElementById('download-btn')?.addEventListener('click', () => {
-          window.openai.openExternal({ href: car.download_url });
-        });
->>>>>>> 498544e (docker update for merge)
       };
 
       subscribe(() => {
@@ -514,7 +438,6 @@ server.registerTool(
       let source = { url: 'inline://text', content: input.text ?? '' };
 
       if (input.mode === 'file' && input.fileUrl) {
-<<<<<<< HEAD
         const safeUrl = await validateRemoteFileUrl(input.fileUrl);
         console.log(`Fetching content from: ${safeUrl.toString()}`);
         const response = await fetchRemoteFile(safeUrl);
@@ -522,26 +445,6 @@ server.registerTool(
           throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
         }
         const content = await readResponseBodyWithLimit(response, REMOTE_FILE_MAX_BYTES);
-=======
-        console.log(`Fetching content from: ${input.fileUrl}`);
-
-        // SSRF Protection: Validate URL before fetching
-        await validateSafeUrl(input.fileUrl);
-
-        const response = await fetch(input.fileUrl, {
-          redirect: 'follow',
-          signal: AbortSignal.timeout(10000), // 10 second timeout
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
-        }
-
-        // File size protection: Check Content-Length before reading body
-        const contentLength = response.headers.get('content-length');
-        validateFileSize(contentLength, MAX_FILE_SIZE_BYTES);
-
->>>>>>> 498544e (docker update for merge)
         source = {
           url: safeUrl.toString(),
           content
@@ -577,15 +480,12 @@ server.registerTool(
 
       // 5. Store and generate download URL
       const id = randomUUID();
-<<<<<<< HEAD
       bundleStorage.store(id, zipBuffer);
-=======
-      zipStore.set(id, zipBuffer);
->>>>>>> 498544e (docker update for merge)
       const downloadUrl = `${PUBLIC_URL}/download/${id}`;
 
+      const stats = bundleStorage.getStats();
       console.log(`[cache] Stored ZIP bundle: ${id} (${(zipBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
-      console.log(`[cache] Cache stats: ${zipStore.size} bundles, ${(zipStore.calculatedSize! / 1024 / 1024).toFixed(2)}MB total`);
+      console.log(`[cache] Cache stats: ${stats.totalEntries} bundles, ${(stats.totalBytes / 1024 / 1024).toFixed(2)}MB total`);
 
       // 6. Parse car.json for metadata
       const carData = JSON.parse(artifacts['car.json']);
@@ -675,25 +575,17 @@ app.get('/download/:id', (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-<<<<<<< HEAD
   const bundle = bundleStorage.getStream(req.params.id);
 
   if (!bundle) {
     console.warn(`Download requested for missing or expired bundle: ${req.params.id}`);
-=======
-  const buffer = zipStore.get(req.params.id);
-
-  if (!buffer) {
-    console.log(`[download] Bundle not found or expired: ${req.params.id}`);
->>>>>>> 498544e (docker update for merge)
     return res.status(404).json({ error: 'Bundle not found or expired' });
   }
 
-  console.log(`[download] Serving ZIP bundle: ${req.params.id} (${(buffer.length / 1024 / 1024).toFixed(2)}MB)`);
+  console.log(`[download] Serving ZIP bundle: ${req.params.id} (${(bundle.size / 1024 / 1024).toFixed(2)}MB)`);
 
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="verifiable.car.zip"');
-<<<<<<< HEAD
   res.setHeader('Content-Length', bundle.size.toString());
 
   pipeline(bundle.stream, res)
@@ -710,9 +602,6 @@ app.get('/download/:id', (req, res) => {
         res.end();
       }
     });
-=======
-  res.send(buffer);
->>>>>>> 498544e (docker update for merge)
 });
 
 // MCP endpoint wired through the official streamable HTTP transport
