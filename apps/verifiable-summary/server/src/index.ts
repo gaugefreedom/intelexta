@@ -25,6 +25,24 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 const ED25519_SECRET_KEY = process.env.ED25519_SECRET_KEY;
 
+const DEFAULT_REMOTE_FILE_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
+const REMOTE_FILE_MAX_BYTES = (() => {
+  const configured = process.env.REMOTE_FILE_MAX_BYTES;
+  if (!configured) {
+    return DEFAULT_REMOTE_FILE_MAX_BYTES;
+  }
+
+  const parsed = Number.parseInt(configured, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    console.warn(
+      `⚠️  REMOTE_FILE_MAX_BYTES is invalid (${configured}). Falling back to ${DEFAULT_REMOTE_FILE_MAX_BYTES}.`
+    );
+    return DEFAULT_REMOTE_FILE_MAX_BYTES;
+  }
+
+  return parsed;
+})();
+
 // Validate production environment
 if (!process.env.PUBLIC_URL || PUBLIC_URL.includes('localhost')) {
   console.warn('⚠️  WARNING: PUBLIC_URL is not set to production domain!');
@@ -42,6 +60,71 @@ const server = new McpServer({
 
 // In-memory store for ZIP bundles (TODO: add TTL cleanup)
 const zipStore = new Map<string, { buffer: Buffer; createdAt: number }>();
+
+function createOversizeError(limit: number): Error {
+  return new Error(`Remote file is too large. Maximum allowed size is ${limit} bytes.`);
+}
+
+async function readResponseBodyWithLimit(response: Response, limit: number): Promise<string> {
+  const headerValue = response.headers.get('content-length');
+  const parsedLength = headerValue ? Number.parseInt(headerValue, 10) : undefined;
+
+  if (Number.isFinite(parsedLength) && typeof parsedLength === 'number') {
+    if (parsedLength > limit) {
+      if (response.body) {
+        await response.body.cancel('Exceeded size limit');
+      }
+      throw createOversizeError(limit);
+    }
+
+    const text = await response.text();
+    const byteLength = Buffer.byteLength(text, 'utf-8');
+    if (byteLength > limit) {
+      throw createOversizeError(limit);
+    }
+    return text;
+  }
+
+  if (!response.body) {
+    throw new Error('Remote response is missing a readable body.');
+  }
+
+  const body = response.body;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let result = '';
+  let done = false;
+
+  while (!done) {
+    const { value, done: streamDone } = await reader.read();
+    done = streamDone;
+
+    if (done) {
+      result += decoder.decode();
+      break;
+    }
+
+    if (value) {
+      received += value.byteLength;
+      if (received > limit) {
+        reader.releaseLock();
+        await body.cancel('Exceeded size limit');
+        throw createOversizeError(limit);
+      }
+
+      result += decoder.decode(value, { stream: true });
+    }
+  }
+
+  return result;
+}
+
+export const internal = {
+  readResponseBodyWithLimit,
+  createOversizeError,
+  REMOTE_FILE_MAX_BYTES
+};
 
 // Clean up old ZIPs every hour
 setInterval(() => {
@@ -303,9 +386,10 @@ server.registerTool(
         if (!response.ok) {
           throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
         }
+        const content = await readResponseBodyWithLimit(response, REMOTE_FILE_MAX_BYTES);
         source = {
           url: safeUrl.toString(),
-          content: await response.text()
+          content
         };
       }
 
@@ -436,8 +520,9 @@ app.post('/mcp', express.json({ limit: '10mb' }), async (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`
+if (process.env.VITEST_WORKER_ID === undefined) {
+  app.listen(PORT, () => {
+    console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║  Verifiable Summary MCP Server                            ║
 ╠═══════════════════════════════════════════════════════════╣
@@ -459,4 +544,5 @@ Next steps:
   2. Add MCP connector in ChatGPT Developer Mode
   3. Invoke "summarize_content" tool
 `);
-});
+  });
+}
