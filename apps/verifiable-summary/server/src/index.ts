@@ -11,11 +11,13 @@ import { z } from 'zod';
 import express from 'express';
 import JSZip from 'jszip';
 import { randomUUID } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { config } from 'dotenv';
 
 import { generateProofBundle } from './provenance.js';
 import { summarize } from './summarizer.js';
 import { fetchRemoteFile, validateRemoteFileUrl } from './urlValidation.js';
+import { LimitedBundleStorage } from './storage.js';
 
 // Load environment variables
 config();
@@ -43,6 +45,54 @@ const REMOTE_FILE_MAX_BYTES = (() => {
   return parsed;
 })();
 
+function parsePositiveInteger(envVar: string | undefined, fallback: number, name: string): number {
+  if (!envVar) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(envVar, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    console.warn(
+      `⚠️  ${name} is invalid (${envVar}). Falling back to ${fallback}.`
+    );
+    return fallback;
+  }
+
+  return parsed;
+}
+
+const DEFAULT_BUNDLE_MAX_ENTRIES = 32;
+const DEFAULT_BUNDLE_MAX_TOTAL_BYTES = 128 * 1024 * 1024; // 128 MiB
+const DEFAULT_BUNDLE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_BUNDLE_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+const BUNDLE_MAX_ENTRIES = parsePositiveInteger(
+  process.env.BUNDLE_STORAGE_MAX_ENTRIES,
+  DEFAULT_BUNDLE_MAX_ENTRIES,
+  'BUNDLE_STORAGE_MAX_ENTRIES'
+);
+
+const BUNDLE_MAX_TOTAL_BYTES = parsePositiveInteger(
+  process.env.BUNDLE_STORAGE_MAX_TOTAL_BYTES,
+  DEFAULT_BUNDLE_MAX_TOTAL_BYTES,
+  'BUNDLE_STORAGE_MAX_TOTAL_BYTES'
+);
+
+const BUNDLE_TTL_MS = parsePositiveInteger(
+  process.env.BUNDLE_STORAGE_TTL_MS,
+  DEFAULT_BUNDLE_TTL_MS,
+  'BUNDLE_STORAGE_TTL_MS'
+);
+
+const BUNDLE_CLEANUP_INTERVAL_MS = Math.min(
+  parsePositiveInteger(
+    process.env.BUNDLE_STORAGE_CLEANUP_INTERVAL_MS,
+    DEFAULT_BUNDLE_CLEANUP_INTERVAL_MS,
+    'BUNDLE_STORAGE_CLEANUP_INTERVAL_MS'
+  ),
+  BUNDLE_TTL_MS
+);
+
 // Validate production environment
 if (!process.env.PUBLIC_URL || PUBLIC_URL.includes('localhost')) {
   console.warn('⚠️  WARNING: PUBLIC_URL is not set to production domain!');
@@ -58,8 +108,15 @@ const server = new McpServer({
   version: '0.1.0'
 });
 
-// In-memory store for ZIP bundles (TODO: add TTL cleanup)
-const zipStore = new Map<string, { buffer: Buffer; createdAt: number }>();
+const bundleStorage = new LimitedBundleStorage({
+  maxEntries: BUNDLE_MAX_ENTRIES,
+  maxTotalBytes: BUNDLE_MAX_TOTAL_BYTES,
+  ttlMs: BUNDLE_TTL_MS
+});
+
+console.log(
+  `Bundle storage configured with maxEntries=${BUNDLE_MAX_ENTRIES}, maxTotalBytes=${BUNDLE_MAX_TOTAL_BYTES}, ttlMs=${BUNDLE_TTL_MS}`
+);
 
 function createOversizeError(limit: number): Error {
   return new Error(`Remote file is too large. Maximum allowed size is ${limit} bytes.`);
@@ -126,18 +183,17 @@ export const internal = {
   REMOTE_FILE_MAX_BYTES
 };
 
-// Clean up old ZIPs every hour
-setInterval(() => {
-  const now = Date.now();
-  const ONE_HOUR = 3600000;
-
-  for (const [id, { createdAt }] of zipStore.entries()) {
-    if (now - createdAt > ONE_HOUR) {
-      zipStore.delete(id);
-      console.log(`Cleaned up expired ZIP: ${id}`);
-    }
+// Clean up expired bundles on an interval to keep memory bounded
+const cleanupTimer = setInterval(() => {
+  const removed = bundleStorage.cleanupExpired();
+  if (removed > 0) {
+    console.log(`Cleaned up ${removed} expired bundle${removed === 1 ? '' : 's'} from storage.`);
   }
-}, 3600000);
+}, BUNDLE_CLEANUP_INTERVAL_MS);
+
+if (typeof cleanupTimer.unref === 'function') {
+  cleanupTimer.unref();
+}
 
 // ============================================================================
 // Register UI Resource (Skybridge Widget)
@@ -422,7 +478,7 @@ server.registerTool(
 
       // 5. Store and generate download URL
       const id = randomUUID();
-      zipStore.set(id, { buffer: zipBuffer, createdAt: Date.now() });
+      bundleStorage.store(id, zipBuffer);
       const downloadUrl = `${PUBLIC_URL}/download/${id}`;
 
       // 6. Parse car.json for metadata
@@ -486,15 +542,31 @@ app.get('/download/:id', (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  const entry = zipStore.get(req.params.id);
+  const bundle = bundleStorage.getStream(req.params.id);
 
-  if (!entry) {
+  if (!bundle) {
+    console.warn(`Download requested for missing or expired bundle: ${req.params.id}`);
     return res.status(404).json({ error: 'Bundle not found or expired' });
   }
 
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="verifiable.car.zip"');
-  res.send(entry.buffer);
+  res.setHeader('Content-Length', bundle.size.toString());
+
+  pipeline(bundle.stream, res)
+    .then(() => {
+      console.log(
+        `Streamed bundle ${req.params.id} (${bundle.size} bytes, created at ${new Date(bundle.createdAt).toISOString()}).`
+      );
+    })
+    .catch((error) => {
+      console.error(`Failed to stream bundle ${req.params.id}:`, error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream bundle' });
+      } else {
+        res.end();
+      }
+    });
 });
 
 // MCP endpoint wired through the official streamable HTTP transport
