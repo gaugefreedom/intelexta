@@ -276,6 +276,7 @@ const widgetHtml = `
 
       const summaryCard = root.querySelector('[data-summary-card]');
       const loadingEl = root.querySelector('[data-loading]');
+      const defaultLoadingText = loadingEl?.textContent ?? '';
       const badgeEl = root.querySelector('[data-badge]');
       const summaryEl = root.querySelector('[data-summary-text]');
       const signerEl = root.querySelector('[data-signer-value]');
@@ -288,7 +289,32 @@ const widgetHtml = `
         return () => window.removeEventListener('openai:set_globals', callback);
       };
 
-      const getSnapshot = () => window.openai?.toolOutput;
+      const getSnapshot = () => {
+        const toolOutput = window.openai?.toolOutput;
+        if (!toolOutput || typeof toolOutput !== 'object') {
+          return undefined;
+        }
+
+        const structured =
+          toolOutput && typeof toolOutput === 'object'
+            ? toolOutput.structuredContent
+            : undefined;
+
+        if (structured && typeof structured === 'object') {
+          return structured;
+        }
+
+        if (
+          'summary' in toolOutput ||
+          'car' in toolOutput ||
+          'meta' in toolOutput
+        ) {
+          return toolOutput;
+        }
+
+        console.warn('Unsupported toolOutput shape', toolOutput);
+        return undefined;
+      };
 
       let currentOutput = getSnapshot();
 
@@ -322,13 +348,24 @@ const widgetHtml = `
         if (!toolOutput) {
           summaryCard.hidden = true;
           loadingEl.hidden = false;
+          loadingEl.textContent = defaultLoadingText;
           return;
         }
 
+        loadingEl.textContent = defaultLoadingText;
         loadingEl.hidden = true;
         summaryCard.hidden = false;
 
-        const { summary = '', car, meta } = toolOutput;
+        const summary = toolOutput.summary ?? '';
+        const car = toolOutput.car;
+        const meta = toolOutput.meta;
+
+        if (!car || !meta) {
+          summaryCard.hidden = true;
+          loadingEl.hidden = false;
+          loadingEl.textContent = 'Verification data unavailable yet. Please try again shortly.';
+          return;
+        }
 
         setSummaryContent(summary);
 
