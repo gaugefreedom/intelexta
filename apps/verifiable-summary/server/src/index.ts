@@ -15,6 +15,7 @@ import { config } from 'dotenv';
 
 import { generateProofBundle } from './provenance.js';
 import { summarize } from './summarizer.js';
+import { fetchRemoteFile, validateRemoteFileUrl } from './urlValidation.js';
 
 // Load environment variables
 config();
@@ -232,13 +233,14 @@ server.registerTool(
       let source = { url: 'inline://text', content: input.text ?? '' };
 
       if (input.mode === 'file' && input.fileUrl) {
-        console.log(`Fetching content from: ${input.fileUrl}`);
-        const response = await fetch(input.fileUrl);
+        const safeUrl = await validateRemoteFileUrl(input.fileUrl);
+        console.log(`Fetching content from: ${safeUrl.toString()}`);
+        const response = await fetchRemoteFile(safeUrl);
         if (!response.ok) {
           throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
         }
         source = {
-          url: input.fileUrl,
+          url: safeUrl.toString(),
           content: await response.text()
         };
       }
