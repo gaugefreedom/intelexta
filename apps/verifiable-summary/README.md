@@ -245,6 +245,21 @@ To confirm that summaries render safely (and `<script>` tags do not execute insi
      openExternal: ({ href }) => console.log('openExternal called with', href)
    };
    window.dispatchEvent(new Event('openai:set_globals'));
+
+    // Optionally simulate the structuredContent payload used by the live tool.
+    window.openai.toolOutput = {
+      structuredContent: {
+        summary: "<script>window.__xss_executed = true</script>\nSecond line",
+        car: {
+          valid: true,
+          signer: 'abcdefghijklmnopqrstuvwxyz123456',
+          hash: '0123456789abcdef0123456789abcdef01234567',
+          download_url: 'https://example.com/fake.car'
+        },
+        meta: { bytes_processed: 1234, runtime_ms: 56 }
+      }
+    };
+    window.dispatchEvent(new Event('openai:set_globals'));
    ```
 4. Verify that no alert fires and `window.__xss_executed` remains `undefined`. The `<script>` tag should render as plain text with line breaks preserved.
 
