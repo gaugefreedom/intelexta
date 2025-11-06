@@ -92,9 +92,56 @@ const widgetHtml = `
   </style>
 </head>
 <body>
-  <div id="root"><div class="loading">Loading...</div></div>
+  <div id="root">
+    <div class="summary-card" data-summary-card hidden>
+      <div class="header">
+        <h3>Verifiable Summary</h3>
+        <span class="badge" data-badge></span>
+      </div>
+
+      <div class="summary-content">
+        <p class="summary-text" data-summary-text></p>
+      </div>
+
+      <div class="verification-info">
+        <div class="info-row">
+          <span class="label">Signer:</span>
+          <code class="value" data-signer-value title=""></code>
+        </div>
+        <div class="info-row">
+          <span class="label">Tree Hash:</span>
+          <code class="value" data-tree-hash title=""></code>
+        </div>
+        <div class="info-row">
+          <span class="label">Processed:</span>
+          <span class="value" data-processed></span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" type="button" data-download>
+          Download CAR Bundle
+        </button>
+      </div>
+    </div>
+    <div class="loading" data-loading>Generating summary...</div>
+  </div>
   <script>
     (function() {
+      const root = document.getElementById('root');
+      if (!root) {
+        return;
+      }
+
+      const summaryCard = root.querySelector('[data-summary-card]');
+      const loadingEl = root.querySelector('[data-loading]');
+      const badgeEl = root.querySelector('[data-badge]');
+      const summaryEl = root.querySelector('[data-summary-text]');
+      const signerEl = root.querySelector('[data-signer-value]');
+      const treeHashEl = root.querySelector('[data-tree-hash]');
+      const processedEl = root.querySelector('[data-processed]');
+      const downloadButton = root.querySelector('[data-download]');
+
       const subscribe = (callback) => {
         window.addEventListener('openai:set_globals', callback);
         return () => window.removeEventListener('openai:set_globals', callback);
@@ -104,58 +151,75 @@ const widgetHtml = `
 
       let currentOutput = getSnapshot();
 
-      const render = () => {
-        const toolOutput = getSnapshot();
-        if (!toolOutput) {
-          document.getElementById('root').innerHTML = '<div class="loading">Generating summary...</div>';
+      const setSummaryContent = (text) => {
+        if (!summaryEl) {
           return;
         }
 
-        const { summary, car, meta } = toolOutput;
+        summaryEl.textContent = text ?? '';
+        const sanitized = summaryEl.textContent || '';
+        const fragments = sanitized.split('\n');
+        const nodes = [];
 
-        const badgeClass = car.valid ? 'verified' : 'unsigned';
-        const badgeLabel = car.valid ? '✓ Verified' : '⚠ Unsigned';
-        const signerDisplay = car.valid ? \`\${car.signer.slice(0, 24)}...\` : 'unsigned';
-        const signerTitle = car.valid ? 'Click to copy signer' : 'Unsigned bundle - no signer';
-        const signerOnclick = car.valid ? \`onclick="navigator.clipboard.writeText('\${car.signer}')"\` : '';
+        for (let i = 0; i < fragments.length; i += 1) {
+          if (i > 0) {
+            nodes.push(document.createElement('br'));
+          }
+          nodes.push(document.createTextNode(fragments[i]));
+        }
 
-        document.getElementById('root').innerHTML = \`
-          <div class="summary-card">
-            <div class="header">
-              <h3>Verifiable Summary</h3>
-              <span class="badge \${badgeClass}">
-                \${badgeLabel}
-              </span>
-            </div>
+        summaryEl.replaceChildren(...nodes);
+      };
 
-            <div class="summary-content">
-              <p>\${summary.replace(/\\n/g, '<br>')}</p>
-            </div>
+      const render = () => {
+        const toolOutput = getSnapshot();
 
-            <div class="verification-info">
-              <div class="info-row">
-                <span class="label">Signer:</span>
-                <code class="value" \${signerOnclick} title="\${signerTitle}">
-                  \${signerDisplay}
-                </code>
-              </div>
-              <div class="info-row">
-                <span class="label">Tree Hash:</span>
-                <code class="value" title="\${car.hash}">\${car.hash.slice(0, 20)}...</code>
-              </div>
-              <div class="info-row">
-                <span class="label">Processed:</span>
-                <span class="value">\${meta.bytes_processed.toLocaleString()} bytes in \${meta.runtime_ms}ms</span>
-              </div>
-            </div>
+        if (!summaryCard || !loadingEl || !badgeEl || !signerEl || !treeHashEl || !processedEl || !downloadButton) {
+          return;
+        }
 
-            <div class="actions">
-              <button class="btn btn-primary" onclick="window.openai.openExternal({ href: '\${car.download_url}' })">
-                Download CAR Bundle
-              </button>
-            </div>
-          </div>
-        \`;
+        if (!toolOutput) {
+          summaryCard.hidden = true;
+          loadingEl.hidden = false;
+          return;
+        }
+
+        loadingEl.hidden = true;
+        summaryCard.hidden = false;
+
+        const { summary = '', car, meta } = toolOutput;
+
+        setSummaryContent(summary);
+
+        if (car.valid) {
+          badgeEl.textContent = '✓ Verified';
+          badgeEl.classList.add('verified');
+          badgeEl.classList.remove('unsigned');
+          signerEl.textContent = car.signer.slice(0, 24) + '...';
+          signerEl.title = 'Click to copy signer';
+          signerEl.onclick = () => {
+            if (navigator.clipboard?.writeText) {
+              navigator.clipboard.writeText(car.signer);
+            }
+          };
+        } else {
+          badgeEl.textContent = '⚠ Unsigned';
+          badgeEl.classList.add('unsigned');
+          badgeEl.classList.remove('verified');
+          signerEl.textContent = 'unsigned';
+          signerEl.title = 'Unsigned bundle - no signer';
+          signerEl.onclick = null;
+        }
+
+        treeHashEl.textContent = car.hash.slice(0, 20) + '...';
+        treeHashEl.title = car.hash;
+        processedEl.textContent =
+          meta.bytes_processed.toLocaleString() + ' bytes in ' + meta.runtime_ms + 'ms';
+
+        downloadButton.disabled = !car.download_url;
+        downloadButton.onclick = car.download_url
+          ? () => window.openai?.openExternal?.({ href: car.download_url })
+          : null;
       };
 
       subscribe(() => {
