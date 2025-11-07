@@ -203,8 +203,7 @@ if (typeof cleanupTimer.unref === 'function') {
 
 // Load widget HTML (will be built by the web project)
 // For now, use a placeholder
-const widgetHtml = `
-<!DOCTYPE html>
+const widgetHtml = String.raw`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -217,12 +216,18 @@ const widgetHtml = `
     .badge { padding: 4px 12px; border-radius: 12px; font-size: 14px; font-weight: 500; }
     .badge.verified { background: #10b981; color: white; }
     .badge.unsigned { background: #f59e0b; color: #1f2937; }
-    .summary-content { padding: 16px; background: #f9fafb; border-radius: 8px; margin-bottom: 16px; line-height: 1.6; }
+    .summary-content { padding: 16px; background: #f9fafb; border-radius: 8px; margin-bottom: 16px; line-height: 1.6; position: relative; }
+    .summary-content.truncated { max-height: 250px; overflow: hidden; }
+    .summary-content.expanded { max-height: 500px; overflow-y: auto; }
+    .read-more-btn { display: block; margin-top: 12px; padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; width: 100%; }
+    .read-more-btn:hover { background: #2563eb; }
     .verification-info { margin-bottom: 16px; }
     .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e5e7eb; }
     .label { font-weight: 500; color: #6b7280; }
-    .value { font-family: monospace; font-size: 14px; cursor: pointer; }
-    .value:hover { color: #3b82f6; }
+    .value { font-family: monospace; font-size: 14px; }
+    .value.clickable { cursor: pointer; position: relative; }
+    .value.clickable:hover { color: #3b82f6; text-decoration: underline; }
+    .value.clickable:hover::after { content: ' 📋'; font-size: 12px; }
     .actions { display: flex; gap: 12px; }
     .btn { padding: 10px 20px; border: none; border-radius: 6px; font-weight: 500; cursor: pointer; }
     .btn-primary { background: #3b82f6; color: white; }
@@ -240,9 +245,10 @@ const widgetHtml = `
         <span class="badge" data-badge></span>
       </div>
 
-      <div class="summary-content">
+      <div class="summary-content" data-summary-content>
         <p class="summary-text" data-summary-text></p>
       </div>
+      <button class="read-more-btn" data-read-more hidden>Read More</button>
 
       <div class="verification-info">
         <div class="info-row">
@@ -278,7 +284,9 @@ const widgetHtml = `
       const loadingEl = root.querySelector('[data-loading]');
       const defaultLoadingText = loadingEl?.textContent ?? '';
       const badgeEl = root.querySelector('[data-badge]');
+      const summaryContentEl = root.querySelector('[data-summary-content]');
       const summaryEl = root.querySelector('[data-summary-text]');
+      const readMoreBtn = root.querySelector('[data-read-more]');
       const signerEl = root.querySelector('[data-signer-value]');
       const treeHashEl = root.querySelector('[data-tree-hash]');
       const processedEl = root.querySelector('[data-processed]');
@@ -291,6 +299,7 @@ const widgetHtml = `
 
       const getSnapshot = () => {
         const toolOutput = window.openai?.toolOutput;
+
         if (!toolOutput || typeof toolOutput !== 'object') {
           return undefined;
         }
@@ -312,7 +321,6 @@ const widgetHtml = `
           return toolOutput;
         }
 
-        console.warn('Unsupported toolOutput shape', toolOutput);
         return undefined;
       };
 
@@ -369,15 +377,49 @@ const widgetHtml = `
 
         setSummaryContent(summary);
 
+        // Check if summary is long enough to need "Read more"
+        const summaryLength = summary.length;
+        const isTruncated = summaryLength > 200;
+
+        if (isTruncated && summaryContentEl && readMoreBtn) {
+          summaryContentEl.classList.add('truncated');
+          readMoreBtn.hidden = false;
+          readMoreBtn.textContent = 'Read More';
+          readMoreBtn.onclick = () => {
+            if (summaryContentEl.classList.contains('truncated')) {
+              summaryContentEl.classList.remove('truncated');
+              summaryContentEl.classList.add('expanded');
+              readMoreBtn.textContent = 'Read Less';
+            } else {
+              summaryContentEl.classList.remove('expanded');
+              summaryContentEl.classList.add('truncated');
+              readMoreBtn.textContent = 'Read More';
+            }
+          };
+        } else if (readMoreBtn) {
+          readMoreBtn.hidden = true;
+          if (summaryContentEl) {
+            summaryContentEl.classList.remove('truncated', 'expanded');
+          }
+        }
+
         if (car.valid) {
           badgeEl.textContent = '✓ Verified';
           badgeEl.classList.add('verified');
           badgeEl.classList.remove('unsigned');
-          signerEl.textContent = car.signer.slice(0, 24) + '...';
-          signerEl.title = 'Click to copy signer';
+          const fullSigner = car.signer;
+          signerEl.textContent = fullSigner.slice(0, 24) + '...';
+          signerEl.title = 'Click to copy full signer key';
+          signerEl.classList.add('clickable');
           signerEl.onclick = () => {
-            if (navigator.clipboard?.writeText) {
-              navigator.clipboard.writeText(car.signer);
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(fullSigner).then(() => {
+                const originalText = signerEl.textContent;
+                signerEl.textContent = 'Copied!';
+                setTimeout(() => {
+                  signerEl.textContent = originalText;
+                }, 1500);
+              });
             }
           };
         } else {
@@ -386,11 +428,25 @@ const widgetHtml = `
           badgeEl.classList.remove('verified');
           signerEl.textContent = 'unsigned';
           signerEl.title = 'Unsigned bundle - no signer';
+          signerEl.classList.remove('clickable');
           signerEl.onclick = null;
         }
 
-        treeHashEl.textContent = car.hash.slice(0, 20) + '...';
-        treeHashEl.title = car.hash;
+        const fullHash = car.hash;
+        treeHashEl.textContent = fullHash.slice(0, 20) + '...';
+        treeHashEl.title = 'Click to copy full tree hash';
+        treeHashEl.classList.add('clickable');
+        treeHashEl.onclick = () => {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(fullHash).then(() => {
+              const originalText = treeHashEl.textContent;
+              treeHashEl.textContent = 'Copied!';
+              setTimeout(() => {
+                treeHashEl.textContent = originalText;
+              }, 1500);
+            });
+          }
+        };
         processedEl.textContent =
           meta.bytes_processed.toLocaleString() + ' bytes in ' + meta.runtime_ms + 'ms';
 
