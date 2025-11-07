@@ -104,59 +104,59 @@ jobs:
   # ------------------------------------------------------------------
   # JOB 3: BUILD ALL DESKTOP APPS
   # ------------------------------------------------------------------
-  build-desktop:
-    name: Build Desktop App
-    needs: create-release
-    strategy:
-      fail-fast: false
-      matrix:
-        # We explicitly use ubuntu-22.04 for GLIBC compatibility
-        platform: [macos-latest, ubuntu-22.04, windows-latest]
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v4
+  # build-desktop:
+  #   name: Build Desktop App
+  #   needs: create-release
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       # We explicitly use ubuntu-22.04 for GLIBC compatibility
+  #       platform: [macos-latest, ubuntu-22.04, windows-latest]
+  #   runs-on: ${{ matrix.platform }}
+  #   steps:
+  #     - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-          cache-dependency-path: ./app/package-lock.json
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 20
+  #         cache: 'npm'
+  #         cache-dependency-path: ./app/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+  #     - uses: dtolnay/rust-toolchain@stable
       
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+  #     - name: Cache Rust dependencies
+  #       uses: Swatinem/rust-cache@v2
 
-      - name: Install frontend deps
-        working-directory: ./app
-        run: npm ci
+  #     - name: Install frontend deps
+  #       working-directory: ./app
+  #       run: npm ci
 
-      - name: Build frontend
-        working-directory: ./app
-        run: npm run build
-      - name: Install Linux dependencies (Ubuntu 22.04)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libsoup-3.0-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-          # sanity check: fail early if pkg-config can’t see the .pc files
-          pkg-config --print-errors --exists javascriptcoregtk-4.1 libsoup-3.0
+  #     - name: Build frontend
+  #       working-directory: ./app
+  #       run: npm run build
+  #     - name: Install Linux dependencies (Ubuntu 22.04)
+  #       if: matrix.platform == 'ubuntu-22.04'
+  #       run: |
+  #         sudo apt-get update
+  #         sudo apt-get install -y \
+  #           libgtk-3-dev \
+  #           libwebkit2gtk-4.1-dev \
+  #           libjavascriptcoregtk-4.1-dev \
+  #           libsoup-3.0-dev \
+  #           libayatana-appindicator3-dev \
+  #           librsvg2-dev \
+  #           patchelf
+  #         # sanity check: fail early if pkg-config can’t see the .pc files
+  #         pkg-config --print-errors --exists javascriptcoregtk-4.1 libsoup-3.0
 
-      - name: Build Tauri App and upload to existing draft
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: .
-          # Reuse the draft created in job 1:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          releaseDraft: true
-          tagName: ${{ github.ref_name }}
+  #     - name: Build Tauri App and upload to existing draft
+  #       uses: tauri-apps/tauri-action@v0
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       with:
+  #         projectPath: .
+  #         # Reuse the draft created in job 1:
+  #         releaseId: ${{ needs.create-release.outputs.release_id }}
+  #         releaseDraft: true
+  #         tagName: ${{ github.ref_name }}
 
