@@ -1,8 +1,9 @@
 # .github/workflows/release.yml
 #
-# This is the single, perfected workflow for your alpha release.
-# It fixes the GLIBC bug and the missing CLI dependencies.
-# [FIX]: Added libsoup-3.0-dev to fix build failures.
+# [FIXED WORKFLOW]
+# This workflow builds binaries in parallel, saves them as artifacts,
+# and then uploads them all at once in a final, serial job.
+# This avoids the parallel upload race condition.
 
 name: Create Unified Release
 
@@ -20,7 +21,7 @@ concurrency:
 
 jobs:
   # ------------------------------------------------------------------
-  # JOB 1: CREATE THE DRAFT RELEASE
+  # JOB 1: CREATE THE DRAFT RELEASE (No change)
   # ------------------------------------------------------------------
   create-release:
     name: Create Draft Release
@@ -41,7 +42,7 @@ jobs:
           prerelease: true
 
   # ------------------------------------------------------------------
-  # JOB 2: BUILD ALL CLI VERIFIERS
+  # JOB 2: BUILD ALL CLI VERIFIERS (IN PARALLEL)
   # ------------------------------------------------------------------
   build-cli:
     name: Build CLI Verifier
@@ -57,8 +58,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # --- [THE FIX] ---
-      # Added libsoup-3.0-dev
       - name: Install Linux dependencies (Ubuntu 22.04)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -71,7 +70,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-          # sanity check: fail early if pkg-config can’t see the .pc files
           pkg-config --print-errors --exists javascriptcoregtk-4.1 libsoup-3.0
 
       - name: Build CLI binary
@@ -87,7 +85,6 @@ jobs:
             echo "BINARY_PATH=${BIN_PATH}.exe" >> $GITHUB_OUTPUT
             echo "ASSET_NAME=${PKG_NAME}-windows-x64.exe" >> $GITHUB_OUTPUT
           elif [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
-            # macos-latest is Apple Silicon (arm64)
             echo "BINARY_PATH=${BIN_PATH}" >> $GITHUB_OUTPUT
             echo "ASSET_NAME=${PKG_NAME}-macos-arm64" >> $GITHUB_OUTPUT
           else
@@ -95,68 +92,40 @@ jobs:
             echo "ASSET_NAME=${PKG_NAME}-linux-x64" >> $GITHUB_OUTPUT
           fi
 
-      - name: Upload CLI asset to draft release
+      # --- [ NEW STEP ] ---
+      # This step uploads the built binary as a workflow artifact.
+      # The 'upload-assets' job will download this later.
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.platform }}
+          path: ${{ steps.set_names.outputs.BINARY_PATH }}
+          safe_name: ${{ steps.set_names.outputs.ASSET_NAME }}
+
+  # ------------------------------------------------------------------
+  # JOB 3: UPLOAD ALL ASSETS (NEW JOB)
+  # ------------------------------------------------------------------
+  upload-assets:
+    name: Upload Release Assets
+    needs: [create-release, build-cli] # Waits for builds to finish
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- [ NEW STEP ] ---
+      # Download all the artifacts saved by the 'build-cli' jobs
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: cli-* # Downloads all artifacts starting with 'cli-'
+          merge-multiple: true # Puts them all in one 'dist' folder
+
+      # --- [ NEW STEP ] ---
+      # Upload all files from the 'dist' folder in ONE command
+      - name: Upload all assets to draft release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "${{ steps.set_names.outputs.BINARY_PATH }}#${{ steps.set_names.outputs.ASSET_NAME }}" --clobber
-
-  # ------------------------------------------------------------------
-  # JOB 3: BUILD ALL DESKTOP APPS
-  # ------------------------------------------------------------------
-  # build-desktop:
-  #   name: Build Desktop App
-  #   needs: create-release
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       # We explicitly use ubuntu-22.04 for GLIBC compatibility
-  #       platform: [macos-latest, ubuntu-22.04, windows-latest]
-  #   runs-on: ${{ matrix.platform }}
-  #   steps:
-  #     - uses: actions/checkout@v4
-
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 20
-  #         cache: 'npm'
-  #         cache-dependency-path: ./app/package-lock.json
-
-  #     - uses: dtolnay/rust-toolchain@stable
-      
-  #     - name: Cache Rust dependencies
-  #       uses: Swatinem/rust-cache@v2
-
-  #     - name: Install frontend deps
-  #       working-directory: ./app
-  #       run: npm ci
-
-  #     - name: Build frontend
-  #       working-directory: ./app
-  #       run: npm run build
-  #     - name: Install Linux dependencies (Ubuntu 22.04)
-  #       if: matrix.platform == 'ubuntu-22.04'
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y \
-  #           libgtk-3-dev \
-  #           libwebkit2gtk-4.1-dev \
-  #           libjavascriptcoregtk-4.1-dev \
-  #           libsoup-3.0-dev \
-  #           libayatana-appindicator3-dev \
-  #           librsvg2-dev \
-  #           patchelf
-  #         # sanity check: fail early if pkg-config can’t see the .pc files
-  #         pkg-config --print-errors --exists javascriptcoregtk-4.1 libsoup-3.0
-
-  #     - name: Build Tauri App and upload to existing draft
-  #       uses: tauri-apps/tauri-action@v0
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       with:
-  #         projectPath: .
-  #         # Reuse the draft created in job 1:
-  #         releaseId: ${{ needs.create-release.outputs.release_id }}
-  #         releaseDraft: true
-  #         tagName: ${{ github.ref_name }}
-
+        run: |
+          # Use a simple glob to upload everything in the 'dist' folder
+          gh release upload "${{ github.ref_name }}" dist/* --clobber
