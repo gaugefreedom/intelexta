@@ -1,13 +1,15 @@
 # .github/workflows/release.yml
 #
-# [FIXED WORKFLOW v2]
-# This workflow builds binaries in parallel, saves them as artifacts,
-# and then uploads them all at once in a final, serial job.
+# [FIXED WORKFLOW v3]
 #
-# Fixes:
-# 1. Adds 'actions/checkout@v4' to 'upload-assets' to fix 'not a git repository' error.
-# 2. Fixes 'actions/upload-artifact' step to use the correct 'name' parameter,
-#    which also fixes the 'Unexpected input(s) safe_name' warning.
+# This workflow fixes the file collision problem.
+#
+# Fix:
+# 1. Renames the binary (e.g., to 'intelexta-verify-linux-x64')
+#    *immediately* after building.
+# 2. Uploads this *renamed file* as the artifact.
+# 3. The 'upload-assets' job now downloads 3 unique files and
+#    uploads them all successfully.
 
 name: Create Unified Release
 
@@ -46,7 +48,7 @@ jobs:
           prerelease: true
 
   # ------------------------------------------------------------------
-  # JOB 2: BUILD ALL CLI VERIFIERS (IN PARALLEL)
+  # JOB 2: BUILD ALL CLI VERIFIERS (FIXED)
   # ------------------------------------------------------------------
   build-cli:
     name: Build CLI Verifier
@@ -95,18 +97,24 @@ jobs:
             echo "ASSET_NAME=${PKG_NAME}-linux-x64" >> $GITHUB_OUTPUT
           fi
 
-      # --- [ FIX 1: Corrected artifact upload ] ---
-      # This now uses the 'ASSET_NAME' as the artifact 'name'.
-      # The 'safe_name' parameter (which was a bug) is removed.
+      # --- [ FINAL FIX 1: Rename the binary ] ---
+      # This renames the file from 'intelexta-verify' to
+      # 'intelexta-verify-linux-x64' (or macos/windows).
+      - name: Rename binary for artifact
+        shell: bash
+        run: mv ${{ steps.set_names.outputs.BINARY_PATH }} ${{ steps.set_names.outputs.ASSET_NAME }}
+
+      # --- [ FINAL FIX 2: Upload the *renamed* file ] ---
+      # The artifact is now a zip containing the uniquely-named file.
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.set_names.outputs.ASSET_NAME }}
-          path: ${{ steps.set_names.outputs.BINARY_PATH }}
-          retention-days: 1 # We only need this for the next job
+          name: cli-artifact-${{ matrix.platform }} # A temporary name for the artifact zip
+          path: ${{ steps.set_names.outputs.ASSET_NAME }} # Upload the renamed file
+          retention-days: 1
 
   # ------------------------------------------------------------------
-  # JOB 3: UPLOAD ALL ASSETS (FIXED JOB)
+  # JOB 3: UPLOAD ALL ASSETS (FIXED)
   # ------------------------------------------------------------------
   upload-assets:
     name: Upload Release Assets
@@ -114,25 +122,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # --- [ FIX 2: Added checkout ] ---
-      # This fixes the "fatal: not a git repository" error
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- [ FIX 3: Changed download pattern ] ---
-      # This now downloads all artifacts whose names start with 'intelexta-verify-'
+      # --- [ FINAL FIX 3: Download all artifacts ] ---
+      # This downloads all 'cli-artifact-*' zips and unzips them.
+      # The 'dist' folder will now contain 3 unique files:
+      # - intelexta-verify-linux-x64
+      # - intelexta-verify-macos-arm64
+      # - intelexta-verify-windows-x64.exe
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: intelexta-verify-* # This matches the new artifact names
+          pattern: cli-artifact-* # Match the artifact names from the build job
           merge-multiple: true # Puts them all in one 'dist' folder
 
-      # This step should now work perfectly
+      # This step will now succeed and upload all 3 files.
       - name: Upload all assets to draft release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Use a simple glob to upload everything in the 'dist' folder
+          echo "Uploading files from dist/ folder:"
+          ls -l dist/
           gh release upload "${{ github.ref_name }}" dist/* --clobber
