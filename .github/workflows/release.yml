@@ -1,9 +1,13 @@
 # .github/workflows/release.yml
 #
-# [FIXED WORKFLOW]
+# [FIXED WORKFLOW v2]
 # This workflow builds binaries in parallel, saves them as artifacts,
 # and then uploads them all at once in a final, serial job.
-# This avoids the parallel upload race condition.
+#
+# Fixes:
+# 1. Adds 'actions/checkout@v4' to 'upload-assets' to fix 'not a git repository' error.
+# 2. Fixes 'actions/upload-artifact' step to use the correct 'name' parameter,
+#    which also fixes the 'Unexpected input(s) safe_name' warning.
 
 name: Create Unified Release
 
@@ -50,7 +54,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # We explicitly use ubuntu-22.04 for GLIBC compatibility
         platform: [macos-latest, ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.platform }}
     steps:
@@ -92,18 +95,18 @@ jobs:
             echo "ASSET_NAME=${PKG_NAME}-linux-x64" >> $GITHUB_OUTPUT
           fi
 
-      # --- [ NEW STEP ] ---
-      # This step uploads the built binary as a workflow artifact.
-      # The 'upload-assets' job will download this later.
+      # --- [ FIX 1: Corrected artifact upload ] ---
+      # This now uses the 'ASSET_NAME' as the artifact 'name'.
+      # The 'safe_name' parameter (which was a bug) is removed.
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cli-${{ matrix.platform }}
+          name: ${{ steps.set_names.outputs.ASSET_NAME }}
           path: ${{ steps.set_names.outputs.BINARY_PATH }}
-          safe_name: ${{ steps.set_names.outputs.ASSET_NAME }}
+          retention-days: 1 # We only need this for the next job
 
   # ------------------------------------------------------------------
-  # JOB 3: UPLOAD ALL ASSETS (NEW JOB)
+  # JOB 3: UPLOAD ALL ASSETS (FIXED JOB)
   # ------------------------------------------------------------------
   upload-assets:
     name: Upload Release Assets
@@ -111,17 +114,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # --- [ NEW STEP ] ---
-      # Download all the artifacts saved by the 'build-cli' jobs
+      # --- [ FIX 2: Added checkout ] ---
+      # This fixes the "fatal: not a git repository" error
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --- [ FIX 3: Changed download pattern ] ---
+      # This now downloads all artifacts whose names start with 'intelexta-verify-'
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: cli-* # Downloads all artifacts starting with 'cli-'
+          pattern: intelexta-verify-* # This matches the new artifact names
           merge-multiple: true # Puts them all in one 'dist' folder
 
-      # --- [ NEW STEP ] ---
-      # Upload all files from the 'dist' folder in ONE command
+      # This step should now work perfectly
       - name: Upload all assets to draft release
         shell: bash
         env:
