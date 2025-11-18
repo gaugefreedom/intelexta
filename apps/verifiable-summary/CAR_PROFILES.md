@@ -1,15 +1,15 @@
 # CAR Profiles: Lite vs Full
 
-This document explains the two profiles built on top of IntelexTA CAR v0.2 schema:
+This document explains the two profiles built on top of Intelexta CAR v0.2 schema:
 
 - **CAR-Lite**: Simplified profile for community plugins and easy adoption
-- **CAR-Full**: Rich evidence profile used by IntelexTA Desktop
+- **CAR-Full**: Rich evidence profile used by Intelexta Desktop
 
 Both profiles are 100% compliant with `schemas/car-v0.2.schema.json` and can be verified by the same tools (web-verifier, intelexta-verify CLI).
 
 ## Why Two Profiles?
 
-**Problem**: Community plugins (Ollama, LangChain, LlamaIndex, Airflow, Prefect) don't have access to all the runtime metrics that IntelexTA Desktop tracks.
+**Problem**: Community plugins (Ollama, LangChain, LlamaIndex, Airflow, Prefect) don't have access to all the runtime metrics that Intelexta Desktop tracks.
 
 **Solution**: Define minimal defaults for unknown fields while maintaining full schema compliance.
 
@@ -137,7 +137,7 @@ Both profiles implement the same schema (`car-v0.2.schema.json`) with identical 
 ❌ **Don't use CAR-Lite when:**
 - You have access to full runtime data (use CAR-Full)
 - You need rich provenance for audit/compliance
-- You're building production IntelexTA workflows
+- You're building production Intelexta workflows
 
 ## CAR-Full Profile
 
@@ -145,7 +145,7 @@ Both profiles implement the same schema (`car-v0.2.schema.json`) with identical 
 - **Rich evidence** for audit and compliance
 - **Full provenance** tracking with multiple checkpoints
 - **Precise metrics** (tokens, cost, nature impact)
-- **Production-ready** IntelexTA workflows
+- **Production-ready** Intelexta workflows
 
 ### Additional Fields (vs CAR-Lite)
 
@@ -168,7 +168,7 @@ Both profiles implement the same schema (`car-v0.2.schema.json`) with identical 
 
 ### Example CAR-Full Bundle
 
-See IntelexTA Desktop exports at `~/Documents/teste/llmquestion.car/car.json` for full examples.
+See Intelexta Desktop exports at `~/Documents/teste/llmquestion.car/car.json` for full examples.
 
 ## Migration Path
 
@@ -297,7 +297,7 @@ const { bundle } = await generateProofBundle(source, summary, model);
 - **Schema**: `schemas/car-v0.2.schema.json`
 
 ### CAR-Full Implementation
-- **Code**: IntelexTA Desktop (Rust)
+- **Code**: Intelexta Desktop (Rust)
 - **Examples**: `~/Documents/teste/*.car/car.json`
 
 ## Future SDKs
@@ -378,7 +378,7 @@ Checks:
 | **Checkpoints** | 1 synthetic | Multiple real checkpoints |
 | **Signing** | Optional (unsigned allowed) | Required for production |
 | **Verification** | ✅ web-verifier, CLI | ✅ web-verifier, CLI |
-| **Use Case** | Community plugins, prototypes | Production IntelexTA workflows |
+| **Use Case** | Community plugins, prototypes | Production Intelexta workflows |
 | **Time to Integrate** | < 1 day | Weeks (full instrumentation) |
 
 ## Getting Started

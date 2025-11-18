@@ -66,7 +66,7 @@ signatures = [
 - [x] Backward compatibility maintained
 
 ### ⏳ Pending
-- [x] IntelexTA Desktop updated with dual signatures ✅
+- [x] Intelexta Desktop updated with dual signatures ✅
 
 ## Testing Results
 
@@ -138,7 +138,7 @@ gh release create v0.2.0-security-fix \
   target/release/intelexta-verify
 ```
 
-## IntelexTA Desktop Update ✅
+## Intelexta Desktop Update ✅
 
 **Status**: ✅ COMPLETED (2025-10-29)
 **File Updated**: `src-tauri/src/car.rs` (lines 467-480)
@@ -228,7 +228,7 @@ The verifiers maintain backward compatibility:
 ### Recommended Migration Timeline
 
 1. **Week 1**: Deploy verifiable-summary and web verifier
-2. **Week 2**: Update IntelexTA Desktop
+2. **Week 2**: Update Intelexta Desktop
 3. **Week 3**: Announce dual signatures in release notes
 4. **Month 2**: Consider deprecation warning for legacy format
 5. **Month 6**: Optional: Reject legacy format (breaking change)
@@ -289,8 +289,8 @@ apps/web-verifier/wasm-verify/pkg/*.wasm  ← Build artifact, not served
    # Deploy dist/ to Netlify
    ```
 
-3. **Update IntelexTA Desktop**
-   - Follow instructions in "IntelexTA Desktop Update" section above
+3. **Update Intelexta Desktop**
+   - Follow instructions in "Intelexta Desktop Update" section above
    - Test thoroughly before release
 
 4. **Create GitHub Release**

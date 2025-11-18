@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-Both IntelexTA Desktop (CAR-Full) and the verifiable-summary MCP server (CAR-Lite) are **already fully aligned** and generating compatible CARs that validate correctly with `intelexta-verify`. The field naming and structure are consistent across implementations.
+Both Intelexta Desktop (CAR-Full) and the verifiable-summary MCP server (CAR-Lite) are **already fully aligned** and generating compatible CARs that validate correctly with `intelexta-verify`. The field naming and structure are consistent across implementations.
 
 **Key Finding**: v0.2 schema is accurate for field names and types. The main issue is that v0.2 doesn't include `proof.process` which is **required** by the current implementation.
 

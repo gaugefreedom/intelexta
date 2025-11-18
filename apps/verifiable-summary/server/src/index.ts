@@ -508,15 +508,7 @@ server.registerTool(
     description: 'Generates a verifiable summary with cryptographic proof bundle',
     inputSchema: inputSchema.shape,
     annotations: {
-      title: 'Summarize with Verification',
-      openai: {
-        outputTemplate: WIDGET_RESOURCE_URI,
-        widgetAccessible: true,
-        toolInvocation: {
-          invoking: 'Generating verifiable summary...',
-          invoked: 'Summary complete with cryptographic proof.'
-        }
-      }
+      title: 'Summarize with Verification'
     },
     _meta: {
       'openai/outputTemplate': WIDGET_RESOURCE_URI
@@ -558,7 +550,7 @@ server.registerTool(
       const { bundle: artifacts, isSigned } = await generateProofBundle(
         source,
         summary,
-        usage ? 'gpt-4o-mini' : 'local-summarizer',
+        usage ? 'gpt-4o-mini' : 'chatgpt-summarizer',
         ED25519_SECRET_KEY
       );
       console.log('Proof bundle generated');

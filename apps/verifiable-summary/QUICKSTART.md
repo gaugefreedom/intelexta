@@ -140,7 +140,7 @@ Restart the server. Now summaries will use GPT-4o-mini for higher quality.
 
 ### Verify Cryptographic Proof
 
-Use the IntelexTA web verifier (if running):
+Use the Intelexta web verifier (if running):
 
 ```bash
 # In another terminal

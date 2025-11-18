@@ -50,7 +50,7 @@ cp .env.example .env
 
 Required variables:
 - `PORT` - Server port (default: 3000)
-- `PUBLIC_BASE_URL` - Public URL for downloads
+- `PUBLIC_URL` - Public URL for downloads
 - `ED25519_SECRET_KEY` - Signing key from step 2
 - `OPENAI_API_KEY` - (Optional) For cloud summarization
 
@@ -134,7 +134,7 @@ verifiable.car.zip
 
 ### Verification
 
-Bundles can be verified with the IntelexTA web verifier:
+Bundles can be verified with the Intelexta web verifier:
 
 ```bash
 # Upload to: http://localhost:5173 (if running web-verifier)
@@ -286,7 +286,7 @@ This manual regression ensures summary HTML is escaped before rendering.
 
 ## Contributing
 
-This is part of the IntelexTA monorepo. See main repository docs for contributing guidelines.
+This is part of the Intelexta monorepo. See main repository docs for contributing guidelines.
 
 ## License
 

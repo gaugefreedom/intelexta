@@ -1,6 +1,6 @@
-# IntelexTA Local Usage Guide
+# Intelexta Local Usage Guide
 
-Complete guide for building, running, and testing IntelexTA components locally.
+Complete guide for building, running, and testing Intelexta components locally.
 
 ## Table of Contents
 
@@ -10,7 +10,7 @@ Complete guide for building, running, and testing IntelexTA components locally.
 4. [CLI Verifier](#cli-verifier)
 5. [Web Verifier](#web-verifier)
 6. [Verifiable Summary Server](#verifiable-summary-server)
-7. [IntelexTA Desktop](#intelexta-desktop)
+7. [Intelexta Desktop](#intelexta-desktop)
 8. [Testing](#testing)
 9. [Troubleshooting](#troubleshooting)
 
@@ -99,7 +99,7 @@ npm run build:wasm
 cd apps/verifiable-summary/server
 npm run build
 
-# Build IntelexTA Desktop
+# Build Intelexta Desktop
 cargo tauri build
 ```
 
@@ -271,7 +271,7 @@ fs.writeFileSync('car.json', bundle['car.json']);
 // bundle also contains attachment files
 ```
 
-## IntelexTA Desktop
+## Intelexta Desktop
 
 ### Build
 
@@ -288,7 +288,7 @@ cargo tauri dev
 
 ### Generate CAR from Desktop
 
-1. Launch IntelexTA Desktop
+1. Launch Intelexta Desktop
 2. Create a workflow (e.g., summarization task)
 3. Run the workflow
 4. Export CAR: File → Export → CAR Archive
@@ -420,7 +420,7 @@ wasm-pack build --target web
 cp -r pkg ../public/
 ```
 
-## IntelexTA Desktop Dual Signatures ✅
+## Intelexta Desktop Dual Signatures ✅
 
 **Status**: ✅ COMPLETED (2025-10-29)
 
@@ -432,7 +432,7 @@ cp -r pkg ../public/
 2. Generate checkpoint signature (covers chain hashes)
 3. Store both in signatures array: `["ed25519-body:...", "ed25519-checkpoint:..."]`
 
-All CARs exported from IntelexTA Desktop now have full tamper protection on top-level fields.
+All CARs exported from Intelexta Desktop now have full tamper protection on top-level fields.
 
 ## Binary Locations Reference
 
@@ -441,7 +441,7 @@ All CARs exported from IntelexTA Desktop now have full tamper protection on top-
 | CLI Verifier | `cargo build --release --bin intelexta-verify` | `target/release/intelexta-verify` |
 | WASM Verifier | `npm run build:wasm` (in web-verifier) | `apps/web-verifier/public/pkg/*.wasm` |
 | Verifiable-Summary | `npm run build` (in server/) | `apps/verifiable-summary/server/dist/` |
-| IntelexTA Desktop | `cargo tauri build` | `src-tauri/target/release/intelexta` |
+| Intelexta Desktop | `cargo tauri build` | `src-tauri/target/release/intelexta` |
 
 ## Quick Reference Commands
 

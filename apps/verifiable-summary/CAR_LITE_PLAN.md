@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implement **CAR-Lite** profile for the verifiable-summary MCP server to enable easy adoption by community plugins while maintaining 100% compliance with IntelexTA's CAR v0.2 schema.
+Implement **CAR-Lite** profile for the verifiable-summary MCP server to enable easy adoption by community plugins while maintaining 100% compliance with Intelexta's CAR v0.2 schema.
 
 ## Goals
 
@@ -150,7 +150,7 @@ string  // Base64 encoded, pattern: "^[A-Za-z0-9+/]+={0,2}$"
 
 ### Minimal Values for Unknown Data
 
-When integrating plugins don't have full IntelexTA capabilities, use these **neutral defaults**:
+When integrating plugins don't have full Intelexta capabilities, use these **neutral defaults**:
 
 | Field | CAR-Lite Default | Notes |
 |-------|------------------|-------|

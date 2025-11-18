@@ -4,8 +4,11 @@ import clsx from 'clsx';
 import { AlertCircle, CheckCircle2, Loader2, UploadCloud } from 'lucide-react';
 import { initVerifier, verifyCarBytes, verifyCarJson } from '../wasm/loader';
 import type { VerificationReport } from '../types/verifier';
+import type { Car, AttachmentPreview } from '../types/car';
 import WorkflowViewer from './WorkflowViewer';
 import MetadataCard from './MetadataCard';
+import ContentView from './ContentView';
+import { parseCarZip } from '../utils/zipParser';
 import {
   PROOF_FILE_ACCEPT_MESSAGE,
   buildProofDropzoneAccept,
@@ -14,6 +17,7 @@ import {
 } from '../utils/proofFiles';
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
+type ViewMode = 'verify' | 'content';
 
 const StatusBanner = ({ status, message }: { status: Status; message: string }) => {
   const icon = {
@@ -110,7 +114,7 @@ const ErrorAlert = ({ message, rawJson }: { message: string; rawJson?: string })
       </pre>
     ) : null}
     <p className="text-xs text-rose-200/70">
-      Ensure the WASM bundle is available in <code>public/pkg</code> and that the file was exported from IntelexTA.
+      Ensure the WASM bundle is available in <code>public/pkg</code> and that the file was exported from Intelexta.
     </p>
   </div>
 );
@@ -121,6 +125,9 @@ const Verifier = () => {
   const [result, setResult] = useState<VerificationReport | null>(null);
   const [rawJson, setRawJson] = useState<string>('');
   const [droppedFileName, setDroppedFileName] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('verify');
+  const [parsedCar, setParsedCar] = useState<Car | null>(null);
+  const [attachments, setAttachments] = useState<AttachmentPreview[]>([]);
 
   useEffect(() => {
     initVerifier().catch((err) => {
@@ -137,6 +144,8 @@ const Verifier = () => {
     setError(null);
     setResult(null);
     setRawJson('');
+    setParsedCar(null);
+    setAttachments([]);
 
     const validation = validateProofFileName(file.name);
     if (!validation.valid) {
@@ -148,6 +157,15 @@ const Verifier = () => {
     try {
       if (validation.kind === 'json') {
         const json = await file.text();
+        // Parse the CAR JSON for content view
+        try {
+          const carData = JSON.parse(json) as Car;
+          setParsedCar(carData);
+          // No attachments for JSON-only files
+          setAttachments([]);
+        } catch (parseErr) {
+          console.warn('Failed to parse CAR JSON for content view:', parseErr);
+        }
         const verification = await verifyCarJson(json);
         setResult(verification);
         setRawJson(JSON.stringify(verification, null, 2));
@@ -158,6 +176,17 @@ const Verifier = () => {
           setError(verification.error ?? 'Verification failed. Review the raw output for details.');
         }
       } else {
+        // ZIP file - extract CAR and attachments for content view
+        try {
+          const { car, attachments: extractedAttachments } = await parseCarZip(file);
+          setParsedCar(car);
+          setAttachments(extractedAttachments);
+        } catch (parseErr) {
+          console.warn('Failed to parse ZIP for content view:', parseErr);
+          // Continue with verification even if content parsing fails
+        }
+
+        // Verify using WASM (as before)
         const buffer = await file.arrayBuffer();
         const bytes = new Uint8Array(buffer);
         const verification = await verifyCarBytes(bytes);
@@ -175,6 +204,8 @@ const Verifier = () => {
       setStatus('error');
       setResult(null);
       setRawJson('');
+      setParsedCar(null);
+      setAttachments([]);
       setError(err instanceof Error ? err.message : 'Unknown error while verifying file');
     }
   }, []);
@@ -221,10 +252,10 @@ const Verifier = () => {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-6 py-12">
       <header className="flex flex-col gap-2">
-        <p className="text-sm uppercase tracking-[0.35em] text-brand-400">IntelexTA</p>
+        <p className="text-sm uppercase tracking-[0.35em] text-brand-400">Intelexta</p>
         <h1 className="text-4xl font-semibold text-white sm:text-5xl">Workflow Proof Verifier</h1>
         <p className="text-base text-slate-300 sm:text-lg">
-          Validate signed workflow archives directly in your browser. Upload a CAR bundle exported from IntelexTA or drop a JSON transcript to preview steps, prompts, and outputs.
+          Validate signed workflow archives directly in your browser. Upload a CAR bundle exported from Intelexta or drop a JSON transcript to preview steps, prompts, and outputs.
         </p>
       </header>
 
@@ -245,7 +276,7 @@ const Verifier = () => {
             : 'Drag & drop a .car.json or .car.zip file here'}
         </p>
         <p className="mt-2 max-w-md text-sm text-slate-400">
-          Supports IntelexTA signed CAR archives and JSON transcripts. Files stay in the browser and are never uploaded.
+          Supports Intelexta signed CAR archives and JSON transcripts. Files stay in the browser and are never uploaded.
         </p>
         {droppedFileName && (
           <p className="mt-4 rounded-full border border-slate-700 bg-slate-800/80 px-5 py-1 text-xs uppercase tracking-wide text-slate-300">
@@ -256,13 +287,41 @@ const Verifier = () => {
 
       <StatusBanner status={status} message={statusMessage} />
 
+      {/* View Mode Toggle */}
+      {result && status !== 'loading' && (
+        <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/60 p-1">
+          <button
+            onClick={() => setViewMode('verify')}
+            className={clsx(
+              'flex-1 rounded-md px-4 py-2 text-sm font-medium transition-all',
+              viewMode === 'verify'
+                ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/20'
+                : 'text-slate-400 hover:text-slate-200'
+            )}
+          >
+            Verification
+          </button>
+          <button
+            onClick={() => setViewMode('content')}
+            className={clsx(
+              'flex-1 rounded-md px-4 py-2 text-sm font-medium transition-all',
+              viewMode === 'content'
+                ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/20'
+                : 'text-slate-400 hover:text-slate-200'
+            )}
+          >
+            Visualize Content
+          </button>
+        </div>
+      )}
+
       {status === 'error' && error && (
         <ErrorAlert message={error} rawJson={rawJson || undefined} />
       )}
 
       {status === 'loading' && <LoadingSkeleton />}
 
-      {result && status !== 'loading' && (
+      {result && status !== 'loading' && viewMode === 'verify' && (
         <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
           <WorkflowViewer report={result} />
           <aside className="flex flex-col gap-4">
@@ -278,6 +337,10 @@ const Verifier = () => {
             </div>
           </aside>
         </section>
+      )}
+
+      {result && status !== 'loading' && viewMode === 'content' && (
+        <ContentView car={parsedCar} attachments={attachments} />
       )}
     </main>
   );

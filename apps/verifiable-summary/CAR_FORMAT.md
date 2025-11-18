@@ -1,6 +1,6 @@
 # CAR Format Specification
 
-This document describes the Content-Addressable Receipt (CAR) format used by IntelexTA and compatible tools.
+This document describes the Content-Addressable Receipt (CAR) format used by Intelexta and compatible tools.
 
 ## Overview
 
@@ -215,7 +215,7 @@ Unsigned bundles are valid but provide no cryptographic proof. Set:
 
 ## Tools
 
-- **IntelexTA Desktop**: Native CAR generation with full workflow tracking
+- **Intelexta Desktop**: Native CAR generation with full workflow tracking
 - **Verifiable Summary MCP**: Generates CAR bundles for content summarization
 - **Web Verifier**: Browser-based CAR verification at `apps/web-verifier`
 - **CLI Verifier**: Command-line verification tool `intelexta-verify`

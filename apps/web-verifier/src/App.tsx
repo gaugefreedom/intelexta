@@ -3,17 +3,17 @@ import Verifier from './components/Verifier';
 
 function App() {
   useEffect(() => {
-    document.title = 'IntelexTA Web Verifier';
+    document.title = 'Intelexta Web Verifier';
     const metaDescription = document.querySelector('meta[name="description"]');
     if (!metaDescription) {
       const meta = document.createElement('meta');
       meta.name = 'description';
-      meta.content = 'Upload CAR archives to verify IntelexTA workflow proofs in the browser.';
+      meta.content = 'Upload CAR archives to verify Intelexta workflow proofs in the browser.';
       document.head.appendChild(meta);
     } else {
       metaDescription.setAttribute(
         'content',
-        'Upload CAR archives to verify IntelexTA workflow proofs in the browser.'
+        'Upload CAR archives to verify Intelexta workflow proofs in the browser.'
       );
     }
   }, []);

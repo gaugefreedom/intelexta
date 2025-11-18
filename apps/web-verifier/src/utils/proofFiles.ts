@@ -6,7 +6,7 @@ export type ProofFileExtension = (typeof ACCEPTED_PROOF_EXTENSIONS)[number];
 export type ProofFileKind = 'json' | 'car';
 
 export const PROOF_FILE_ACCEPT_MESSAGE =
-  'Upload a .car.json transcript or a .car.zip archive exported from IntelexTA.';
+  'Upload a .car.json transcript or a .car.zip archive exported from Intelexta.';
 
 export function normalizeFileName(fileName: string): string {
   return fileName.trim().toLowerCase();

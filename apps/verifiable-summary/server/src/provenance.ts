@@ -2,7 +2,7 @@
  * Provenance utilities for generating CAR-Lite verifiable proof bundles
  *
  * This module implements CAR-Lite profile - a simplified but fully compliant
- * subset of IntelexTA CAR v0.2 format designed for easy community adoption.
+ * subset of Intelexta CAR v0.2 format designed for easy community adoption.
  */
 
 import { createHash } from 'node:crypto';
@@ -82,7 +82,7 @@ export interface ProofBundleResult {
 /**
  * Generate a CAR-Lite compliant verifiable proof bundle
  *
- * CAR-Lite is a simplified profile of IntelexTA CAR v0.2 that:
+ * CAR-Lite is a simplified profile of Intelexta CAR v0.2 that:
  * - Uses neutral defaults for unknown metrics (budgets, sgrade)
  * - Supports minimal provenance tracking (config, input, output)
  * - Allows unsigned bundles for development
@@ -90,7 +90,7 @@ export interface ProofBundleResult {
  *
  * @param source - Source document with URL and content
  * @param summary - Generated summary text
- * @param model - Model identifier (e.g., "gpt-4o-mini", "local-summarizer")
+ * @param model - Model identifier (e.g., "gpt-4o-mini", "chatgpt-summarizer")
  * @param secretKeyB64 - Optional Ed25519 secret key for signing
  * @returns Object containing all bundle artifacts as strings
  */
@@ -185,7 +185,7 @@ Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
   // For CAR-Lite, we create a single synthetic checkpoint
   const prevChain = '';
 
-  // Build checkpoint body matching IntelexTA's structure
+  // Build checkpoint body matching Intelexta's structure
   const checkpointBody = {
     run_id: runId,
     kind: 'Step',

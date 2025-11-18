@@ -7,7 +7,7 @@
 
 ## Summary
 
-Successfully created `car-v0.3.schema.json` that accurately reflects the **current implementation** of both IntelexTA Desktop and the verifiable-summary MCP server (CAR-Lite).
+Successfully created `car-v0.3.schema.json` that accurately reflects the **current implementation** of both Intelexta Desktop and the verifiable-summary MCP server (CAR-Lite).
 
 ### Validation Results
 
@@ -281,8 +281,8 @@ If any code needs updating to match v0.3 schema (unlikely based on validation re
 
 ## Conclusion
 
-**Phase 2 is complete and successful.** The v0.3 schema now accurately describes the CAR format as implemented by both IntelexTA Desktop and the verifiable-summary MCP server.
+**Phase 2 is complete and successful.** The v0.3 schema now accurately describes the CAR format as implemented by both Intelexta Desktop and the verifiable-summary MCP server.
 
 **Key Achievement**: Achieved **100% backward compatibility** - both existing implementations produce valid v0.3 CARs without any code changes.
 
-The schema is now the **single source of truth** for the IntelexTA CAR format, ready for community adoption and third-party tooling.
+The schema is now the **single source of truth** for the Intelexta CAR format, ready for community adoption and third-party tooling.

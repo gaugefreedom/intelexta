@@ -1,13 +1,13 @@
-# IntelexTA CAR Schemas
+# Intelexta CAR Schemas
 
-This directory contains the official JSON Schema definitions for IntelexTA Content-Addressable Receipts (CARs).
+This directory contains the official JSON Schema definitions for Intelexta Content-Addressable Receipts (CARs).
 
 ## Current Schema Version
 
 **`car-v0.3.schema.json`** - Active schema (November 2025)
 
 This version accurately reflects the current implementation of:
-- IntelexTA Desktop CAR exporter (CAR-Full)
+- Intelexta Desktop CAR exporter (CAR-Full)
 - Verifiable Summary MCP server (CAR-Lite)
 - `intelexta-verify` CLI verifier
 - Web verifier
@@ -244,7 +244,7 @@ When proposing schema changes:
 
 ## License
 
-See the main IntelexTA repository LICENSE file.
+See the main Intelexta repository LICENSE file.
 
 ---
 

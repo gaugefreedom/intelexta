@@ -301,7 +301,7 @@ Based on local testing:
 - [MCP Protocol Spec](https://modelcontextprotocol.io)
 - [Ed25519 Cryptography](https://ed25519.cr.yp.to/)
 - [JSON Canonicalization (JCS)](https://datatracker.ietf.org/doc/html/rfc8785)
-- [IntelexTA CAR Format](../../../docs/CAR_BUNDLE_IMPLEMENTATION.md)
+- [Intelexta CAR Format](../../../docs/CAR_BUNDLE_IMPLEMENTATION.md)
 
 ## 🎉 Success!
 

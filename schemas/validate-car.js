@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * CAR Schema Validator for IntelexTA
+ * CAR Schema Validator for Intelexta
  *
  * Validates CAR JSON files against the official CAR v0.3 schema.
  *
