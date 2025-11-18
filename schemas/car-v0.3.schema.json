@@ -1,0 +1,535 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://intelexta.org/schemas/car-v0.3.schema.json",
+  "title": "Intelexta Content-Addressable Receipt (CAR) v0.3",
+  "description": "Schema for the portable CAR receipt artifact describing a single verifiable run. This version aligns with the current implementation including process proof chains.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "run_id",
+    "created_at",
+    "run",
+    "proof",
+    "policy_ref",
+    "budgets",
+    "provenance",
+    "checkpoints",
+    "sgrade",
+    "signer_public_key",
+    "signatures"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Content-addressable identifier derived from the canonicalized CAR body.",
+      "pattern": "^car:[0-9a-f]{64}$"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "Primary identifier of the run described by this receipt.",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "description": "Timestamp indicating when the CAR was generated (UTC).",
+      "format": "date-time"
+    },
+    "run": {
+      "$ref": "#/$defs/run"
+    },
+    "proof": {
+      "$ref": "#/$defs/proof"
+    },
+    "policy_ref": {
+      "$ref": "#/$defs/policy_ref"
+    },
+    "budgets": {
+      "$ref": "#/$defs/budgets"
+    },
+    "provenance": {
+      "type": "array",
+      "description": "Statements anchoring important assets referenced by the run.",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/provenance_claim"
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "description": "Ordered list of checkpoint IDs chained together for this run.",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^(ckpt:)?[A-Za-z0-9:_-]+$"
+      }
+    },
+    "sgrade": {
+      "$ref": "#/$defs/sgrade"
+    },
+    "signer_public_key": {
+      "type": "string",
+      "description": "Base64 encoded public signing key used to author the CAR.",
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    },
+    "signatures": {
+      "type": "array",
+      "description": "Detached signatures covering the canonical CAR body.",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]+:[A-Za-z0-9+/=._-]+$"
+      }
+    }
+  },
+  "$defs": {
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "model",
+        "version",
+        "seed",
+        "steps"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Proof mode requested for the run.",
+          "enum": [
+            "exact",
+            "concordant",
+            "interactive"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name assigned to the run.",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "description": "Identifier of the model used to execute the run.",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "description": "Semantic version or revision of the model or workflow.",
+          "minLength": 1
+        },
+        "seed": {
+          "type": "integer",
+          "description": "Deterministic seed captured for reproducing stochastic behaviour.",
+          "minimum": 0
+        },
+        "steps": {
+          "type": "array",
+          "description": "Snapshot of the run definition at the time the CAR was produced.",
+          "items": {
+            "$ref": "#/$defs/run_step"
+          }
+        },
+        "sampler": {
+          "$ref": "#/$defs/sampler"
+        }
+      }
+    },
+    "run_step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "runId",
+        "orderIndex",
+        "checkpointType",
+        "tokenBudget",
+        "proofMode"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier of the configured run step.",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "description": "Identifier of the parent run.",
+          "minLength": 1
+        },
+        "orderIndex": {
+          "type": "integer",
+          "description": "Order in which the step executes."
+        },
+        "checkpointType": {
+          "type": "string",
+          "description": "Type of checkpoint produced by the step.",
+          "minLength": 1
+        },
+        "stepType": {
+          "type": "string",
+          "description": "Type of step execution (e.g., 'llm', 'ingest', 'summarize', 'prompt').",
+          "default": "llm"
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Model requested by the step. Optional for document ingestion steps.",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": ["string", "null"],
+          "description": "Prompt material supplied to the model. Optional for document ingestion steps."
+        },
+        "tokenBudget": {
+          "type": "integer",
+          "description": "Maximum tokens allocated for the step.",
+          "minimum": 0
+        },
+        "proofMode": {
+          "type": "string",
+          "description": "Proof requirement applied to the step.",
+          "enum": [
+            "exact",
+            "concordant"
+          ]
+        },
+        "epsilon": {
+          "type": "number",
+          "description": "Tolerance for concordant proof steps.",
+          "minimum": 0
+        },
+        "configJson": {
+          "type": ["string", "null"],
+          "description": "Optional JSON configuration for specialized step types (e.g., document ingestion)."
+        }
+      }
+    },
+    "sampler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "temp",
+        "top_p",
+        "rng"
+      ],
+      "properties": {
+        "temp": {
+          "type": "number",
+          "description": "Sampling temperature used when generating tokens.",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "top_p": {
+          "type": "number",
+          "description": "Nucleus sampling cutoff applied during generation.",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "rng": {
+          "type": "string",
+          "description": "Random number generator implementation (e.g., pcg64).",
+          "minLength": 1
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "match_kind"
+      ],
+      "properties": {
+        "match_kind": {
+          "type": "string",
+          "description": "Replay strategy used to validate the run.",
+          "enum": [
+            "exact",
+            "semantic",
+            "process"
+          ]
+        },
+        "epsilon": {
+          "type": "number",
+          "description": "Tolerance used when comparing semantic digests.",
+          "minimum": 0
+        },
+        "distance_metric": {
+          "type": "string",
+          "description": "Metric employed to measure semantic distance.",
+          "minLength": 1
+        },
+        "original_semantic_digest": {
+          "type": "string",
+          "description": "Digest produced during the original run when using semantic proofs.",
+          "minLength": 1
+        },
+        "replay_semantic_digest": {
+          "type": "string",
+          "description": "Digest produced during replay for comparison against the original.",
+          "minLength": 1
+        },
+        "process": {
+          "$ref": "#/$defs/process_proof"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "match_kind": {
+                "const": "process"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "process"
+            ]
+          }
+        }
+      ]
+    },
+    "policy_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hash",
+        "egress",
+        "estimator"
+      ],
+      "properties": {
+        "hash": {
+          "type": "string",
+          "description": "Digest of the policy document applied to the run.",
+          "pattern": "^[a-z0-9]+:[A-Za-z0-9]+$"
+        },
+        "egress": {
+          "type": "boolean",
+          "description": "Whether the run allowed network egress."
+        },
+        "estimator": {
+          "type": "string",
+          "description": "Computation used to derive the nature cost estimate for the run.",
+          "minLength": 1
+        },
+        "model_catalog_hash": {
+          "type": "string",
+          "description": "SHA256 hash of the model catalog for pricing verification (Desktop-specific)."
+        },
+        "model_catalog_version": {
+          "type": "string",
+          "description": "Version of the model catalog used (Desktop-specific)."
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "usd",
+        "tokens",
+        "nature_cost"
+      ],
+      "properties": {
+        "usd": {
+          "type": "number",
+          "description": "USD budget consumed by the run.",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": "integer",
+          "description": "Total tokens billed for the run.",
+          "minimum": 0
+        },
+        "nature_cost": {
+          "type": "number",
+          "description": "Estimated nature cost attributed to the run.",
+          "minimum": 0
+        }
+      }
+    },
+    "provenance_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_type",
+        "sha256"
+      ],
+      "properties": {
+        "claim_type": {
+          "type": "string",
+          "description": "Nature of the asset (e.g., input, output, config).",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "description": "SHA-256 digest of the canonicalised asset.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "sgrade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "score",
+        "components"
+      ],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "description": "Overall stewardship grade assigned to the run (0-100).",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provenance",
+            "energy",
+            "replay",
+            "consent",
+            "incidents"
+          ],
+          "properties": {
+            "provenance": {
+              "type": "number",
+              "description": "Contribution from provenance completeness (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "energy": {
+              "type": "number",
+              "description": "Contribution from energy reporting (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "replay": {
+              "type": "number",
+              "description": "Contribution from replay verification (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "consent": {
+              "type": "number",
+              "description": "Contribution from consent and policy compliance (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "incidents": {
+              "type": "number",
+              "description": "Penalty from recorded incidents (0-1).",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    },
+    "process_proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequential_checkpoints"
+      ],
+      "properties": {
+        "sequential_checkpoints": {
+          "type": "array",
+          "description": "Ordered sequence of cryptographically signed checkpoints forming a hash chain.",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/process_checkpoint_proof"
+          }
+        }
+      }
+    },
+    "process_checkpoint_proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "prev_chain",
+        "curr_chain",
+        "signature",
+        "run_id",
+        "kind",
+        "timestamp",
+        "usage_tokens",
+        "prompt_tokens",
+        "completion_tokens"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this checkpoint.",
+          "minLength": 1
+        },
+        "parent_checkpoint_id": {
+          "type": "string",
+          "description": "ID of the parent checkpoint for interactive/branching workflows.",
+          "minLength": 1
+        },
+        "turn_index": {
+          "type": "integer",
+          "description": "Turn index for interactive chat workflows.",
+          "minimum": 0
+        },
+        "prev_chain": {
+          "type": "string",
+          "description": "Hash of the previous checkpoint in the chain (empty string for first checkpoint)."
+        },
+        "curr_chain": {
+          "type": "string",
+          "description": "SHA256 hash of prev_chain concatenated with canonical checkpoint body.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signature": {
+          "type": "string",
+          "description": "Base64-encoded Ed25519 signature of curr_chain (empty string if unsigned)."
+        },
+        "run_id": {
+          "type": "string",
+          "description": "Identifier of the run this checkpoint belongs to.",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "description": "Type of checkpoint (e.g., 'Step', 'Incident').",
+          "minLength": 1
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO 8601 timestamp when the checkpoint was created.",
+          "format": "date-time"
+        },
+        "inputs_sha256": {
+          "type": "string",
+          "description": "SHA256 hash of the checkpoint inputs.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "outputs_sha256": {
+          "type": "string",
+          "description": "SHA256 hash of the checkpoint outputs.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "usage_tokens": {
+          "type": "integer",
+          "description": "Total tokens used by this checkpoint.",
+          "minimum": 0
+        },
+        "prompt_tokens": {
+          "type": "integer",
+          "description": "Input/prompt tokens used by this checkpoint.",
+          "minimum": 0
+        },
+        "completion_tokens": {
+          "type": "integer",
+          "description": "Output/completion tokens generated by this checkpoint.",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
