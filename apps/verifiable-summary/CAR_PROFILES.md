@@ -1,11 +1,11 @@
 # CAR Profiles: Lite vs Full
 
-This document explains the two profiles built on top of Intelexta CAR v0.2 schema:
+This document explains the two profiles built on top of Intelexta CAR v0.3 schema:
 
 - **CAR-Lite**: Simplified profile for community plugins and easy adoption
 - **CAR-Full**: Rich evidence profile used by Intelexta Desktop
 
-Both profiles are 100% compliant with `schemas/car-v0.2.schema.json` and can be verified by the same tools (web-verifier, intelexta-verify CLI).
+Both profiles are 100% compliant with `schemas/car-v0.3.schema.json` and can be verified by the same tools (web-verifier, intelexta-verify CLI).
 
 ## Why Two Profiles?
 
@@ -17,7 +17,7 @@ Both profiles are 100% compliant with `schemas/car-v0.2.schema.json` and can be 
 
 ## Schema Compliance
 
-Both profiles implement the same schema (`car-v0.2.schema.json`) with identical **required fields**:
+Both profiles implement the same schema (`car-v0.3.schema.json`) with identical **required fields**:
 
 ```typescript
 {
@@ -231,7 +231,7 @@ npm run dev
 ### Schema Validation
 ```bash
 npm install -g ajv-cli
-ajv validate -s schemas/car-v0.2.schema.json -d bundle.car/car.json
+ajv validate -s schemas/car-v0.3.schema.json -d bundle.car/car.json
 ```
 
 ## Deterministic ID Computation
@@ -294,7 +294,7 @@ const { bundle } = await generateProofBundle(source, summary, model);
 ### CAR-Lite Implementation
 - **Code**: `apps/verifiable-summary/server/src/provenance.ts`
 - **Tests**: `apps/verifiable-summary/server/src/provenance.test.ts`
-- **Schema**: `schemas/car-v0.2.schema.json`
+- **Schema**: `schemas/car-v0.3.schema.json`
 
 ### CAR-Full Implementation
 - **Code**: Intelexta Desktop (Rust)
@@ -384,13 +384,13 @@ Checks:
 ## Getting Started
 
 1. **Review Examples**: Check `apps/verifiable-summary/server/src/provenance.ts`
-2. **Read Schema**: Understand `schemas/car-v0.2.schema.json`
+2. **Read Schema**: Understand `schemas/car-v0.3.schema.json`
 3. **Generate Bundle**: Use `generateProofBundle()` from provenance.ts
 4. **Verify**: Test with web-verifier and `intelexta-verify` CLI
 5. **Iterate**: Add richer metrics over time
 
 ## Questions?
 
-- **Schema Questions**: See `schemas/car-v0.2.schema.json` comments
+- **Schema Questions**: See `schemas/car-v0.3.schema.json` comments
 - **Implementation**: See `apps/verifiable-summary/CAR_LITE_PLAN.md`
 - **Issues**: https://github.com/gaugefreedom/intelexta/issues

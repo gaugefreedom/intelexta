@@ -6,7 +6,7 @@ Implement **CAR-Lite** profile for the verifiable-summary MCP server to enable e
 
 ## Goals
 
-1. ✅ **Schema Compliance**: Generate car.json that validates against `schemas/car-v0.2.schema.json`
+1. ✅ **Schema Compliance**: Generate car.json that validates against `schemas/car-v0.3.schema.json`
 2. ✅ **Verifier Compatible**: Works with both `apps/web-verifier` and `target/release/intelexta-verify`
 3. ✅ **Minimal Barrier**: Simple integration for OSS plugins (Ollama, LangChain, LlamaIndex, etc.)
 4. ✅ **Deterministic IDs**: Proper JCS canonicalization for `car:` ID computation
@@ -14,7 +14,7 @@ Implement **CAR-Lite** profile for the verifiable-summary MCP server to enable e
 
 ## CAR v0.2 Schema Requirements
 
-Based on `schemas/car-v0.2.schema.json`, ALL of these fields are **required**:
+Based on `schemas/car-v0.3.schema.json`, ALL of these fields are **required**:
 
 ### Top-Level Required Fields
 
@@ -353,7 +353,7 @@ res.setHeader('Content-Disposition', 'attachment; filename="verifiable.car.zip"'
 - [ ] Generate unsigned bundle → verify with `intelexta-verify`
 - [ ] Generate signed bundle → verify with `intelexta-verify`
 - [ ] Upload to web-verifier → should show all metadata
-- [ ] Validate against `schemas/car-v0.2.schema.json` using ajv or similar
+- [ ] Validate against `schemas/car-v0.3.schema.json` using ajv or similar
 - [ ] Inspect `car.json` manually for schema compliance
 
 ### 6. Documentation Updates
@@ -385,7 +385,7 @@ npm run dev
 
 # 5. Schema validation (optional)
 npm install -g ajv-cli
-ajv validate -s schemas/car-v0.2.schema.json -d verifiable.car/car.json
+ajv validate -s schemas/car-v0.3.schema.json -d verifiable.car/car.json
 ```
 
 ## Success Criteria
@@ -409,7 +409,7 @@ Once CAR-Lite is proven in verifiable-summary:
 
 ## References
 
-- Schema: `/home/marcelo/Documents/codes/gaugefreedom/intelexta/schemas/car-v0.2.schema.json`
+- Schema: `/home/marcelo/Documents/codes/gaugefreedom/intelexta/schemas/car-v0.3.schema.json`
 - Web Verifier: `/home/marcelo/Documents/codes/gaugefreedom/intelexta/apps/web-verifier/`
 - CLI Verifier: `/home/marcelo/Documents/codes/gaugefreedom/intelexta/src-tauri/target/release/intelexta-verify`
 - Current Implementation: `/home/marcelo/Documents/codes/gaugefreedom/intelexta/apps/verifiable-summary/server/src/provenance.ts`

@@ -42,7 +42,8 @@ Build a local-first control plane for verifiable Human+AI workflows with cryptog
 **Implementation**:
 - `src-tauri/src/car.rs` - CAR structure and export logic
 - `src-tauri/src/api.rs` - Export API endpoints
-- `schemas/car-v0.2.schema.json` - Canonical CAR schema
+- `schemas/car-v0.3.schema.json` - Current CAR schema (v0.3)
+- `schemas/car-v0.2.schema.json` - Legacy CAR schema (deprecated)
 
 #### 1.3 Standalone Verification Tool ✅
 - [x] `intelexta-verify` CLI for trustless verification

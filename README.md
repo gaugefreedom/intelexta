@@ -45,7 +45,8 @@ intelexta/
 │  ├─ dev.sh
 │  └─ build-release.sh
 ├─ schemas/
-│  └─ car-v0.2.schema.json   # Locked JSON Schema for Content-Addressable Receipts
+│  ├─ car-v0.3.schema.json   # Current JSON Schema for Content-Addressable Receipts
+│  └─ car-v0.2.schema.json   # Legacy schema (deprecated)
 ├─ app/                      # React (Vite) frontend
 │  └─ src/
 │     ├─ main.tsx
@@ -72,8 +73,13 @@ intelexta/
 
 ## Schemas
 
-The canonical JSON Schema for Content-Addressable Receipts (CAR v0.2) lives in [`schemas/car-v0.2.schema.json`](schemas/car-v0.2.schema.json).
-Builds verify that the file exists, so keep it in place when updating tooling or CI.
+The canonical JSON Schema for Content-Addressable Receipts (CAR v0.3) lives in [`schemas/car-v0.3.schema.json`](schemas/car-v0.3.schema.json).
+
+**Version History**:
+- **v0.3** (current): Added `proof.process` structure with sequential checkpoints, updated `run.steps` field names to camelCase, relaxed checkpoint ID patterns
+- **v0.2** (legacy): Original schema - now deprecated, maintained for backward compatibility
+
+See [`schemas/README.md`](schemas/README.md) for detailed schema documentation and migration guide.
 
 ## Status
 
