@@ -132,7 +132,7 @@ const AttachmentsCard = ({ attachments, provenance }: AttachmentsCardProps) => {
           <h3 className="text-2xl font-semibold text-slate-50">Content Files</h3>
         </header>
         <p className="text-sm text-slate-400">
-          No attachments found in this CAR bundle. Attachments are only available in <code className="text-slate-300">.car.zip</code> bundles.
+          This receipt does not include any content files. It only records workflow metadata and content hashes.
         </p>
       </div>
     );
@@ -202,15 +202,13 @@ const AttachmentsCard = ({ attachments, provenance }: AttachmentsCardProps) => {
         }`}>
           {showWarning ? (
             <p className="text-sm text-amber-200">
-              <strong>Note:</strong> This CAR references {provenance.length} provenance claim
-              {provenance.length !== 1 ? 's' : ''}. {missingExternal} non-config claim
-              {missingExternal !== 1 ? 's do' : ' does'} not have matching attachment file
-              {missingExternal !== 1 ? 's' : ''} in this bundle. Some content may be stored externally or was not exported.
+              <strong>Note:</strong> This receipt records {provenance.length} provenance claim
+              {provenance.length !== 1 ? 's' : ''}. {missingExternal} of them refer to content stored externally or not exported. The receipt remains consistent, but only the bundled files can be inspected here.
             </p>
           ) : (
             <p className="text-sm text-slate-300">
-              <strong>Provenance:</strong> {provenance.length} claim{provenance.length !== 1 ? 's' : ''} — {externalWithFile} external attachment{externalWithFile !== 1 ? 's' : ''} present
-              {inlineClaims > 0 && `, ${inlineClaims} embedded in CAR metadata`}.
+              <strong>Provenance:</strong> {provenance.length} claim{provenance.length !== 1 ? 's' : ''} — {externalWithFile} bundled file{externalWithFile !== 1 ? 's' : ''} can be inspected
+              {inlineClaims > 0 && `, ${inlineClaims} tracked by metadata only`}.
             </p>
           )}
         </div>

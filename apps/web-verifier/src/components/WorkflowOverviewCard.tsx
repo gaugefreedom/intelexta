@@ -21,6 +21,9 @@ const WorkflowOverviewCard = ({ car }: WorkflowOverviewCardProps) => {
       <header className="mb-6">
         <p className="text-xs uppercase tracking-[0.3em] text-brand-300">Workflow</p>
         <h2 className="text-2xl font-semibold text-slate-50">Overview</h2>
+        <p className="mt-2 text-sm text-slate-400">
+          This section shows what this run did: workflow name, models, budgets, and stewardship score recorded in the receipt.
+        </p>
       </header>
 
       <dl className="space-y-4">

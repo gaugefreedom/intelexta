@@ -125,6 +125,7 @@ const Verifier = () => {
   const [result, setResult] = useState<VerificationReport | null>(null);
   const [rawJson, setRawJson] = useState<string>('');
   const [droppedFileName, setDroppedFileName] = useState<string | null>(null);
+  const [fileKind, setFileKind] = useState<'json' | 'car' | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('verify');
   const [parsedCar, setParsedCar] = useState<Car | null>(null);
   const [attachments, setAttachments] = useState<AttachmentPreview[]>([]);
@@ -146,6 +147,7 @@ const Verifier = () => {
     setRawJson('');
     setParsedCar(null);
     setAttachments([]);
+    setFileKind(null);
 
     const validation = validateProofFileName(file.name);
     if (!validation.valid) {
@@ -153,6 +155,8 @@ const Verifier = () => {
       setError(validation.message);
       return;
     }
+
+    setFileKind(validation.kind);
 
     try {
       if (validation.kind === 'json') {
@@ -255,7 +259,7 @@ const Verifier = () => {
         <p className="text-sm uppercase tracking-[0.35em] text-brand-400">Intelexta</p>
         <h1 className="text-4xl font-semibold text-white sm:text-5xl">Workflow Proof Verifier</h1>
         <p className="text-base text-slate-300 sm:text-lg">
-          Validate signed workflow archives directly in your browser. Upload a CAR bundle exported from Intelexta or drop a JSON transcript to preview steps, prompts, and outputs.
+          Verify signed receipts (CARs) for AI-assisted workflows. Files are processed in your browser and never uploaded.
         </p>
       </header>
 
@@ -272,20 +276,50 @@ const Verifier = () => {
         <UploadCloud className="mb-4 h-12 w-12 text-brand-300" />
         <p className="text-lg font-medium text-slate-100">
           {isDragActive
-            ? 'Release to verify your file'
-            : 'Drag & drop a .car.json or .car.zip file here'}
+            ? 'Release to verify your receipt'
+            : 'Drag & drop a .car.json or .car.zip receipt here'}
         </p>
         <p className="mt-2 max-w-md text-sm text-slate-400">
-          Supports Intelexta signed CAR archives and JSON transcripts. Files stay in the browser and are never uploaded.
+          Supports signed CAR receipts and JSON-only formats.
         </p>
-        {droppedFileName && (
-          <p className="mt-4 rounded-full border border-slate-700 bg-slate-800/80 px-5 py-1 text-xs uppercase tracking-wide text-slate-300">
-            Last file: {droppedFileName}
+        {droppedFileName && result && (
+          <p className="mt-4 rounded-full border border-slate-700 bg-slate-800/80 px-5 py-1 text-xs text-slate-300 flex items-center gap-2 justify-center">
+            <span className="font-medium">Last receipt:</span>
+            <span>{droppedFileName}</span>
+            <span className="text-slate-500">·</span>
+            <span>{fileKind === 'json' ? 'JSON receipt-only' : 'ZIP bundle'}</span>
+            <span className="text-slate-500">·</span>
+            <span className={status === 'success' ? 'text-emerald-400' : 'text-rose-400'}>
+              {status === 'success' ? 'Verified' : 'Failed'}
+            </span>
           </p>
         )}
       </section>
 
       <StatusBanner status={status} message={statusMessage} />
+
+      {/* Success Callout */}
+      {result && status === 'success' && (
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-6">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="h-6 w-6 flex-shrink-0 text-emerald-400 mt-0.5" />
+            <div>
+              <h3 className="text-lg font-semibold text-emerald-100 mb-2">Receipt verified</h3>
+              <p className="text-sm text-emerald-200 leading-relaxed">
+                This Content-Addressable Receipt (CAR) is cryptographically valid. Hash chains and signatures are consistent.
+                {result.summary && result.summary.provenance_total > result.summary.provenance_verified && (
+                  <span className="block mt-2">
+                    Some referenced content is not included in this bundle and can only be verified by hash.
+                  </span>
+                )}
+                <span className="block mt-2">
+                  "Verified" here refers only to the receipt and hash chain, not to the factual correctness of the underlying document.
+                </span>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* View Mode Toggle */}
       {result && status !== 'loading' && (
