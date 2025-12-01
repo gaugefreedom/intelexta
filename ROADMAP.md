@@ -394,53 +394,56 @@ require_signatures = true
 - No external dependencies (bundle everything)
 - Works offline (no API calls)
 
+
+## Intelexta Apps & Live Deployments
+
+This repository is the **reference implementation** of the Intelexta Protocol (Desktop Node + schemas + verifier tools).  
+On top of it, I am developing several apps and integrations that demonstrate how the protocol can be used in practice:
+
+### Desktop Node (this repo)
+
+- **Intelexta Desktop (Local-First Control Plane)**  
+  The Tauri + Rust application that runs workflows locally, signs provenance, and exports **CAR** (Content-Addressable Receipt) bundles.
+- **`intelexta-verify` CLI**  
+  Standalone verifier (also in this repo) for trustless checking of CAR files.  
+  This is the cryptographic “truth engine” behind the other apps.
+
+### Web Verifier (same repo)
+
+- **Intelexta Web Verifier** – `apps/web-verifier`  
+  A Vite + React frontend that loads the verifier as WebAssembly in the browser.  
+  It powers the public site:
+
+  - 🌐 **Live instance**: `https://verify.intelexta.com`  
+    Drop a `*.car.json` or `*.car.zip` to:
+    - Verify signatures and hash chains
+    - Inspect workflows and proof metadata in a human-friendly UI
+
+### Verifiable Summary (same repo)
+
+- **Verifiable Summary MCP Server** – `apps/verifiable-summary`  
+  An OpenAI Apps SDK / MCP integration that:
+  - Accepts content (text or file) and a summary style (TL;DR, bullets, outline)
+  - Produces a summary **plus** a signed CAR bundle
+  - Exposes a widget inside ChatGPT to download and verify proofs
+
+  This shows how Intelexta’s **CAI/CAR schemas** can be embedded directly into agentic workflows.
+
+### Hosted Validator (separate app)
+
+- **Intelexta Validator** – `https://validator.intelexta.com`  
+  A hosted application that uses part of the same ideas (signed receipts, verifiable runs, structured reports) but **lives in a separate codebase** from this monorepo.
+
+  It predates the current Desktop Node and serves as:
+  - An early **productized validator** for external users
+  - A proving ground for UX patterns and reporting formats that later informed the Intelexta Protocol
+
 ---
 
-## Success Metrics
+### Where to Start
 
-### Phase 1 ✅
-- [x] 100% of checkpoints are cryptographically signed
-- [x] 100% of tampered CARs are detected by verification
-- [x] Verification works without network or database access
-
-### Phase 2 (Target)
-- [ ] 95%+ reproducibility score for deterministic workflows (temperature=0)
-- [ ] <5% false positives (flagging valid reproductions as failed)
-- [ ] Replay completes in <2x original execution time
-
-### Phase 3 (Target)
-- [ ] Users can understand verification results without technical knowledge
-- [ ] Visualization loads in <3 seconds for typical workflows
-- [ ] 80%+ of users find diff view helpful for debugging
-
-### Phase 4 (Target)
-- [ ] Policy violations detected before execution (not after)
-- [ ] 90%+ of workflows stay within budget constraints
-- [ ] Zero security incidents related to policy bypass
-
-### Phase 5 (Target)
-- [ ] 1000+ published CARs in public registry
-- [ ] 10+ third-party integrations (IDEs, CI/CD, etc.)
-- [ ] Industry adoption as de-facto standard for verifiable AI
-
----
-
-## Timeline Estimates
-
-| Phase | Est. Duration | Complexity | Dependencies |
-|-------|---------------|------------|--------------|
-| Phase 1 ✅ | 4 weeks | High | None |
-| Phase 2 | 6 weeks | Very High | Phase 1 |
-| Phase 3 | 4 weeks | Medium | Phase 2 |
-| Phase 4 | 8 weeks | Very High | Phase 1 |
-| Phase 5 | Ongoing | Medium | Phase 2, 3, 4 |
-
-**Note**: Timelines assume 1-2 full-time developers. Adjust based on team capacity.
-
----
-
-## Questions? Feedback?
-
-Open an issue in the GitHub repository or start a discussion in the community forum.
-
-**Current Priority**: Phase 2 - Graded Replay implementation
+- If you want to **inspect the protocol and code**: start in this repo (`src-tauri`, `schemas`, `intelexta-verify`).
+- If you want to **see it in action** as a user:
+  - Visit **`https://verify.intelexta.com`** and drop an example CAR.
+  - Use **`verifiable-summary`** inside ChatGPT to generate summaries with signed receipts.
+  - Explore **`https://validator.intelexta.com`** as an early hosted validator built on the same concepts.
