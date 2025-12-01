@@ -1,6 +1,7 @@
 {
   "name": "@intelexta/verifiable-summary",
   "version": "0.1.0",
+  "license": "AGPL-3.0",
   "private": true,
   "description": "MCP server for verifiable summaries with cryptographic proofs",
   "type": "module",

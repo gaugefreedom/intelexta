@@ -8,6 +8,15 @@ _Mottos: "Proof, not vibes." & "Exact where possible, accountable where not."_
 
 Intelexta is a desktop application for researchers, writers, students and developers who need to produce verifiable and reproducible results from AI workflows. It is not another chat interface; it is a high-integrity control plane built on the principles of **Signed Provenance**, **Reproducible Pipelines**, and **Local-First Governance**.
 
+## Repository Structure
+
+This monorepo contains the reference implementation of the Intelexta Protocol:
+
+* **`/src-tauri`**: The **Desktop Node** (Rust/Tauri). A local-first verified workspace.
+* **`/apps/web-verifier`**: The **Public Verifier** (React/Vite). The source code for [verify.intelexta.com](https://verify.intelexta.com).
+* **`/apps/verifiable-summary`**: The **AI Agent Integration**. Middleware for generating CARs from LLM outputs.
+* **`/schemas`**: The core data structures for **CAI** (Certificates) and **CAR** (Receipts).
+
 ## Mission Alignment
 
 -   **Human+AI Symbiosis:** The human is the strategic director; the AI is a powerful cognitive partner operating within a provable envelope of human-defined policy.
@@ -37,7 +46,7 @@ cd src-tauri
 cargo tauri dev
 ```
 
-## Repository Structure (Post-Refactor)
+## Detailed Architecture
 
 ```text
 intelexta/

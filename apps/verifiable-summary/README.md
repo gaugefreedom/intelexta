@@ -290,4 +290,7 @@ This is part of the Intelexta monorepo. See main repository docs for contributin
 
 ## License
 
-MIT - See LICENSE in repository root.
+This component is part of the Intelexta Protocol and is licensed under the **GNU Affero General Public License v3.0 (AGPLv3)**.
+
+* **See Root License:** [../../LICENSE](../../LICENSE)
+* **Commercial Use:** For proprietary use cases (embedding without open-sourcing your code), commercial licenses are available. Contact `root@gaugefreedom.com`.
