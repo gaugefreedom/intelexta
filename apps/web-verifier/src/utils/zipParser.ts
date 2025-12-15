@@ -9,6 +9,19 @@ import { truncateText } from './textHelpers';
 const MAX_TEXT_PREVIEW_LENGTH = 800;
 const MAX_TEXT_FILE_SIZE = 5 * 1024 * 1024; // 5MB limit for text files
 
+type JSZipObjectWithData = JSZip.JSZipObject & {
+  _data?: {
+    uncompressedSize?: number;
+    compressedSize?: number;
+  };
+};
+
+function getZipEntrySize(entry: JSZip.JSZipObject): number {
+  const e = entry as unknown as JSZipObjectWithData;
+  return e._data?.uncompressedSize ?? 0;
+}
+
+
 /**
  * Parse a CAR ZIP bundle and extract car.json + attachments
  */
@@ -40,7 +53,7 @@ export async function parseCarZip(
 
   // Process each attachment
   for (const { fileName, entry } of attachmentEntries) {
-    const size = entry._data?.uncompressedSize ?? 0;
+    const size = getZipEntrySize(entry);
 
     // Determine if this is a text file we can preview
     const isTextFile =

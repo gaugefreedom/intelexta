@@ -1,15 +1,26 @@
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
+@layer base {
+  body {
+    @apply antialiased text-slate-900 bg-slate-50;
+  }
 }
 
-a {
-  @apply text-brand-400 hover:text-brand-300 underline;
-}
-
-body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+/* Custom Utilities used in Layout */
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  /* Optional: Fade mask for quota list scrolling */
+  .mask-fade {
+    mask-image: linear-gradient(to right, black 85%, transparent 100%);
+  }
 }

@@ -1,15 +1,20 @@
 /** @type {import('tailwindcss').Config} */
-export default {
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+module.exports = {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
   theme: {
     extend: {
-      colors: {
-        brand: {
-          300: '#7dd3fc', // sky-300
-          400: '#38bdf8', // sky-400
-        },
+      // If you had custom 'brand' colors before, you can keep them, 
+      // but the new code uses standard 'emerald' and 'slate'.
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
       },
     },
   },
-  plugins: [],
-};
+  plugins: [
+    require("tailwindcss-animate"), // <--- ADD THIS
+  ],
+}
