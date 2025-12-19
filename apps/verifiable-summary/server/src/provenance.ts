@@ -71,12 +71,21 @@ export interface Source {
 
 export interface ProofBundle {
   'car.json': string;
-  [key: `attachments/${string}.txt`]: string;
+  [key: `attachments/${string}`]: string;
 }
 
 export interface ProofBundleResult {
   bundle: ProofBundle;
   isSigned: boolean;
+}
+
+export interface GenerateProofBundleOptions {
+  includeSource?: boolean;
+  previewLength?: number;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+  };
 }
 
 /**
@@ -92,16 +101,31 @@ export interface ProofBundleResult {
  * @param summary - Generated summary text
  * @param model - Model identifier (e.g., "gpt-4o-mini", "chatgpt-summarizer")
  * @param secretKeyB64 - Optional Ed25519 secret key for signing
+ * @param options - Additional generation options
  * @returns Object containing all bundle artifacts as strings
  */
 export async function generateProofBundle(
   source: Source,
   summary: string,
   model: string,
-  secretKeyB64?: string
+  secretKeyB64?: string,
+  options: GenerateProofBundleOptions = {}
 ): Promise<ProofBundleResult> {
   const runId = `vs-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
   const createdAt = new Date().toISOString();
+  const includeSource = options.includeSource ?? false;
+  const previewLength = options.previewLength ?? 200;
+  const hasMeasuredUsage = Boolean(options.usage);
+  const promptTokensMeasured = options.usage?.prompt_tokens;
+  const completionTokensMeasured = options.usage?.completion_tokens;
+
+  const estimatedPromptTokens = Math.ceil(source.content.length / 4);
+  const estimatedCompletionTokens = Math.ceil(summary.length / 4);
+
+  const promptTokens = promptTokensMeasured ?? estimatedPromptTokens;
+  const completionTokens = completionTokensMeasured ?? estimatedCompletionTokens;
+  const totalTokens = promptTokens + completionTokens;
+  const tokenMode = hasMeasuredUsage ? 'measured' : 'estimated';
 
   // ========================================
   // 1. Generate attachment files
@@ -120,26 +144,34 @@ ${summary}
 `;
   const summaryHash = sha256(summaryContent);
 
-  // Source input
-  const sourcesContent = `Source URL: ${source.url}
-Accessed: ${createdAt}
-Bytes: ${Buffer.byteLength(source.content, 'utf-8')}
-SHA256: ${sha256(source.content)}
+  const preview = source.content.slice(0, previewLength);
+  const previewWithEllipsis = source.content.length > previewLength ? `${preview}...` : preview;
 
----
+  const originalInputHash = sha256(source.content);
 
-${source.content}
-`;
-  const sourcesHash = sha256(sourcesContent);
+  const sourceMetadata = {
+    source_url: source.url,
+    accessed_at: createdAt,
+    bytes: Buffer.byteLength(source.content, 'utf-8'),
+    input_sha256: `sha256:${originalInputHash}`,
+    preview: previewWithEllipsis
+  };
+  const metadataJson = JSON.stringify(sourceMetadata, null, 2);
+  const metadataHash = sha256(metadataJson);
+  const inputsSha256 = includeSource ? originalInputHash : metadataHash;
+
+  const sourceAttachmentContent = includeSource ? source.content : metadataJson;
+  const sourceAttachmentName = includeSource ? `${inputsSha256}.txt` : `${metadataHash}.json`;
 
   // Policy document (static for CAR-Lite)
   const policyDoc = `Verifiable Summary Policy v1.0
 
 This policy governs the verifiable-summary workflow:
-- Allows content ingestion from specified URLs
+- Allows inline content ingestion from caller-provided text
 - Allows summarization using configured LLM
-- Network egress: permitted (for API calls and content fetching)
-- Data retention: ephemeral (no persistent storage)
+- Network egress: ${hasMeasuredUsage ? 'OpenAI API call observed' : 'none observed (local summarization)'}
+- Data retention: bounded TTL persistent storage for bundle downloads
+- Token accounting: ${tokenMode} via ${hasMeasuredUsage ? 'OpenAI usage' : 'chars/4 heuristic'}
 
 Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
 `;
@@ -155,13 +187,21 @@ Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
       stepType: 'summarize',
       model: model,
       prompt: `Summarize content from: ${source.url}`,
-      tokenBudget: 4000,
+      tokenBudget: totalTokens || 4000,
       proofMode: 'concordant' as const,
       epsilon: 0.5,
       configJson: JSON.stringify({
         source_url: source.url,
         content_length: source.content.length,
-        summarization_style: 'concise'
+        summarization_style: 'concise',
+        token_mode: tokenMode,
+        tokens_measured: hasMeasuredUsage,
+        tokens_estimated: !hasMeasuredUsage,
+        estimated_prompt_tokens: promptTokens,
+        estimated_completion_tokens: completionTokens,
+        estimated_total_tokens: totalTokens,
+        budgets_mode: tokenMode,
+        sgrade_not_computed: true
       })
     }
   ];
@@ -179,7 +219,6 @@ Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
   // 2. Build checkpoint proof chain
   // ========================================
 
-  const inputsSha256 = sha256(source.content);
   const outputsSha256 = summaryHash;
 
   // For CAR-Lite, we create a single synthetic checkpoint
@@ -193,9 +232,9 @@ Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
     inputs_sha256: inputsSha256,
     outputs_sha256: outputsSha256,
     incident: null,
-    usage_tokens: 0,
-    prompt_tokens: 0,
-    completion_tokens: 0
+    usage_tokens: totalTokens,
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens
   };
 
   // Compute curr_chain: SHA256(prev_chain + canonical_json(checkpoint_body))
@@ -233,39 +272,42 @@ Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
             timestamp: createdAt,
             inputs_sha256: inputsSha256,
             outputs_sha256: outputsSha256,
-            usage_tokens: 0,
-            prompt_tokens: 0,
-            completion_tokens: 0
+            usage_tokens: totalTokens,
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens
           }
         ]
       }
     },
     policy_ref: {
       hash: `sha256:${policyHash}`,
-      egress: true,
-      estimator: 'usage_tokens * 0.010000 nature_cost/token'
+      egress: hasMeasuredUsage,
+      estimator: hasMeasuredUsage ? 'openai_usage_tokens' : 'estimated:chars_per_token=4'
     },
-    budgets: {
-      usd: 0,
-      tokens: 0,
-      nature_cost: 0
+    budgets: totalTokens
+      ? {
+          usd: estimateUsd(promptTokens, completionTokens, hasMeasuredUsage),
+          tokens: totalTokens,
+          nature_cost: Number((totalTokens * 0.01).toFixed(6))
+        }
+      : undefined,
+    sgrade: {
+      score: 0,
+      components: {
+        provenance: 0,
+        energy: 0,
+        replay: 0,
+        consent: 0,
+        incidents: 0
+      }
     },
     provenance: [
       { claim_type: 'config', sha256: `sha256:${configHash}` },
       { claim_type: 'input', sha256: `sha256:${inputsSha256}` },
+      { claim_type: 'input_meta', sha256: `sha256:${metadataHash}` },
       { claim_type: 'output', sha256: `sha256:${outputsSha256}` }
     ],
     checkpoints: [checkpointId],
-    sgrade: {
-      score: 85,
-      components: {
-        provenance: 1.0,
-        energy: 1.0,
-        replay: 0.8,
-        consent: 0.8,
-        incidents: 1.0
-      }
-    },
     signer_public_key: secretKeyB64 ? getPublicKey(secretKeyB64) : ''
   };
 
@@ -322,7 +364,8 @@ Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
   const bundle: ProofBundle = {
     'car.json': JSON.stringify(carJson, null, 2),
     [`attachments/${summaryHash}.txt`]: summaryContent,
-    [`attachments/${sourcesHash}.txt`]: sourcesContent
+    [`attachments/${metadataHash}.json`]: metadataJson,
+    [`attachments/${sourceAttachmentName}`]: sourceAttachmentContent
   };
 
   return {
@@ -341,4 +384,16 @@ export function generateKeypair(): { publicKey: string; secretKey: string } {
     publicKey: encodeBase64(keypair.publicKey),
     secretKey: encodeBase64(keypair.secretKey)
   };
+}
+
+function estimateUsd(promptTokens: number, completionTokens: number, usedLlm: boolean): number {
+  if (!usedLlm) {
+    return 0;
+  }
+
+  // gpt-4o-mini pricing (approx): $0.15 / 1M input tokens, $0.60 / 1M output tokens
+  const promptCost = promptTokens * 0.15 / 1_000_000;
+  const completionCost = completionTokens * 0.60 / 1_000_000;
+
+  return Number((promptCost + completionCost).toFixed(6));
 }

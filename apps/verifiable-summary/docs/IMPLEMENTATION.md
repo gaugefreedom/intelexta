@@ -34,11 +34,10 @@ apps/verifiable-summary/
 - ✅ `generateKeypair()` - Create new Ed25519 keypair
 
 **Bundle Structure**:
-- `summary.md` - Generated summary
-- `sources.jsonl` - Source metadata (URL, hash, bytes)
-- `transcript.json` - Workflow steps with status
-- `manifest.json` - File hashes + tree hash
-- `receipts/ed25519.json` - Cryptographic signature
+- `car.json` - CAR-Lite payload + signatures
+- `attachments/<hash>.txt` - Generated summary content
+- `attachments/metadata/source.json` - Input hash, byte count, preview
+- `attachments/<hash>.txt` (optional) - Full source content when include_source=true
 
 #### **summarizer.ts**
 - ✅ Local summarization (instant, free)
@@ -65,10 +64,9 @@ apps/verifiable-summary/
 **Input Parameters**:
 ```typescript
 {
-  mode: "text" | "file",      // Content source
-  text?: string,               // Direct text (if mode=text)
-  fileUrl?: string,            // URL to fetch (if mode=file)
-  style: "tl;dr" | "bullets" | "outline"  // Summary format
+  text: string,                // Content to summarize (required)
+  style?: "tl;dr" | "bullets" | "outline", // Summary format
+  include_source?: boolean     // Default false; when true, embeds full input in bundle
 }
 ```
 

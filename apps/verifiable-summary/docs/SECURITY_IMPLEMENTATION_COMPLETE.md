@@ -3,6 +3,8 @@
 **Date:** 2025-01-06
 **Status:** ✅ **ALL SECURITY ISSUES RESOLVED**
 
+> Update (2025-12-18): Remote file ingestion has been removed entirely; inline text is the only supported input. The SSRF and streaming controls referenced below are kept for historical context, but the active mitigation is feature removal plus bounded bundle storage.
+
 ## Implementation Comparison
 
 Both security implementations (mine and the other agent's) addressed the same critical vulnerabilities with slightly different approaches. The merged code now contains the **best of both implementations**.

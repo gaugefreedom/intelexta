@@ -53,6 +53,7 @@ Required variables:
 - `PUBLIC_URL` - Public URL for downloads
 - `ED25519_SECRET_KEY` - Signing key from step 2
 - `OPENAI_API_KEY` - (Optional) For cloud summarization
+- `BUNDLE_STORAGE_DIR` - (Optional) Persistent path for CAR ZIPs (default: `.data/bundles`, retained ~24h)
 
 ### 4. Start Development Server
 
@@ -93,12 +94,12 @@ The widget will appear with:
 **Input**:
 ```typescript
 {
-  mode: "text" | "file",    // Content source
-  text?: string,             // Direct text content
-  fileUrl?: string,          // URL to fetch content
-  style: "tl;dr" | "bullets" | "outline"  // Summary format
+  text: string,                       // Content to summarize (required)
+  style?: "tl;dr" | "bullets" | "outline",  // Summary format
+  include_source?: boolean            // Default: false. When true, embeds full input in bundle.
 }
 ```
+When `include_source` is omitted or `false`, the ZIP bundle only contains a hash, byte count, and a short preview of the input (first 200 chars) to avoid storing user data in full.
 
 **Output**:
 ```typescript
@@ -124,12 +125,11 @@ Downloaded ZIPs contain:
 
 ```
 verifiable.car.zip
-├── summary.md              # Generated summary
-├── sources.jsonl           # Source metadata
-├── transcript.json         # Workflow steps
-├── manifest.json           # File hashes + tree hash
-└── receipts/
-    └── ed25519.json        # Cryptographic signature
+├── car.json                        # CAR-Lite payload and signatures
+├── attachments/
+│   ├── <hash>.txt                  # Summary payload
+│   └── metadata/source.json        # Hash, byte count, preview of input
+│   └── <hash>.txt (optional)       # Full source content when include_source=true
 ```
 
 ### Verification
@@ -268,12 +268,8 @@ This manual regression ensures summary HTML is escaped before rendering.
 ## Troubleshooting
 
 ### "Bundle not found"
-- ZIPs expire after 1 hour
+- ZIPs expire after 24 hours by default
 - Re-run the tool to generate a new bundle
-
-### "Failed to fetch file"
-- Ensure `fileUrl` is publicly accessible
-- Check CORS settings if fetching from web
 
 ### "Unsigned bundle"
 - Set `ED25519_SECRET_KEY` in `.env`

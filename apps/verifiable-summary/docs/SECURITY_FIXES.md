@@ -12,20 +12,16 @@ All **critical** and **high-risk** vulnerabilities have been addressed. The serv
 
 ### 1. Server-Side Request Forgery (SSRF) - FIXED ✅
 
-**Issue:** The server blindly fetched any URL provided by users in the `fileUrl` parameter, allowing attackers to:
+**Issue:** The server blindly fetched any URL provided by users in the old `fileUrl` parameter, allowing attackers to:
 - Scan internal networks
 - Access cloud metadata endpoints (e.g., `169.254.169.254`)
 - Exfiltrate sensitive data from internal services
 
 **Fix Applied:**
-- Created `src/security.ts` with `validateSafeUrl()` function
-- Protocol validation: Only `http:` and `https:` allowed
-- DNS resolution and IP validation against private/internal ranges
-- Blocked ranges: `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`
-- Blocked cloud metadata endpoints: `169.254.169.254`, `metadata.google.internal`
-- Added 10-second timeout to prevent slow-loris attacks
+- Removed remote file ingestion entirely; tool now only accepts inline text.
+- Deleted SSRF helper modules and tests to eliminate request-surface.
 
-**Code Location:** `src/index.ts:239-244`, `src/security.ts:21-72`
+**Code Location:** `src/index.ts` (tool schema), removal of `src/security.ts`, `src/urlValidation.ts`
 
 ### 2. Cross-Site Scripting (XSS) - FIXED ✅
 
@@ -41,15 +37,13 @@ All **critical** and **high-risk** vulnerabilities have been addressed. The serv
 
 ### 3. Unbounded File Size (Denial of Service) - FIXED ✅
 
-**Issue:** The server would attempt to read entire files into memory without checking size, allowing OOM attacks with large files (e.g., 5GB).
+**Issue:** Remote file fetches could stream unbounded payloads into memory.
 
 **Fix Applied:**
-- Created `validateFileSize()` function in `src/security.ts`
-- Check `Content-Length` header before reading response body
-- Maximum file size: **10MB** (configurable via `MAX_FILE_SIZE_BYTES`)
-- Clear error messages when file exceeds limit
+- Removed remote fetch capability; only inline text is accepted.
+- Any future reads must enforce streaming limits before merging.
 
-**Code Location:** `src/index.ts:251-253`, `src/security.ts:77-92`
+**Code Location:** Remote fetch branch removed from `src/index.ts`
 
 ---
 

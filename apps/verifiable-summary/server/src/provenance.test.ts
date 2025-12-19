@@ -28,10 +28,26 @@ describe('generateProofBundle', () => {
 
     // Check CAR-Lite required fields
     expect(carData.proof.match_kind).toBe('process');
-    expect(carData.budgets).toEqual({ usd: 0, tokens: 0, nature_cost: 0 });
-    expect(carData.provenance).toHaveLength(3);
+    expect(carData.budgets).toBeDefined();
+    expect(carData.provenance).toHaveLength(4);
     expect(carData.checkpoints).toHaveLength(1);
-    expect(carData.sgrade.score).toBe(85);
+    expect(carData.sgrade).toEqual({
+      score: 0,
+      components: {
+        provenance: 0,
+        energy: 0,
+        replay: 0,
+        consent: 0,
+        incidents: 0
+      }
+    });
+
+    const attachmentKeys = Object.keys(bundle);
+    const metadataAttachment = attachmentKeys.find((k) => k.endsWith('.json') && k.startsWith('attachments/'));
+    expect(metadataAttachment).toBeDefined();
+    // Summary attachment + metadata only when includeSource=false
+    const attachmentCount = attachmentKeys.filter((key) => key.startsWith('attachments/')).length;
+    expect(attachmentCount).toBe(2);
   });
 
   it('generates signed car.json when secret key is provided', async () => {
@@ -42,7 +58,8 @@ describe('generateProofBundle', () => {
       { url: 'inline://test', content: 'Example content for testing.' },
       'Test summary',
       'test-model',
-      testSecretKey
+      testSecretKey,
+      { includeSource: true }
     );
 
     expect(isSigned).toBe(true);
@@ -60,5 +77,19 @@ describe('generateProofBundle', () => {
 
     // Verify deterministic ID
     expect(carData.id).toMatch(/^car:[0-9a-f]{64}$/);
+
+    const attachmentKeys = Object.keys(bundle);
+    const metadataAttachment = attachmentKeys.find((k) => k.endsWith('.json') && k.startsWith('attachments/'));
+    expect(metadataAttachment).toBeDefined();
+    const sourceAttachment = attachmentKeys.find(
+      (key) => {
+        if (!key.startsWith('attachments/') || !key.endsWith('.txt')) {
+          return false;
+        }
+        const value = bundle[key as `attachments/${string}`];
+        return value.includes('Example content for testing.');
+      }
+    );
+    expect(sourceAttachment).toBeDefined();
   });
 });
