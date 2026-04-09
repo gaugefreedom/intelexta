@@ -1,25 +1,19 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import Verifier from './components/Verifier';
 import PublicReceiptPage from './pages/PublicReceiptPage';
 
-// Component to set document title based on route
 function DocumentHead() {
   const location = useLocation();
+  const { t } = useTranslation();
 
   useEffect(() => {
-    // Set title based on route
-    if (location.pathname.startsWith('/r/')) {
-      document.title = 'Intelexta Integrity Report - Auditor View';
-    } else {
-      document.title = 'Intelexta Web Verifier';
-    }
+    const isAuditor = location.pathname.startsWith('/r/');
+    document.title = isAuditor ? t('page_title_auditor') : t('page_title_verifier');
 
-    // Set meta description
     const metaDescription = document.querySelector('meta[name="description"]');
-    const content = location.pathname.startsWith('/r/')
-      ? 'View a verified Intelexta Integrity Report. Auditor view - no login required.'
-      : 'Upload CAR archives to verify Intelexta workflow proofs in the browser.';
+    const content = isAuditor ? t('page_meta_auditor') : t('page_meta_verifier');
 
     if (!metaDescription) {
       const meta = document.createElement('meta');
@@ -29,7 +23,7 @@ function DocumentHead() {
     } else {
       metaDescription.setAttribute('content', content);
     }
-  }, [location]);
+  }, [location, t]);
 
   return null;
 }

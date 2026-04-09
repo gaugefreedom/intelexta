@@ -160,7 +160,7 @@ When integrating plugins don't have full Intelexta capabilities, use these **neu
 | `budgets.nature_cost` | `0` | Set to 0 if unknown |
 | `policy_ref.hash` | `"sha256:<hash-of-static-policy>"` | Ship a static policy doc |
 | `policy_ref.egress` | `true` | Conservative default for network access |
-| `policy_ref.estimator` | `"usage_tokens * 0.010000 nature_cost/token"` | Generic formula |
+| `policy_ref.estimator` | `"intelexta-validator-local-kwh-v1"` | kWh estimate: (usage_tokens / 1000) * 0.00003 |
 | `sgrade.score` | `70-97` | Baseline score for basic compliance |
 | `sgrade.components` | `{ provenance: 1.0, energy: 1.0, replay: 1.0, consent: 0.8, incidents: 1.0 }` | Neutral values |
 | `run.kind` | `"concordant"` | Standard proof mode |
@@ -281,7 +281,7 @@ export async function generateProofBundle(
     policy_ref: {
       hash: policyHash,
       egress: true,
-      estimator: "usage_tokens * 0.010000 nature_cost/token"
+      estimator: "intelexta-validator-local-kwh-v1"
     },
     budgets: {
       usd: 0,

@@ -54,7 +54,7 @@ Both profiles implement the same schema (`car-v0.3.schema.json`) with identical 
 | `budgets.nature_cost` | `0` | Unknown environmental cost = 0 |
 | `policy_ref.hash` | `"sha256:<hash>"` | Hash of static policy document |
 | `policy_ref.egress` | `true` | Conservative default (network allowed) |
-| `policy_ref.estimator` | `"usage_tokens * 0.010000 nature_cost/token"` | Generic formula |
+| `policy_ref.estimator` | `"intelexta-validator-local-kwh-v1"` | kWh estimate: (usage_tokens / 1000) * 0.00003 |
 | `provenance` | `[{config}, {input}, {output}]` | Minimum 3 claims |
 | `checkpoints` | `["ckpt:<run_id>"]` | Single synthetic checkpoint |
 | `sgrade.score` | `70-97` | Baseline compliance score |
@@ -98,7 +98,7 @@ Both profiles implement the same schema (`car-v0.3.schema.json`) with identical 
   "policy_ref": {
     "hash": "sha256:1234567890abcdef...",
     "egress": true,
-    "estimator": "usage_tokens * 0.010000 nature_cost/token"
+    "estimator": "intelexta-validator-local-kwh-v1"
   },
   "budgets": {
     "usd": 0,

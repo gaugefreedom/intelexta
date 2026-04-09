@@ -1,11 +1,11 @@
-# IntelExta Model Catalog
+# Intelexta Model Catalog
 # This file defines all available AI models, their costs, and API configurations
 # Pricing is in USD per million tokens (as of October 2025)
 
 [metadata]
 version = "1.0.0"
 created_at = "2025-10-08T00:00:00Z"
-description = "IntelExta verified model catalog with real-world pricing and environmental impact data"
+description = "Intelexta verified model catalog with real-world pricing and environmental impact data"
 
 [defaults]
 nature_cost_algorithm = "simple"

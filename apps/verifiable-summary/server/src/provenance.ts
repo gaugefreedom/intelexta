@@ -12,6 +12,9 @@ import util from 'tweetnacl-util';
 
 const { encodeBase64, decodeBase64 } = util;
 
+const DEFAULT_KWH_PER_1K_TOKENS = 0.00003;
+const NATURE_COST_ESTIMATOR_ID = 'intelexta-validator-local-kwh-v1';
+
 // ============================================================================
 // Core Cryptographic Utilities
 // ============================================================================
@@ -173,7 +176,7 @@ This policy governs the verifiable-summary workflow:
 - Data retention: bounded TTL persistent storage for bundle downloads
 - Token accounting: ${tokenMode} via ${hasMeasuredUsage ? 'OpenAI usage' : 'chars/4 heuristic'}
 
-Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
+Nature cost estimator: ${NATURE_COST_ESTIMATOR_ID} (kWh = usage_tokens / 1000 * ${DEFAULT_KWH_PER_1K_TOKENS})
 `;
   const policyHash = sha256(policyDoc);
 
@@ -282,13 +285,13 @@ Nature cost estimator: usage_tokens * 0.010000 nature_cost/token
     policy_ref: {
       hash: `sha256:${policyHash}`,
       egress: hasMeasuredUsage,
-      estimator: hasMeasuredUsage ? 'openai_usage_tokens' : 'estimated:chars_per_token=4'
+      estimator: NATURE_COST_ESTIMATOR_ID
     },
     budgets: totalTokens
       ? {
           usd: estimateUsd(promptTokens, completionTokens, hasMeasuredUsage),
           tokens: totalTokens,
-          nature_cost: Number((totalTokens * 0.01).toFixed(6))
+          nature_cost: Number(((totalTokens / 1000) * DEFAULT_KWH_PER_1K_TOKENS).toFixed(8))
         }
       : undefined,
     sgrade: {

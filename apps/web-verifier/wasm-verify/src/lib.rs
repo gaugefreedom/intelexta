@@ -595,7 +595,7 @@ struct Attachment {
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-enum VerificationStatus {
+pub enum VerificationStatus {
     Verified,
     Failed,
 }

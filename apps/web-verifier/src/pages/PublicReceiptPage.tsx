@@ -16,6 +16,7 @@ import {
   Grid
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { initVerifier, verifyCarJson } from '../wasm/loader';
 import type { VerificationReport } from '../types/verifier';
 
@@ -23,7 +24,6 @@ const VALIDATOR_API_BASE =
   import.meta.env.VITE_VALIDATOR_API_BASE?.toString() ||
   'https://validator.intelexta.com/api';
 
-// --- TYPES (Unchanged) ---
 interface PublicReceiptMeta {
   tier: string;
   engine_name: string;
@@ -106,35 +106,34 @@ interface PublicReceiptResponse {
 
 type PageStatus = 'loading' | 'success' | 'not_found' | 'error';
 
-// --- HELPERS ---
-const formatDate = (dateStr: string) => {
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    }).format(new Date(dateStr));
-  } catch {
-    return dateStr;
-  }
-};
-
-const supportLabelMap: Record<string, { label: string; color: string }> = {
-  well_supported: { label: 'Well Supported', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-  partially_supported: { label: 'Partially Supported', color: 'bg-amber-100 text-amber-700 border-amber-200' },
-  weakly_supported: { label: 'Weakly Supported', color: 'bg-orange-100 text-orange-700 border-orange-200' },
-  unclear: { label: 'Unclear', color: 'bg-rose-100 text-rose-700 border-rose-200' },
-};
-
-// --- COMPONENT ---
 const PublicReceiptPage = () => {
   const { receiptId } = useParams<{ receiptId: string }>();
+  const { t, i18n } = useTranslation();
   const [pageStatus, setPageStatus] = useState<PageStatus>('loading');
   const [error, setError] = useState<string | null>(null);
   const [publicReceipt, setPublicReceipt] = useState<PublicReceiptResponse | null>(null);
   const [verificationStatus, setVerificationStatus] = useState<'pending' | 'verified' | 'failed'>('pending');
+
+  const formatDate = (dateStr: string) => {
+    try {
+      return new Intl.DateTimeFormat(i18n.language, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(new Date(dateStr));
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const supportLabelMap: Record<string, { label: string; color: string }> = {
+    well_supported: { label: t('support_well_supported'), color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+    partially_supported: { label: t('support_partially_supported'), color: 'bg-amber-100 text-amber-700 border-amber-200' },
+    weakly_supported: { label: t('support_weakly_supported'), color: 'bg-orange-100 text-orange-700 border-orange-200' },
+    unclear: { label: t('support_unclear'), color: 'bg-rose-100 text-rose-700 border-rose-200' },
+  };
 
   useEffect(() => {
     if (!receiptId) {
@@ -181,7 +180,6 @@ const PublicReceiptPage = () => {
     fetchAndVerify();
   }, [receiptId]);
 
-  // --- SUB-COMPONENTS FOR LAYOUT ---
   const AuditorHeader = () => (
     <header className="bg-white border-b border-slate-200 h-14 flex items-center justify-between px-4 lg:px-8 sticky top-0 z-50">
       <div className="flex items-center gap-4">
@@ -193,12 +191,20 @@ const PublicReceiptPage = () => {
             <img src="/icon.png" className="w-6 h-6 rounded-md" alt="Logo" onError={(e) => e.currentTarget.style.display = 'none'} />
           </div>
           <span className="font-bold text-slate-800 text-lg tracking-tight">
-            Intelexta <span className="text-slate-400 font-normal">Auditor</span>
+            {t('app_name')} <span className="text-slate-400 font-normal">{t('app_auditor')}</span>
           </span>
         </div>
       </div>
-      <div className="text-xs font-medium bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full border border-slate-200 hidden sm:block">
-        Public View • No Login Required
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => i18n.changeLanguage(i18n.language === 'pt-BR' ? 'en' : 'pt-BR')}
+          className="text-xs font-bold bg-white border border-slate-200 hover:bg-slate-50 text-slate-500 px-2.5 py-1 rounded-full transition-colors"
+        >
+          {i18n.language === 'pt-BR' ? t('language_en') : t('language_pt')}
+        </button>
+        <div className="text-xs font-medium bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full border border-slate-200 hidden sm:block">
+          {t('status_public_view')}
+        </div>
       </div>
     </header>
   );
@@ -207,29 +213,28 @@ const PublicReceiptPage = () => {
     <footer className="border-t bg-white mt-auto">
       <div className="max-w-4xl mx-auto px-4 py-6 text-xs text-slate-400 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <strong className="text-slate-600 font-semibold">Intelexta Validator</strong>
+          <strong className="text-slate-600 font-semibold">{t('app_name')} {t('app_verifier')}</strong>
           <span className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
-            Verified Public Record • CAR v0.3
+            {t('footer_verified_record')}
           </span>
         </div>
         <div className="text-right">
-          <span>Built by <a href="https://www.gaugefreedom.com/" className="hover:text-slate-600 underline">Gauge Freedom</a></span>
+          <span>{t('footer_built_by')} <a href="https://www.gaugefreedom.com/" className="hover:text-slate-600 underline">Gauge Freedom</a></span>
           <br/>
-          <span className="italic">"Exact where possible, accountable where not."</span>
+          <span className="italic">{t('footer_tagline')}</span>
         </div>
       </div>
     </footer>
   );
 
-  // --- STATES ---
   if (pageStatus === 'loading') {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
         <AuditorHeader />
         <main className="flex-1 flex flex-col items-center justify-center gap-4">
           <Loader2 className="w-10 h-10 animate-spin text-emerald-600" />
-          <p className="text-slate-500 font-medium animate-pulse">Verifying cryptographic chain...</p>
+          <p className="text-slate-500 font-medium animate-pulse">{t('public_loading')}</p>
         </main>
       </div>
     );
@@ -245,16 +250,16 @@ const PublicReceiptPage = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-900">
-              {pageStatus === 'not_found' ? 'Receipt Not Found' : 'Error Loading Receipt'}
+              {pageStatus === 'not_found' ? t('public_not_found_title') : t('public_error_title')}
             </h1>
             <p className="text-slate-500 mt-2 max-w-sm mx-auto">
-              {pageStatus === 'not_found' 
-                ? "This proof link doesn't exist or hasn't been shared yet." 
-                : error || "An unexpected error occurred."}
+              {pageStatus === 'not_found'
+                ? t('public_not_found_body')
+                : error || t('public_error_body')}
             </p>
           </div>
           <a href="/" className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors">
-            Go to Verifier Home
+            {t('public_go_home')}
           </a>
         </main>
         <AuditorFooter />
@@ -262,7 +267,6 @@ const PublicReceiptPage = () => {
     );
   }
 
-  // --- SUCCESS STATE ---
   const { report, receipt_display, meta } = publicReceipt!;
 
   return (
@@ -270,7 +274,7 @@ const PublicReceiptPage = () => {
       <AuditorHeader />
 
       <main className="flex-1 w-full max-w-4xl mx-auto px-4 py-8 flex flex-col gap-6">
-        
+
         {/* Verification Status Banner */}
         <div className={clsx(
           "rounded-xl border p-4 flex items-start gap-4 shadow-sm transition-all",
@@ -283,12 +287,12 @@ const PublicReceiptPage = () => {
           )}
           <div>
             <h3 className={clsx("text-lg font-bold", verificationStatus === 'verified' ? "text-emerald-900" : "text-rose-900")}>
-              {verificationStatus === 'verified' ? 'Receipt Verified' : 'Verification Failed'}
+              {verificationStatus === 'verified' ? t('public_receipt_verified_title') : t('public_receipt_failed_title')}
             </h3>
             <p className={clsx("text-sm mt-1 leading-relaxed", verificationStatus === 'verified' ? "text-emerald-700" : "text-rose-700")}>
-              {verificationStatus === 'verified' 
-                ? "The cryptographic signature and hash chain of this receipt are valid. The content matches the original execution log." 
-                : "Could not verify receipt integrity. Data may be incomplete or tampered."}
+              {verificationStatus === 'verified'
+                ? t('public_receipt_verified_body')
+                : t('public_receipt_failed_body')}
             </p>
           </div>
         </div>
@@ -296,22 +300,22 @@ const PublicReceiptPage = () => {
         {/* Metadata Grid */}
         <section className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5">
           <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide mb-4 flex items-center gap-2">
-            <Activity size={16} className="text-slate-400" /> Receipt Metadata
+            <Activity size={16} className="text-slate-400" /> {t('public_metadata_title')}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-              <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">Receipt ID</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">{t('public_receipt_id')}</div>
               <div className="font-mono text-sm text-slate-700 break-all">{receipt_display.id}</div>
             </div>
             <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-              <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">Created</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">{t('public_created')}</div>
               <div className="text-sm text-slate-700 flex items-center gap-2">
                 <Calendar size={14} className="text-slate-400" />
                 {formatDate(meta.created_at)}
               </div>
             </div>
             <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-              <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">Engine / Tier</div>
+              <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">{t('public_engine_tier')}</div>
               <div className="text-sm text-slate-700 flex items-center gap-2">
                 <Cpu size={14} className="text-slate-400" />
                 <span className="font-medium">{meta.tier}</span>
@@ -321,7 +325,7 @@ const PublicReceiptPage = () => {
             </div>
             {receipt_display.sgrade && (
                <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-                <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">Stewardship Score</div>
+                <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">{t('public_stewardship_score')}</div>
                 <div className="flex items-center gap-3">
                   <Gauge size={14} className="text-emerald-600" />
                   <span className="text-lg font-bold text-slate-900">{receipt_display.sgrade.score}<span className="text-xs text-slate-400 font-normal">/100</span></span>
@@ -337,26 +341,26 @@ const PublicReceiptPage = () => {
         {/* Integrity Analysis */}
         <section className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-slate-900">Integrity Analysis</h2>
-            <span className="text-xs font-medium bg-slate-100 text-slate-500 px-2 py-1 rounded">Summary View</span>
+            <h2 className="text-lg font-bold text-slate-900">{t('public_integrity_title')}</h2>
+            <span className="text-xs font-medium bg-slate-100 text-slate-500 px-2 py-1 rounded">{t('public_integrity_summary_view')}</span>
           </div>
 
           {/* Scores Row */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-             <ScoreCard 
-               label="Factual Reliability" 
-               score={report.factual_reliability?.overall_score_0_100} 
-               description="Weighted accuracy of key claims."
+             <ScoreCard
+               label={t('public_factual_reliability')}
+               score={report.factual_reliability?.overall_score_0_100}
+               description={t('public_factual_reliability_desc')}
              />
-             <ScoreCard 
-               label="Heuristic Novelty" 
-               score={report.novelty_assessment?.heuristic_score_0_100} 
+             <ScoreCard
+               label={t('public_heuristic_novelty')}
+               score={report.novelty_assessment?.heuristic_score_0_100}
                description={report.novelty_assessment?.interpretation}
              />
-             <ScoreCard 
-               label="AI Usage Estimate" 
-               score={report.ai_usage_estimate?.model_guess_0_100} 
-               description="Estimated model contribution."
+             <ScoreCard
+               label={t('public_ai_usage_estimate')}
+               score={report.ai_usage_estimate?.model_guess_0_100}
+               description={t('public_ai_usage_desc')}
              />
           </div>
 
@@ -366,13 +370,13 @@ const PublicReceiptPage = () => {
                <div className="flex flex-col sm:flex-row gap-4 sm:gap-12">
                  {report.doc_type && (
                    <div>
-                     <dt className="text-[10px] uppercase font-bold text-indigo-400">Document Type</dt>
+                     <dt className="text-[10px] uppercase font-bold text-indigo-400">{t('public_doc_type')}</dt>
                      <dd className="text-sm font-medium text-indigo-900">{report.doc_type}</dd>
                    </div>
                  )}
                  {report.purpose && (
                    <div>
-                     <dt className="text-[10px] uppercase font-bold text-indigo-400">Purpose</dt>
+                     <dt className="text-[10px] uppercase font-bold text-indigo-400">{t('public_purpose')}</dt>
                      <dd className="text-sm font-medium text-indigo-900">{report.purpose}</dd>
                    </div>
                  )}
@@ -389,7 +393,7 @@ const PublicReceiptPage = () => {
           {report.key_claims && report.key_claims.length > 0 && (
             <div>
               <h3 className="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
-                 <FileText size={16} /> Key Claims Analysis
+                 <FileText size={16} /> {t('public_key_claims_title')}
               </h3>
               <ul className="space-y-3">
                 {report.key_claims.map((claim, idx) => {
@@ -411,7 +415,7 @@ const PublicReceiptPage = () => {
           {report.factual_reliability?.flagged_fragile_sections && report.factual_reliability.flagged_fragile_sections.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <h3 className="text-sm font-bold text-amber-800 mb-2 flex items-center gap-2">
-                <AlertTriangle size={16} /> Areas Needing Attention
+                <AlertTriangle size={16} /> {t('public_fragile_title')}
               </h3>
               <ul className="space-y-2">
                 {report.factual_reliability.flagged_fragile_sections.map((section, idx) => (
@@ -432,7 +436,7 @@ const PublicReceiptPage = () => {
             rel="noopener noreferrer"
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-6 py-3 text-sm font-bold text-white hover:bg-slate-800 transition-all shadow-md"
           >
-            Verify your own work <ExternalLink size={14} />
+            {t('public_cta_verify')} <ExternalLink size={14} />
           </a>
           <a
             href="https://intelexta.com"
@@ -440,7 +444,7 @@ const PublicReceiptPage = () => {
             rel="noopener noreferrer"
             className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 transition-all shadow-sm"
           >
-            About the Protocol <ChevronRight size={14} />
+            {t('public_cta_about')} <ChevronRight size={14} />
           </a>
         </div>
 
@@ -451,10 +455,9 @@ const PublicReceiptPage = () => {
   );
 };
 
-// --- HELPER COMPONENT ---
 function ScoreCard({ label, score, description }: { label: string, score?: number, description?: string }) {
   if (score === undefined) return null;
-  
+
   let colorClass = "bg-slate-500";
   if (score >= 70) colorClass = "bg-emerald-500";
   else if (score >= 40) colorClass = "bg-amber-500";

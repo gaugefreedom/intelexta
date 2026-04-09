@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp, FileText, Paperclip } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { AttachmentPreview, ProvenanceClaim } from '../types/car';
 import { formatFileSize } from '../utils/zipParser';
 
@@ -13,12 +14,12 @@ interface AttachmentItemProps {
 }
 
 const AttachmentItem = ({ attachment }: AttachmentItemProps) => {
+  const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
 
   const hasLongerContent =
     attachment.fullText && attachment.preview && attachment.fullText.length > attachment.preview.length;
 
-  // Determine badge color based on claim type (Light Theme)
   const getBadgeColor = () => {
     switch (attachment.claimType) {
       case 'input':
@@ -51,8 +52,8 @@ const AttachmentItem = ({ attachment }: AttachmentItemProps) => {
           </div>
           <p className="mt-1 text-xs text-slate-500 font-medium">
             {formatFileSize(attachment.size)}
-            {attachment.kind === 'text' && ' · Text file'}
-            {attachment.kind === 'binary' && ' · Binary file'}
+            {attachment.kind === 'text' && ` · ${t('attachments_text_file')}`}
+            {attachment.kind === 'binary' && ` · ${t('attachments_binary_file')}`}
           </p>
         </div>
       </div>
@@ -63,7 +64,7 @@ const AttachmentItem = ({ attachment }: AttachmentItemProps) => {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-wide text-slate-400">
               <FileText className="h-3.5 w-3.5 text-emerald-600" />
-              Content Preview
+              {t('attachments_content_preview')}
             </div>
             {hasLongerContent && (
               <button
@@ -74,12 +75,12 @@ const AttachmentItem = ({ attachment }: AttachmentItemProps) => {
                 {isExpanded ? (
                   <>
                     <ChevronUp className="h-3 w-3" />
-                    Collapse
+                    {t('attachments_collapse')}
                   </>
                 ) : (
                   <>
                     <ChevronDown className="h-3 w-3" />
-                    View Full
+                    {t('attachments_view_full')}
                   </>
                 )}
               </button>
@@ -94,7 +95,7 @@ const AttachmentItem = ({ attachment }: AttachmentItemProps) => {
 
           {!isExpanded && hasLongerContent && (
             <p className="mt-2 text-xs text-slate-400 italic">
-              Preview truncated. Click "View Full" to see complete content.
+              {t('attachments_preview_truncated')}
             </p>
           )}
         </div>
@@ -105,7 +106,7 @@ const AttachmentItem = ({ attachment }: AttachmentItemProps) => {
         <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
           <p className="text-sm text-slate-500 flex items-center gap-2">
             <Paperclip className="h-4 w-4 text-slate-400" />
-            Binary attachment (no inline preview available)
+            {t('attachments_binary_notice')}
           </p>
         </div>
       )}
@@ -113,7 +114,7 @@ const AttachmentItem = ({ attachment }: AttachmentItemProps) => {
       {/* Hash Reference */}
       {attachment.hashHex && (
         <div className="mt-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-          <p className="text-[10px] uppercase font-bold tracking-wide text-slate-400 mb-1">Content Hash</p>
+          <p className="text-[10px] uppercase font-bold tracking-wide text-slate-400 mb-1">{t('attachments_content_hash')}</p>
           <code className="text-xs text-slate-600 font-mono break-all">
             sha256:{attachment.hashHex}
           </code>
@@ -124,24 +125,22 @@ const AttachmentItem = ({ attachment }: AttachmentItemProps) => {
 };
 
 const AttachmentsCard = ({ attachments, provenance }: AttachmentsCardProps) => {
+  const { t } = useTranslation();
+
   if (!attachments || attachments.length === 0) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <header className="mb-4">
-          <p className="text-xs uppercase tracking-[0.3em] font-bold text-slate-400">Attachments</p>
-          <h3 className="text-xl font-bold text-slate-900 mt-1">Content Files</h3>
+          <p className="text-xs uppercase tracking-[0.3em] font-bold text-slate-400">{t('attachments_label')}</p>
+          <h3 className="text-xl font-bold text-slate-900 mt-1">{t('attachments_title')}</h3>
         </header>
-        <p className="text-sm text-slate-500">
-          This receipt does not include any content files. It only records workflow metadata and content hashes.
-        </p>
+        <p className="text-sm text-slate-500">{t('attachments_empty_body')}</p>
       </div>
     );
   }
 
-  // Separate attachments by type
   const textAttachments = attachments.filter((a) => a.kind === 'text');
 
-  // Compute provenance statistics
   const INLINE_TYPES = new Set(['config', 'policy', 'run_spec']);
 
   let inlineClaims = 0;
@@ -150,7 +149,6 @@ const AttachmentsCard = ({ attachments, provenance }: AttachmentsCardProps) => {
   let missingExternal = 0;
 
   if (provenance) {
-    // Build set of attachment hashes (without .txt extension)
     const attachmentHashes = new Set(
       attachments.map((a) => a.fileName.replace(/\.(txt|md|json)$/i, ''))
     );
@@ -159,10 +157,8 @@ const AttachmentsCard = ({ attachments, provenance }: AttachmentsCardProps) => {
       const hash = claim.sha256.replace(/^sha256:/, '');
 
       if (INLINE_TYPES.has(claim.claim_type)) {
-        // Config/policy claims are embedded in CAR metadata, no file expected
         inlineClaims++;
       } else {
-        // External claims (input, output, attachment) should have files
         externalClaims++;
         if (attachmentHashes.has(hash)) {
           externalWithFile++;
@@ -175,14 +171,37 @@ const AttachmentsCard = ({ attachments, provenance }: AttachmentsCardProps) => {
 
   const showWarning = missingExternal > 0;
 
+  const buildProvenanceText = () => {
+    if (showWarning) {
+      const key = provenance!.length === 1
+        ? 'attachments_provenance_warning'
+        : 'attachments_provenance_warning_plural';
+      return t(key, { total: provenance!.length, missing: missingExternal });
+    }
+
+    const pluralTotal = provenance!.length !== 1;
+    const pluralBundled = externalWithFile !== 1;
+    let key: string;
+    if (pluralTotal && pluralBundled) key = 'attachments_provenance_ok_plural_both';
+    else if (pluralTotal) key = 'attachments_provenance_ok_plural_total';
+    else if (pluralBundled) key = 'attachments_provenance_ok_plural_bundled';
+    else key = 'attachments_provenance_ok';
+
+    let text = t(key, { total: provenance!.length, bundled: externalWithFile });
+    if (inlineClaims > 0) {
+      text += t(inlineClaims === 1 ? 'attachments_provenance_inline_suffix_one' : 'attachments_provenance_inline_suffix_other', { count: inlineClaims });
+    }
+    return text;
+  };
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <header className="mb-6">
-        <p className="text-xs uppercase tracking-[0.3em] font-bold text-slate-400">Attachments</p>
-        <h3 className="text-xl font-bold text-slate-900 mt-1">Content Files</h3>
+        <p className="text-xs uppercase tracking-[0.3em] font-bold text-slate-400">{t('attachments_label')}</p>
+        <h3 className="text-xl font-bold text-slate-900 mt-1">{t('attachments_title')}</h3>
         <p className="mt-1 text-sm text-slate-500">
-          {attachments.length} file{attachments.length !== 1 ? 's' : ''} extracted from bundle
-          {textAttachments.length > 0 && ` · ${textAttachments.length} with preview`}
+          {t(attachments.length === 1 ? 'attachments_count_one' : 'attachments_count_other', { count: attachments.length })}
+          {textAttachments.length > 0 && ` · ${t(textAttachments.length === 1 ? 'attachments_preview_count_one' : 'attachments_preview_count_other', { count: textAttachments.length })}`}
         </p>
       </header>
 
@@ -199,17 +218,10 @@ const AttachmentsCard = ({ attachments, provenance }: AttachmentsCardProps) => {
             ? 'border-amber-200 bg-amber-50'
             : 'border-slate-200 bg-slate-50'
         }`}>
-          {showWarning ? (
-            <p className="text-sm text-amber-800">
-              <strong className="font-semibold">Note:</strong> This receipt records {provenance.length} provenance claim
-              {provenance.length !== 1 ? 's' : ''}. {missingExternal} of them refer to content stored externally or not exported. The receipt remains consistent, but only the bundled files can be inspected here.
-            </p>
-          ) : (
-            <p className="text-sm text-slate-600">
-              <strong className="font-semibold text-slate-900">Provenance:</strong> {provenance.length} claim{provenance.length !== 1 ? 's' : ''} — {externalWithFile} bundled file{externalWithFile !== 1 ? 's' : ''} can be inspected
-              {inlineClaims > 0 && `, ${inlineClaims} tracked by metadata only`}.
-            </p>
-          )}
+          <p
+            className={`text-sm ${showWarning ? 'text-amber-800' : 'text-slate-600'}`}
+            dangerouslySetInnerHTML={{ __html: buildProvenanceText() }}
+          />
         </div>
       )}
     </div>

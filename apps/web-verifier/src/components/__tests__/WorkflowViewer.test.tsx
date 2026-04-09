@@ -50,7 +50,7 @@ describe('WorkflowViewer', () => {
     render(<WorkflowViewer report={baseReport} />);
 
     expect(screen.getByRole('heading', { name: 'Verification Timeline' })).toBeInTheDocument();
-    expect(screen.getByText('Step 1: Prompt review')).toBeInTheDocument();
+    expect(screen.getByText('1. Prompt review')).toBeInTheDocument();
     expect(screen.getByText('Explain the color of the sky.')).toBeInTheDocument();
     expect(screen.getByText('2/2 verified')).toBeInTheDocument();
   });
@@ -59,16 +59,13 @@ describe('WorkflowViewer', () => {
     render(<WorkflowViewer report={baseReport} />);
 
     expect(screen.getByText('Attachment checksum mismatch')).toBeInTheDocument();
-    expect(screen.getAllByText('No attachments were referenced for this step.')).toHaveLength(1);
+    expect(screen.getAllByText('No attachments.')).toHaveLength(1);
   });
 
   it('renders an empty state when no steps are present', () => {
     const emptyReport: VerificationReport = { ...baseReport, workflow: { steps: [] } };
     render(<WorkflowViewer report={emptyReport} />);
 
-    // Partial/regex match works even if the message has extra guidance text
-    expect(screen.getByText(/No workflow steps were returned by the verifier/i)).toBeInTheDocument();
-    // (optional) also assert the guidance sentence exists
-    expect(screen.getByText(/Upload a CAR archive/i)).toBeInTheDocument();
+    expect(screen.getByText('No workflow steps found in this receipt.')).toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp, Code, FileText } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { Car, RunStep } from '../types/car';
 import { truncateText, truncateJson, formatTokens } from '../utils/textHelpers';
 
@@ -13,13 +14,12 @@ interface StepItemProps {
 }
 
 const StepItem = ({ step, index }: StepItemProps) => {
+  const { t } = useTranslation();
   const [isConfigExpanded, setIsConfigExpanded] = useState(false);
 
-  // Truncate prompt for preview
   const promptPreview = step.prompt ? truncateText(step.prompt, 240) : null;
   const hasLongerPrompt = step.prompt && step.prompt.length > 240;
 
-  // Truncate config JSON
   const configPreview = step.configJson ? truncateJson(step.configJson, 160) : null;
   const hasFullConfig = step.configJson && step.configJson.length > 160;
 
@@ -30,7 +30,7 @@ const StepItem = ({ step, index }: StepItemProps) => {
         <div className="flex items-start justify-between gap-3">
           <div>
             <h4 className="text-lg font-bold text-slate-900">
-              Step {index} – {step.stepType || 'llm'}
+              {t('steps_step_title', { index, type: step.stepType || 'llm' })}
             </h4>
             <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mt-1">
               {step.checkpointType}
@@ -47,7 +47,7 @@ const StepItem = ({ step, index }: StepItemProps) => {
         {/* Model */}
         {step.model && (
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-            <dt className="text-[10px] uppercase font-bold tracking-wide text-slate-400">Model</dt>
+            <dt className="text-[10px] uppercase font-bold tracking-wide text-slate-400">{t('steps_model')}</dt>
             <dd className="mt-1 text-sm font-medium text-slate-700">{step.model}</dd>
           </div>
         )}
@@ -55,18 +55,18 @@ const StepItem = ({ step, index }: StepItemProps) => {
         {/* Proof Mode & Epsilon */}
         <div className="grid grid-cols-2 gap-3">
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-            <dt className="text-[10px] uppercase font-bold tracking-wide text-slate-400">Proof Mode</dt>
+            <dt className="text-[10px] uppercase font-bold tracking-wide text-slate-400">{t('steps_proof_mode')}</dt>
             <dd className="mt-1 text-sm font-medium text-slate-700">{step.proofMode}</dd>
           </div>
           {step.epsilon !== undefined && (
             <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-              <dt className="text-[10px] uppercase font-bold tracking-wide text-slate-400">Epsilon</dt>
+              <dt className="text-[10px] uppercase font-bold tracking-wide text-slate-400">{t('steps_epsilon')}</dt>
               <dd className="mt-1 text-sm font-medium text-slate-700">{step.epsilon}</dd>
             </div>
           )}
           {step.epsilon === undefined && (
             <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-              <dt className="text-[10px] uppercase font-bold tracking-wide text-slate-400">Token Budget</dt>
+              <dt className="text-[10px] uppercase font-bold tracking-wide text-slate-400">{t('steps_token_budget')}</dt>
               <dd className="mt-1 text-sm font-medium text-slate-700">{formatTokens(step.tokenBudget)}</dd>
             </div>
           )}
@@ -77,14 +77,14 @@ const StepItem = ({ step, index }: StepItemProps) => {
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
             <div className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-wide text-slate-400 mb-2">
               <FileText className="h-3 w-3 text-emerald-600" />
-              Prompt
+              {t('steps_prompt')}
             </div>
             <dd className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">
               {promptPreview}
             </dd>
             {hasLongerPrompt && (
               <p className="mt-2 text-xs text-slate-400 italic">
-                (Prompt truncated for preview)
+                {t('steps_prompt_truncated')}
               </p>
             )}
           </div>
@@ -96,7 +96,7 @@ const StepItem = ({ step, index }: StepItemProps) => {
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-wide text-slate-400">
                 <Code className="h-3 w-3 text-emerald-600" />
-                Configuration
+                {t('steps_config')}
               </div>
               {hasFullConfig && (
                 <button
@@ -107,12 +107,12 @@ const StepItem = ({ step, index }: StepItemProps) => {
                   {isConfigExpanded ? (
                     <>
                       <ChevronUp className="h-3 w-3" />
-                      Collapse
+                      {t('steps_collapse')}
                     </>
                   ) : (
                     <>
                       <ChevronDown className="h-3 w-3" />
-                      Expand
+                      {t('steps_expand')}
                     </>
                   )}
                 </button>
@@ -131,13 +131,14 @@ const StepItem = ({ step, index }: StepItemProps) => {
 };
 
 const WorkflowStepsCard = ({ car }: WorkflowStepsCardProps) => {
+  const { t } = useTranslation();
   const steps = car.run.steps;
 
   if (steps.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-6 text-center">
-        <h3 className="text-lg font-semibold text-slate-900">Workflow Steps</h3>
-        <p className="mt-2 text-sm text-slate-500">No steps found in this workflow.</p>
+        <h3 className="text-lg font-semibold text-slate-900">{t('steps_title')}</h3>
+        <p className="mt-2 text-sm text-slate-500">{t('steps_empty')}</p>
       </div>
     );
   }
@@ -145,10 +146,10 @@ const WorkflowStepsCard = ({ car }: WorkflowStepsCardProps) => {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <header className="mb-6">
-        <p className="text-xs uppercase tracking-[0.3em] font-bold text-slate-400">Steps</p>
-        <h3 className="text-xl font-bold text-slate-900 mt-1">Workflow Steps</h3>
+        <p className="text-xs uppercase tracking-[0.3em] font-bold text-slate-400">{t('steps_label')}</p>
+        <h3 className="text-xl font-bold text-slate-900 mt-1">{t('steps_title')}</h3>
         <p className="mt-1 text-sm text-slate-500">
-          {steps.length} step{steps.length !== 1 ? 's' : ''} configured
+          {t(steps.length === 1 ? 'steps_count_one' : 'steps_count_other', { count: steps.length })}
         </p>
       </header>
 

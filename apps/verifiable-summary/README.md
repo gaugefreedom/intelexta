@@ -52,8 +52,11 @@ Required variables:
 - `PORT` - Server port (default: 3000)
 - `PUBLIC_URL` - Public URL for downloads
 - `ED25519_SECRET_KEY` - Signing key from step 2
+- `DOWNLOAD_URL_SIGNING_SECRET` - HMAC secret for signed download URLs (required; links expire)
 - `OPENAI_API_KEY` - (Optional) For cloud summarization
 - `BUNDLE_STORAGE_DIR` - (Optional) Persistent path for CAR ZIPs (default: `.data/bundles`, retained ~24h)
+
+Download links are signed and expire after ~15 minutes by default (`DOWNLOAD_URL_TTL_MS`). If a user returns later and clicks an expired link, they will need to regenerate the summary to receive a fresh URL.
 
 ### 4. Start Development Server
 

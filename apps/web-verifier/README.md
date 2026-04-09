@@ -220,12 +220,18 @@ apps/web-verifier
 4. Toggle to **Visualize Content** and verify that:
 
    * Workflow overview shows run name, created_at, kind, model, budgets, and S-grade.
+   * Budget values display tiny USD amounts as `< $0.01` with a tooltip showing the full value.
+   * Nature Cost is displayed in kWh with automatic unit scaling (Wh/mWh) for small values.
    * Steps list shows step type, checkpoint type, model, proof mode, and truncated prompts.
    * Provenance entries (config, input, output) and checkpoint token usage are visible.
 5. Drop a file with an unsupported extension (for example `notes.txt`). Verify the dropzone rejects the
    file, shows a red alert with the descriptive error, and no stale results remain.
 6. Drop a failing proof (e.g. one with a tampered CAR). Ensure the status banner turns red, the
    alert surfaces the WASM error message, and the raw JSON payload is visible for debugging.
+
+**Note**: `budgets.nature_cost` is treated as kWh when `policy_ref.estimator` is
+`intelexta-validator-local-kwh-v1`. We plan to adapt this when `gauge-index` is the
+source of cost + kWh estimates for most providers (including local OSS models).
 
 ---
 

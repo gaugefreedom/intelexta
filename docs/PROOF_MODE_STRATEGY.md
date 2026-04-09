@@ -2,7 +2,7 @@
 
 ## Overview
 
-IntelExta supports **graded replay** - the ability to re-execute a workflow and verify that outputs are consistent with the original execution. The `proof_mode` setting determines how strictly outputs must match during replay verification.
+Intelexta supports **graded replay** - the ability to re-execute a workflow and verify that outputs are consistent with the original execution. The `proof_mode` setting determines how strictly outputs must match during replay verification.
 
 ## Proof Modes
 

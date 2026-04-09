@@ -13,12 +13,12 @@ export function truncateText(text: string, maxLength: number): string {
 /**
  * Format a date string to human-readable format
  */
-export function formatDate(dateString: string): string {
+export function formatDate(dateString: string, locale = 'en-US'): string {
   if (!dateString) return 'Unknown';
   try {
     const date = new Date(dateString);
     if (isNaN(date.getTime())) return dateString;
-    return date.toLocaleString('en-US', {
+    return date.toLocaleString(locale, {
       year: 'numeric',
       month: 'short',
       day: 'numeric',

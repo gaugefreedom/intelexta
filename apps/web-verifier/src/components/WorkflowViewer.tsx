@@ -1,4 +1,5 @@
 import { AlertCircle, CheckCircle2, Circle, FileText, Paperclip } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { VerificationReport, WorkflowStep } from '../types/verifier';
 
 interface WorkflowViewerProps {
@@ -28,12 +29,13 @@ const deriveDetails = (step: WorkflowStep) => {
 };
 
 const WorkflowViewer = ({ report }: WorkflowViewerProps) => {
+  const { t } = useTranslation();
   const steps = report?.workflow?.steps ?? [];
 
   if (!steps.length) {
     return (
       <section className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-        <p className="text-slate-500 text-sm">No workflow steps found in this receipt.</p>
+        <p className="text-slate-500 text-sm">{t('workflow_no_steps')}</p>
       </section>
     );
   }
@@ -42,11 +44,11 @@ const WorkflowViewer = ({ report }: WorkflowViewerProps) => {
     <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <header className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between mb-8">
         <div>
-          <h2 className="text-xl font-bold text-slate-900">Verification Timeline</h2>
-          <p className="text-sm text-slate-500">Step-by-step cryptographic validation of the workflow.</p>
+          <h2 className="text-xl font-bold text-slate-900">{t('workflow_timeline_title')}</h2>
+          <p className="text-sm text-slate-500">{t('workflow_timeline_subtitle')}</p>
         </div>
         <span className="text-xs font-medium px-2 py-1 bg-slate-100 text-slate-600 rounded-md">
-          {steps.length} Steps
+          {t('workflow_steps_count_other', { count: steps.length })}
         </span>
       </header>
 
@@ -83,7 +85,7 @@ const WorkflowViewer = ({ report }: WorkflowViewerProps) => {
                   {/* Content Section */}
                   <section className="space-y-2">
                     <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                      <FileText size={12} /> Content
+                      <FileText size={12} /> {t('workflow_content_section')}
                     </div>
                     {contentDetails.length ? (
                       contentDetails.map((detail, i) => (
@@ -92,13 +94,13 @@ const WorkflowViewer = ({ report }: WorkflowViewerProps) => {
                           <p className="text-slate-700 whitespace-pre-wrap">{detail.value}</p>
                         </div>
                       ))
-                    ) : <p className="text-xs text-slate-400 italic">No content data.</p>}
+                    ) : <p className="text-xs text-slate-400 italic">{t('workflow_no_content')}</p>}
                   </section>
 
                   {/* Attachments Section */}
                   <section className="space-y-2">
                     <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                      <Paperclip size={12} /> Attachments
+                      <Paperclip size={12} /> {t('workflow_attachments_section')}
                     </div>
                     {attachmentDetails.length ? (
                       <ul className="space-y-2">
@@ -109,7 +111,7 @@ const WorkflowViewer = ({ report }: WorkflowViewerProps) => {
                           </li>
                         ))}
                       </ul>
-                    ) : <p className="text-xs text-slate-400 italic">No attachments.</p>}
+                    ) : <p className="text-xs text-slate-400 italic">{t('workflow_no_attachments')}</p>}
                   </section>
                 </div>
               </article>

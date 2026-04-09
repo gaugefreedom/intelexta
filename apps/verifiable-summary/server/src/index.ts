@@ -12,7 +12,7 @@ import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import JSZip from 'jszip';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -51,10 +51,17 @@ const DEFAULT_BUNDLE_MAX_ENTRIES = 32;
 const DEFAULT_BUNDLE_MAX_TOTAL_BYTES = 128 * 1024 * 1024; // 128 MiB
 const DEFAULT_BUNDLE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours retention for review
 const DEFAULT_BUNDLE_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_DOWNLOAD_URL_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const DEFAULT_BUNDLE_STORAGE_DIR = resolve(process.cwd(), '.data', 'bundles');
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const OPENAI_APPS_CHALLENGE_TOKEN = '-YF4xJ6u9SsnqG5v338Ccoy2vYPnNNoaWUNEFJrYksA';
 const RESPONSE_CACHE_TTL_MS = 60 * 1000;
 const RESPONSE_CACHE_MAX_ENTRIES = 32;
+const DEFAULT_INPUT_TEXT_MAX_CHARS = 256000;
+const DEFAULT_INPUT_TEXT_MAX_CHARS_WITH_SOURCE = 64000;
+const DEFAULT_CORS_ALLOW_ORIGINS = ['https://chatgpt.com', 'https://chat.openai.com'];
+
+const DOWNLOAD_URL_SIGNING_SECRET = process.env.DOWNLOAD_URL_SIGNING_SECRET;
 
 type CachedToolResponse = {
   createdAt: number;
@@ -123,6 +130,33 @@ const BUNDLE_TTL_MS = parsePositiveInteger(
   'BUNDLE_STORAGE_TTL_MS'
 );
 
+const DOWNLOAD_URL_TTL_MS = parsePositiveInteger(
+  process.env.DOWNLOAD_URL_TTL_MS,
+  DEFAULT_DOWNLOAD_URL_TTL_MS,
+  'DOWNLOAD_URL_TTL_MS'
+);
+
+const INPUT_TEXT_MAX_CHARS = parsePositiveInteger(
+  process.env.INPUT_TEXT_MAX_CHARS,
+  DEFAULT_INPUT_TEXT_MAX_CHARS,
+  'INPUT_TEXT_MAX_CHARS'
+);
+
+const INPUT_TEXT_MAX_CHARS_WITH_SOURCE = parsePositiveInteger(
+  process.env.INPUT_TEXT_MAX_CHARS_WITH_SOURCE,
+  DEFAULT_INPUT_TEXT_MAX_CHARS_WITH_SOURCE,
+  'INPUT_TEXT_MAX_CHARS_WITH_SOURCE'
+);
+
+const CORS_ALLOW_ORIGINS = new Set(
+  (process.env.CORS_ALLOW_ORIGINS
+    ? process.env.CORS_ALLOW_ORIGINS.split(',')
+    : DEFAULT_CORS_ALLOW_ORIGINS
+  )
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
+
 const BUNDLE_STORAGE_DIR = process.env.BUNDLE_STORAGE_DIR
   ? resolve(process.env.BUNDLE_STORAGE_DIR)
   : DEFAULT_BUNDLE_STORAGE_DIR;
@@ -140,6 +174,91 @@ const BUNDLE_CLEANUP_INTERVAL_MS = Math.min(
 if (!process.env.PUBLIC_URL || PUBLIC_URL.includes('localhost')) {
   console.warn('⚠️  WARNING: PUBLIC_URL is not set to production domain!');
   console.warn('⚠️  Download URLs will use localhost and will not work in production.');
+}
+
+if (!DOWNLOAD_URL_SIGNING_SECRET && process.env.VITEST_WORKER_ID === undefined) {
+  throw new Error('DOWNLOAD_URL_SIGNING_SECRET is required to issue signed download URLs.');
+}
+
+function buildDownloadSignature(id: string, expiresAtSeconds: number): string | undefined {
+  if (!DOWNLOAD_URL_SIGNING_SECRET) {
+    return undefined;
+  }
+  return createHmac('sha256', DOWNLOAD_URL_SIGNING_SECRET)
+    .update(`${id}.${expiresAtSeconds}`)
+    .digest('hex');
+}
+
+function isValidDownloadSignature(id: string, expParam: unknown, sigParam: unknown): boolean {
+  if (!DOWNLOAD_URL_SIGNING_SECRET) {
+    return true;
+  }
+  if (typeof expParam !== 'string' || typeof sigParam !== 'string') {
+    return false;
+  }
+  const expiresAtSeconds = Number.parseInt(expParam, 10);
+  if (!Number.isFinite(expiresAtSeconds)) {
+    return false;
+  }
+  if (expiresAtSeconds < Math.floor(Date.now() / 1000)) {
+    return false;
+  }
+  const expected = buildDownloadSignature(id, expiresAtSeconds);
+  if (!expected) {
+    return false;
+  }
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  const providedBuffer = Buffer.from(sigParam, 'utf8');
+  if (expectedBuffer.length !== providedBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(expectedBuffer, providedBuffer);
+}
+
+function createDownloadUrl(id: string): string {
+  if (!DOWNLOAD_URL_SIGNING_SECRET) {
+    throw new Error('DOWNLOAD_URL_SIGNING_SECRET is required to issue download URLs.');
+  }
+  const ttlSeconds = Math.max(1, Math.floor(DOWNLOAD_URL_TTL_MS / 1000));
+  const expiresAtSeconds = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const signature = buildDownloadSignature(id, expiresAtSeconds);
+  return `${PUBLIC_URL}/download/${id}?exp=${expiresAtSeconds}&sig=${signature}`;
+}
+
+function extractSummarizeInput(payload: unknown): { text: string; includeSource: boolean } | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  if (Array.isArray(payload)) {
+    for (const entry of payload) {
+      const found = extractSummarizeInput(entry);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+  const params = (payload as { params?: any }).params;
+  if (!params || typeof params !== 'object') {
+    return undefined;
+  }
+  const toolName = params.name ?? params.tool?.name ?? params.tool_name;
+  if (toolName !== 'summarize_content') {
+    return undefined;
+  }
+  const args =
+    (params.arguments && typeof params.arguments === 'object' ? params.arguments : undefined) ??
+    (params.tool?.arguments && typeof params.tool.arguments === 'object' ? params.tool.arguments : undefined);
+  if (!args || typeof args !== 'object') {
+    return undefined;
+  }
+  if (typeof args.text !== 'string') {
+    return undefined;
+  }
+  return {
+    text: args.text,
+    includeSource: Boolean(args.include_source)
+  };
 }
 
 // ============================================================================
@@ -198,7 +317,8 @@ function loadLogoDataUrl(): string | undefined {
 const LOGO_DATA_URL = loadLogoDataUrl();
 const widgetLogoElement = LOGO_DATA_URL
   ? `<img src="${LOGO_DATA_URL}" alt="Intelexta fingerprint logo" class="logo-img" />`
-  : '<span class="logo-placeholder">IX</span>';
+  : '';
+const logoShellAttributes = LOGO_DATA_URL ? '' : 'style="display: none;"';
 
 // Load widget HTML (will be built by the web project)
 const widgetHtml = String.raw`<!DOCTYPE html>
@@ -296,17 +416,6 @@ const widgetHtml = String.raw`<!DOCTYPE html>
       height: 100%;
       object-fit: contain; /* Prevents stretching */
       padding: 4px;        /* Adds breathing room */
-    }
-
-    .logo-placeholder {
-      width: 100%;
-      height: 100%;
-      background: var(--bg);
-      color: var(--brand-purple);
-      font-weight: 800;
-      display: grid;
-      place-items: center;
-      font-size: 18px;
     }
 
     .title-group h3 {
@@ -507,7 +616,7 @@ const widgetHtml = String.raw`<!DOCTYPE html>
     <div class="summary-card" data-summary-card hidden>
       <div class="header">
         <div class="brand">
-          <div class="logo-shell">
+          <div class="logo-shell" ${logoShellAttributes}>
             ${widgetLogoElement}
           </div>
           <div class="title-group">
@@ -595,9 +704,7 @@ const widgetHtml = String.raw`<!DOCTYPE html>
       const setSummaryContent = (text) => {
         if (!summaryEl) return;
         summaryEl.textContent = text ?? '';
-        // Convert newlines to breaks
-        const html = (text || '').replace(/\n/g, '<br>');
-        summaryEl.innerHTML = html;
+        summaryEl.style.whiteSpace = 'pre-wrap';
       };
 
       const render = () => {
@@ -762,14 +869,14 @@ server.registerTool(
   'summarize_content',
   {
     description:
-      'Generate one verifiable summary + CAR proof bundle for the given text. Call this tool only once per user request (do not call per bullet). Set style to "tl;dr", "bullets", or "outline" based on the user’s ask; default is tl;dr. Only set include_source=true if the user explicitly wants their full text embedded in the bundle.',
+      'Create a concise summary and a downloadable proof bundle (ZIP) with a CAR receipt and optional Ed25519 signature. Call once per user request.',
     inputSchema: inputSchema.shape,
     annotations: {
-      title: 'Summarize with Verification',
-      readOnlyHint: true,
-      idempotentHint: true,
+      title: 'Generate Verifiable Summary',
+      readOnlyHint: false,
+      destructiveHint: false,
       openWorldHint: false,
-      destructiveHint: false
+      idempotentHint: false
     },
     _meta: {
       'openai/outputTemplate': WIDGET_RESOURCE_URI,
@@ -782,6 +889,14 @@ server.registerTool(
   async (params) => {
     const startTime = Date.now();
     const input = inputSchema.parse(params);
+    if (input.text.length > INPUT_TEXT_MAX_CHARS) {
+      throw new Error(`Payload too large: text exceeds ${INPUT_TEXT_MAX_CHARS} characters.`);
+    }
+    if (input.include_source && input.text.length > INPUT_TEXT_MAX_CHARS_WITH_SOURCE) {
+      throw new Error(
+        `Payload too large: text exceeds ${INPUT_TEXT_MAX_CHARS_WITH_SOURCE} characters when include_source=true.`
+      );
+    }
     const requestHash = createHash('sha256')
       .update(input.text)
       .update(input.style)
@@ -813,7 +928,7 @@ server.registerTool(
       const { bundle: artifacts, isSigned } = await generateProofBundle(
         source,
         summary,
-        usage ? 'gpt-4o-mini' : 'chatgpt-summarizer',
+        'ChatGPT',
         ED25519_SECRET_KEY,
         {
           includeSource: input.include_source,
@@ -838,7 +953,7 @@ server.registerTool(
       // 5. Store and generate download URL
       const id = randomUUID();
       bundleStorage.store(id, zipBuffer);
-      const downloadUrl = `${PUBLIC_URL}/download/${id}`;
+      const downloadUrl = createDownloadUrl(id);
 
       const stats = bundleStorage.getStats();
       console.log(`[cache] Stored ZIP bundle: ${id} (${(zipBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
@@ -929,13 +1044,30 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Domain verification for OpenAI Apps
+app.get('/.well-known/openai-apps-challenge', (_req, res) => {
+  res.setHeader('Content-Type', 'text/plain');
+  res.send(OPENAI_APPS_CHALLENGE_TOKEN);
+});
+
 // Download endpoint
 app.get('/download/:id', (req, res) => {
-  // Add CORS headers for cross-origin downloads
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  const origin = req.get('origin');
+  if (origin && CORS_ALLOW_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Vary', 'Origin');
+  }
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  if (!isValidDownloadSignature(req.params.id, req.query.exp, req.query.sig)) {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res
+      .status(410)
+      .send('Download link expired or invalid. Please regenerate the verifiable summary to get a new link.');
+  }
 
   const bundle = bundleStorage.getStream(req.params.id);
 
@@ -968,6 +1100,20 @@ app.get('/download/:id', (req, res) => {
 
 // MCP endpoint wired through the official streamable HTTP transport
 app.post('/mcp', mcpLimiter, express.json({ limit: '10mb' }), async (req, res) => {
+  const summarizeInput = extractSummarizeInput(req.body);
+  if (summarizeInput) {
+    const textLength = summarizeInput.text.length;
+    if (textLength > INPUT_TEXT_MAX_CHARS) {
+      return res
+        .status(413)
+        .json({ error: `Payload too large: text exceeds ${INPUT_TEXT_MAX_CHARS} characters.` });
+    }
+    if (summarizeInput.includeSource && textLength > INPUT_TEXT_MAX_CHARS_WITH_SOURCE) {
+      return res.status(413).json({
+        error: `Payload too large: text exceeds ${INPUT_TEXT_MAX_CHARS_WITH_SOURCE} characters when include_source=true.`
+      });
+    }
+  }
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { type FileRejection, useDropzone } from 'react-dropzone';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { AlertCircle, CheckCircle2, Loader2, UploadCloud, FileJson, Package } from 'lucide-react';
 import { initVerifier, verifyCarBytes, verifyCarJson } from '../wasm/loader';
 import type { VerificationReport } from '../types/verifier';
@@ -20,14 +21,18 @@ import {
 type Status = 'idle' | 'loading' | 'success' | 'error';
 type ViewMode = 'verify' | 'content';
 
-const LoadingSkeleton = () => (
-  <div className="flex flex-col items-center justify-center py-20 gap-4 text-slate-500">
-    <Loader2 className="w-10 h-10 animate-spin text-emerald-600" />
-    <p className="font-medium animate-pulse">Verifying cryptographic proofs...</p>
-  </div>
-);
+const LoadingSkeleton = () => {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col items-center justify-center py-20 gap-4 text-slate-500">
+      <Loader2 className="w-10 h-10 animate-spin text-emerald-600" />
+      <p className="font-medium animate-pulse">{t('loading_verifying')}</p>
+    </div>
+  );
+};
 
 const Verifier = () => {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<VerificationReport | null>(null);
@@ -125,9 +130,9 @@ const Verifier = () => {
   });
 
   return (
-    <Layout 
-      viewMode={viewMode} 
-      setViewMode={setViewMode} 
+    <Layout
+      viewMode={viewMode}
+      setViewMode={setViewMode}
       hasResult={!!result}
       fileName={droppedFileName}
       status={status}
@@ -140,8 +145,8 @@ const Verifier = () => {
             {...getRootProps({
               className: clsx(
                 'group relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed px-10 py-20 text-center transition-all cursor-pointer',
-                isDragActive 
-                  ? 'border-emerald-500 bg-emerald-50/50 shadow-lg scale-[1.02]' 
+                isDragActive
+                  ? 'border-emerald-500 bg-emerald-50/50 shadow-lg scale-[1.02]'
                   : 'border-slate-300 bg-white hover:border-emerald-400 hover:bg-slate-50 hover:shadow-md'
               )
             })}
@@ -150,25 +155,29 @@ const Verifier = () => {
             <div className={`p-4 rounded-full mb-4 transition-colors ${isDragActive ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-500'}`}>
                <UploadCloud className="h-10 w-10" />
             </div>
-            
+
             <h2 className="text-xl font-bold text-slate-900 mb-2">
-              {isDragActive ? 'Drop receipt here' : 'Verify a Workflow Receipt'}
+              {isDragActive ? t('dropzone_title_active') : t('dropzone_title_idle')}
             </h2>
             <p className="text-slate-500 max-w-sm mx-auto mb-6">
-              Drag and drop a <code>.car.json</code> or <code>.car.zip</code> file to verify its cryptographic integrity.
+              {t('dropzone_description', {
+                car_json: '.car.json',
+                car_zip: '.car.zip',
+                defaultValue: 'Drag and drop a .car.json or .car.zip file to verify its cryptographic integrity.'
+              })}
             </p>
-            
+
             <div className="flex gap-4 text-xs text-slate-400">
                <span className="flex items-center gap-1"><FileJson size={14}/> .car.json</span>
                <span className="flex items-center gap-1"><Package size={14}/> .car.zip</span>
             </div>
           </div>
-          
+
           {error && (
             <div className="mt-6 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 flex items-start gap-3 shadow-sm">
               <AlertCircle className="h-5 w-5 shrink-0 text-rose-500" />
               <div>
-                <strong className="font-semibold block mb-1">Verification Error</strong>
+                <strong className="font-semibold block mb-1">{t('verification_error_title')}</strong>
                 {error}
               </div>
             </div>
@@ -190,12 +199,12 @@ const Verifier = () => {
             {status === 'success' ? <CheckCircle2 className="text-emerald-600 h-6 w-6 mt-0.5" /> : <AlertCircle className="text-rose-600 h-6 w-6 mt-0.5" />}
             <div>
               <h3 className={clsx("text-lg font-bold", status === 'success' ? "text-emerald-900" : "text-rose-900")}>
-                {status === 'success' ? 'Receipt Verified' : 'Verification Failed'}
+                {status === 'success' ? t('result_verified_title') : t('result_failed_title')}
               </h3>
               <p className={clsx("text-sm mt-1", status === 'success' ? "text-emerald-700" : "text-rose-700")}>
-                {status === 'success' 
-                  ? "The cryptographic signature and hash chain of this receipt are valid. The content has not been tampered with since generation."
-                  : error || "Critical integrity check failed."}
+                {status === 'success'
+                  ? t('result_verified_body')
+                  : error || t('result_failed_body_default')}
               </p>
             </div>
           </div>
@@ -209,7 +218,7 @@ const Verifier = () => {
                 <MetadataCard report={result} />
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="bg-slate-50 border-b border-slate-200 px-4 py-3">
-                    <h3 className="text-sm font-semibold text-slate-700">Raw JSON Output</h3>
+                    <h3 className="text-sm font-semibold text-slate-700">{t('raw_json_output')}</h3>
                   </div>
                   <pre className="p-4 text-[10px] leading-relaxed text-slate-600 font-mono overflow-auto max-h-[300px]">
                     {rawJson}

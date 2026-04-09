@@ -251,6 +251,6 @@ The Visualize Content feature provides a user-friendly way to explore CAR workfl
 - Quickly understand what a workflow does
 - See step prompts and configurations
 - Explore content hashes and provenance claims
-- View stewardship scores and budgets
+- View stewardship scores and budgets with readable USD rounding and kWh unit scaling
 
 **Next steps**: Deploy to staging and gather user feedback.
