@@ -13,7 +13,8 @@ import {
   ChevronRight,
   FileText,
   Activity,
-  Grid
+  Grid,
+  Bot
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
@@ -58,6 +59,13 @@ interface PublicReceiptReport {
   structure?: {
     section_count?: number;
   };
+}
+
+interface PublisherNode {
+  declared_tools?: string[];
+  usage_scope?: string;
+  attestation?: boolean;
+  attestation_text?: string;
 }
 
 interface PublicReceiptCar {
@@ -269,6 +277,11 @@ const PublicReceiptPage = () => {
 
   const { report, receipt_display, meta } = publicReceipt!;
 
+  const publisherNode = (
+    (publicReceipt!.receipt?.extensions as Record<string, unknown> | undefined)
+      ?.publisher_node as PublisherNode | undefined
+  );
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       <AuditorHeader />
@@ -337,6 +350,44 @@ const PublicReceiptPage = () => {
             )}
           </div>
         </section>
+
+        {/* AI Disclosure */}
+        {publisherNode && (
+          <section className="bg-white border border-violet-200 rounded-2xl shadow-sm p-5">
+            <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wide mb-4 flex items-center gap-2">
+              <Bot size={16} className="text-violet-500" /> AI Disclosure
+            </h2>
+            <div className="space-y-4">
+              {publisherNode.declared_tools && publisherNode.declared_tools.length > 0 && (
+                <div>
+                  <div className="text-[10px] uppercase text-slate-400 font-bold mb-2">Declared AI Tools</div>
+                  <div className="flex flex-wrap gap-2">
+                    {publisherNode.declared_tools.map((tool) => (
+                      <span key={tool} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-violet-50 text-violet-700 border border-violet-200">
+                        <Bot size={11} /> {tool}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {publisherNode.usage_scope && (
+                <div>
+                  <div className="text-[10px] uppercase text-slate-400 font-bold mb-1">Usage Scope</div>
+                  <p className="text-sm text-slate-700 leading-relaxed">{publisherNode.usage_scope}</p>
+                </div>
+              )}
+              {publisherNode.attestation && publisherNode.attestation_text && (
+                <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                  <CheckCircle2 size={16} className="text-emerald-600 mt-0.5 shrink-0" />
+                  <div>
+                    <div className="text-[10px] uppercase text-emerald-700 font-bold mb-1">Attested</div>
+                    <p className="text-sm text-emerald-900 italic">"{publisherNode.attestation_text}"</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* Integrity Analysis */}
         <section className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-6">
